@@ -1,8 +1,7 @@
-import pandas as pd
-import csv
 import openpyxl
 import json
-
+from bs4 import BeautifulSoup
+import os
 class Reader:                   
     # convert excel file to csv
     def xlsx_to_dict(self, path):
@@ -35,6 +34,18 @@ class Reader:
 
         return sheet_dict
     
+
+
+
+    # convert html to dict
+    def html_to_dict(self, path):
+        with open(path) as fp:
+            soup = BeautifulSoup(fp, 'html.parser')
+            print(soup.find_all('table'))
+            # return soup
+
 reader = Reader()
 #json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str)
-print(json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str))
+#print(json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str))
+print(reader.xlsx_to_dict(os.path.expanduser('~') + '/.warn-scraper/cache/ca/warn_report.xlsx'))
+#print(reader.html_to_dict("./test_wa.html"))
