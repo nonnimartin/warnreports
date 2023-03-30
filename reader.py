@@ -67,6 +67,8 @@ class Reader:
                     date_received = str(notice['Received\nDate'])
                     this_info = this_company + ' - ' + layoff_or_closure + ' - ' + 'No. of Employees: ' + str(number_employees) + ' - Effective Date: ' + effective_date + ' - Date Received: ' + date_received
                     notice_dict['title'] = this_company
+
+                    # ADD COUNTY/ADDRESS ETC!!!!!!!!!!!!
                     
                     
                     this_item = dict()
