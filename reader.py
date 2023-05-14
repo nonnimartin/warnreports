@@ -1,7 +1,9 @@
 import openpyxl
 import json
-from bs4 import BeautifulSoup
+import csv
+#from bs4 import BeautifulSoup
 import os
+
 class Reader:                   
     # convert excel file to csv
     def xlsx_to_dict(self, path):
@@ -35,7 +37,34 @@ class Reader:
         return sheet_dict
     
 
-
+    # convert csv to dict
+    def csv_to_dict(self, path, state):
+        # this will have to be diff for each CSV, as they have diff structure
+        first_loop = True
+        headers_list = list()
+        return_dict = dict()
+        with open(path,'r') as data:
+            for line in csv.reader(data):
+                if first_loop == True:
+                    for item in line:
+                        headers_list.append(item)
+                    first_loop = False
+            
+                company = str()
+                if first_loop == False:
+                    this_dict = dict()
+                    for item in line:
+                        header_index = line.index(item)
+                        this_header = headers_list[header_index]
+                        this_dict[this_header] = item
+                        if this_header == "Company":
+                            company = item
+                    return_dict[company] = this_dict
+        
+        return return_dict
+                    
+                        
+            
 
     # convert html to dict
     def html_to_dict(self, path):
@@ -80,13 +109,15 @@ class Reader:
                 notice_dict['description'] = 'See below list of notices'
                 notice_dict['items'] = items_list
                 return_dict[company] = notice_dict
-        print(json.dumps(return_dict))
+
+        return return_dict
                 
 
 
 reader = Reader()
-reader.format_data_from_xlsx(list())
+#print(json.dumps(reader.format_data_from_xlsx(list())))
 #json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str)
 #print(json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str))
-#print(reader.xlsx_to_dict(os.path.expanduser('~') + '/.warn-scraper/cache/ca/warn_report.xlsx'))
+#print(reader.xlsx_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv'))
+print(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv', 'al'))
 #print(reader.html_to_dict("./test_wa.html"))
