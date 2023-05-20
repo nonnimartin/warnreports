@@ -13,6 +13,7 @@ class Reader:
         columns_names = list()
         sheet_dict = dict()
         for row in worksheet:
+            row_len = row.split(",")
             if len(columns_names) == 0:
                 # if first loop, just populate list of column headers
                 for cell in row:
@@ -60,7 +61,7 @@ class Reader:
                         if this_header == "Company":
                             company = item
                     return_dict[company] = this_dict
-        
+        del return_dict["Company"]
         return return_dict
                     
                         
@@ -119,5 +120,5 @@ reader = Reader()
 #json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str)
 #print(json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str))
 #print(reader.xlsx_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv'))
-print(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv', 'al'))
+print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv', 'al')))
 #print(reader.html_to_dict("./test_wa.html"))
