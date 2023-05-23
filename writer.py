@@ -9,37 +9,40 @@ import json
 class Writer:                   
     # write rss data from list of WARN notice items
     feed_list = list()
-    def write_rss(self, notices_dict):
 
+    def write_rss(self, notices_dict):
+        counter = 0
+        # write guid for RSS object
+        random =  uuid.uuid4()
+        fg = FeedGenerator()
+        fg.id("random")
+        fg.title("WARN NOTICE")
+        fg.author( {'name':'John Doe','email':'john@example.kitchen'} )
+        #fg.link( href='http://example.com', rel='alternate' )
+        #fg.logo('http://ex.com/logo.jpg')
+        #fg.subtitle('This is a cool feed!')
+        fg.link( href='http://larskiesow.de/test.atom', rel='self' )
+        fg.language('en')
+        fg.description('See below items')
         for company in notices_dict.keys():
-            # write guid for RSS object
-            random =  uuid.uuid4()
-            fg = FeedGenerator()
-            fg.id(random)
-            fg.title(company)
-            fg.author( {'name':'John Doe','email':'john@example.kitchen'} )
-            #fg.link( href='http://example.com', rel='alternate' )
-            #fg.logo('http://ex.com/logo.jpg')
-            #fg.subtitle('This is a cool feed!')
-            fg.link( href='http://larskiesow.de/test.atom', rel='self' )
-            fg.language('en')
-            fg.description('See below items')
-            fg.language('en')
+
 
             info = notices_dict[company]
             closing_or_layoff = info["Closing or Layoff"]
             initial_reporting_date = info["Initial Report Date"]
-            print(company)
             if "Planned Starting Date" in info:
                 planned_starting_date = info["Planned Starting Date"]
             city = info["City"]
             planned_no_affected_employees = info["Planned # Affected Employees"]
             random =  uuid.uuid4()
             fe = fg.add_entry()
-            fe.title = company + " - " + closing_or_layoff + " - " + "Reported:" + initial_reporting_date + " - " + "Starting: " + planned_starting_date + " - " + "City:" + city + " - " + " Employees Affected: " + planned_no_affected_employees
+
+            fe.id("entry " + str(counter))
+            counter +=1 
+            fe.description(company + " - " + closing_or_layoff + " - " + "Reported: " + initial_reporting_date + " - " + "Starting: " + planned_starting_date + " - " + "City: " + city + " - " + " Employees Affected: " + planned_no_affected_employees)
+            fe.title = company + " - " + closing_or_layoff + " - " + "Reported: " + initial_reporting_date + " - " + "Starting: " + planned_starting_date + " - " + "City: " + city + " - " + " Employees Affected: " + planned_no_affected_employees
             fe.link(href='http://lernfunk.de/feed')
             fe.enclosure('http://lernfunk.de/media/654321/1/file.mp3', 0, 'audio/mpeg')
-            print(fe)
             # for this_item in notices_dict[company]:
             #     print(this_item)
             #     this_item = json.loads(this_item)
@@ -59,7 +62,7 @@ class Writer:
             #     # feed = rf.Feed(notices_dict[company]['title'], )
             #     #items_list.append(itemified)
             
-            #print(fg)
+            print(fg.rss_file("test.xml"))
             #fg.rss_str(pretty=True)
             #fg.rss_file('/tmp/test.json')
 

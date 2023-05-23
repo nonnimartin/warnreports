@@ -36,6 +36,32 @@ class Reader:
                     sheet_dict[company_name] = current_list
 
         return sheet_dict
+
+    def convert_by_state(self, state):
+
+        conversion_dict_az = {
+            "employer" : "Company",
+            "notice_date" : "Initial Report Date",
+            "city" : "City",
+            "number_of_employees_affected" : "Planned # Affected Employees",
+            "Planned Starting Date" : "No starting date specified"
+        }
+
+        conversion_dict_al = {
+            "Company" : "Company",
+            "Initial Report Date" : "Initial Report Date",
+            "City" : "City",
+            "Planned # Affected Employees" : "Planned # Affected Employees",
+            "Closing or Layoff" : "Closing or Layoff",
+            "Planned Starting Date" : "Planned Starting Date"
+        }
+
+        if state == "az":
+            return conversion_dict_az
+        elif state == "al":
+            return conversion_dict_al
+        else:
+            return
     
 
     # convert csv to dict
@@ -44,24 +70,27 @@ class Reader:
         first_loop = True
         headers_list = list()
         return_dict = dict()
+        convert_dict = self.convert_by_state(state) 
         with open(path,'r') as data:
             for line in csv.reader(data):
                 if first_loop == True:
-                    for item in line:
-                        headers_list.append(item)
+                    headers_list = line
                     first_loop = False
-            
+                    continue
+                
                 company = str()
                 if first_loop == False:
                     this_dict = dict()
                     for item in line:
                         header_index = line.index(item)
-                        this_header = headers_list[header_index]
-                        this_dict[this_header] = item
+                        print(convert_dict)
+                        if headers_list[header_index] in convert_dict:
+                            this_header = convert_dict[headers_list[header_index]]
+                            this_dict[this_header] = item
                         if this_header == "Company":
                             company = item
+                    # we will have to put n/a into any fields not included
                     return_dict[company] = this_dict
-        del return_dict["Company"]
         return return_dict
                     
                         
@@ -97,9 +126,6 @@ class Reader:
                     date_received = str(notice['Received\nDate'])
                     this_info = this_company + ' - ' + layoff_or_closure + ' - ' + 'No. of Employees: ' + str(number_employees) + ' - Effective Date: ' + effective_date + ' - Date Received: ' + date_received
                     notice_dict['title'] = this_company
-
-                    # ADD COUNTY/ADDRESS ETC!!!!!!!!!!!!
-                    
                     
                     this_item = dict()
                     this_item['title'] = company
@@ -116,9 +142,6 @@ class Reader:
 
 
 reader = Reader()
-#print(json.dumps(reader.format_data_from_xlsx(list())))
-#json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str)
-#print(json.dumps(reader.xlsx_to_dict("ca_warn_data.xlsx"), default=str))
-#print(reader.xlsx_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv'))
-print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/al.csv', 'al')))
-#print(reader.html_to_dict("./test_wa.html"))
+
+print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az')))
+#json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az'))
