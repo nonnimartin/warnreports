@@ -1,6 +1,7 @@
 import json
 import csv
 import os
+import logging
 
 class Reader:                   
 
@@ -263,9 +264,15 @@ class Reader:
                         if field not in this_dict:
                             this_dict[field] = "N/A or Not Provided"
                     return_dict[company] = this_dict
-        return return_dict
-                    
-reader = Reader()
+        return json.dumps(return_dict)
+    
+    def write_to_disk(self, json, state):
+        try:
+            filehandle = open('./reports_json/' + state + '.json', 'w')
+            filehandle.write(json)
+            filehandle.close()
+        except:
+             logging.exception('Error writing file to disk: ' + state)
 
 # print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))
 #json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az'))
