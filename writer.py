@@ -3,10 +3,11 @@ import uuid
 # import rfeed.rfeed as rf
 from feedgen.feed import FeedGenerator
 import json
+import sqlite3
+import logging
 
+class Writer:
 
-
-class Writer:                   
     # write rss data from list of WARN notice items
     feed_list = list()
 
@@ -75,13 +76,26 @@ class Writer:
             #     items_list.append(itemified)
             
             # print(rf.Feed(company, 'www.google.com', 'See notices below', 'en-US', None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, items_list).rss())
+    
 
-            
-            
-new_writer = Writer()
-f = open("/tmp/test.json", "r")
-json_content = f.read()
-content_dict = json.loads(json_content)
-new_writer.write_rss(content_dict)
+    def store_contact(self, email, company, state):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute("INSERT INTO contacts VALUES ('" + email + "','" + company + "','" + state + "')")
+            con.commit()
+        except:
+            logging.exception("Error writing to contacts")
 
-        
+    def store_company(self, company, state):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute("INSERT INTO companies VALUES ('" + company + "','" + state + "')")
+            con.commit()
+        except:
+            logging.exception("Error writing to company")
+
+
+this_writer = Writer()
+this_writer.store_company('test_comp', 'CA')
