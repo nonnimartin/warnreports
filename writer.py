@@ -19,9 +19,6 @@ class Writer:
         fg.id("random")
         fg.title("WARN NOTICE")
         fg.author( {'name':'John Doe','email':'john@example.kitchen'} )
-        #fg.link( href='http://example.com', rel='alternate' )
-        #fg.logo('http://ex.com/logo.jpg')
-        #fg.subtitle('This is a cool feed!')
         fg.link( href='http://larskiesow.de/test.atom', rel='self' )
         fg.language('en')
         fg.description('See below items')
@@ -63,7 +60,7 @@ class Writer:
             #     # feed = rf.Feed(notices_dict[company]['title'], )
             #     #items_list.append(itemified)
             
-            print(fg.rss_file("test.xml"))
+            #print(fg.rss_file("test.xml"))
             #fg.rss_str(pretty=True)
             #fg.rss_file('/tmp/test.json')
 
@@ -82,7 +79,8 @@ class Writer:
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            cur.execute("INSERT INTO contacts VALUES ('" + email + "','" + company + "','" + state + "')")
+            # cur.execute('INSERT INTO contacts VALUES ("' + email + '","' + company.replace("'","\\'") + '","' + state + '");')
+            cur.execute('INSERT INTO contacts VALUES (?, ?)', (email, state))
             con.commit()
         except:
             logging.exception("Error writing to contacts")
@@ -91,11 +89,17 @@ class Writer:
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            cur.execute("INSERT INTO companies VALUES ('" + company + "','" + state + "')")
+            cur.execute('INSERT INTO companies VALUES (?, ?)', (company, state))
             con.commit()
         except:
             logging.exception("Error writing to company")
 
-
-this_writer = Writer()
-this_writer.store_company('test_comp', 'CA')
+    def get_contacts_by_company(self, company, state):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('SELECT * from contacts where (company = ? and state = ?)', (company, state))
+            rows = cur.fetchall()
+            return rows
+        except:
+            logging.exception("Error getting contacts")

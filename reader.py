@@ -2,6 +2,7 @@ import json
 import csv
 import os
 import logging
+import writer
 
 class Reader:                   
 
@@ -186,6 +187,15 @@ class Reader:
             "Impact Date" : "Planned Starting Date"
         }
 
+        conversion_dict_wi = {
+            "Company" : "Company",
+            "Notice Received" : "Initial Report Date",
+            "City" : "City",
+            "Affected Workers" : "Planned # Affected Employees",
+            "Original Notice Type / Update Type" : "Closing or Layoff",
+            "Layoff Begin Date" : "Planned Starting Date"
+        }
+
         if state == "az":
             return conversion_dict_az
         elif state == "al":
@@ -226,6 +236,8 @@ class Reader:
             return conversion_dict_va
         elif state == "vt":
             return conversion_dict_vt
+        elif state == "wi":
+            return conversion_dict_wi
         else:
             return
     
@@ -274,5 +286,39 @@ class Reader:
         except:
              logging.exception('Error writing file to disk: ' + state)
 
+    def read_all_reports(self):
+        states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
+        this_writer = writer.Writer()
+        response_list = list()
+        for state in states_list:
+            f = open("./reports_json/" + state.lower() + ".json")
+            parsed_dict = json.load(f)
+
+            for line in parsed_dict.keys():
+                if isinstance(line, str):
+                    line_dict = parsed_dict[line]
+                    if "Company" not in line_dict.keys():
+                        continue
+                    else:
+                        folks_to_contact = this_writer.get_contacts_by_company(line_dict["Company"], state)
+                        if len(folks_to_contact) > 0:
+                            for person in folks_to_contact:
+                                response_list.append(person)
+        return response_list
+    
+    def get_warnings_by_state(self, company, state):
+        this_path = "./reports_json/" + state.lower() + ".json"
+        if os.path.exists(this_path):
+            f = open(this_path)
+            report_dict = json.load(f)
+            if company in report_dict.keys():
+                return report_dict[company]
+            else:
+                return False
+
+
+
+this_reader = Reader()          
+print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
 # print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))
 #json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az'))
