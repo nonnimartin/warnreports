@@ -3,6 +3,7 @@ import csv
 import os
 import logging
 import writer
+import boto3
 
 class Reader:                   
 
@@ -306,7 +307,8 @@ class Reader:
                         if len(folks_to_contact) > 0:
                             this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
                             for person in folks_to_contact:
-                                # LOGIC TO SEND EMAILS GOES HERE
+                                this_body = 'WARN Report for ' + this_warning['Company'] + ' ' + ' in ' + this_warning['City'] + '\n' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '\n' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
+                                Reader().send_email("warnsender@gmail.com", person[0], this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company'], this_body)
         return send_list
     
     def get_warnings_by_state(self, company, state):
@@ -318,11 +320,37 @@ class Reader:
                 return report_dict[company]
             else:
                 return False
+            
+    def send_email(self, sender, recipient, subject, body):
+        ses_client = boto3.client('ses', region_name='us-west-2')  # Replace with your preferred region
+        # Create the email message
+        message = {
+            'Subject': {'Data': subject},
+            'Body': {'Text': {'Data': body}}
+        }
+        
+        # Send the email
+        response = ses_client.send_email(
+            Source=sender,
+            Destination={'ToAddresses': [recipient]},
+            Message=message
+        )
+        
+        # Check the response
+        if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+            print("Email sent successfully!")
+        else:
+            print("Failed to send email.")
+            print(response)
+        
+    
 
 
 
 this_reader = Reader()          
 #print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
 print(this_reader.send_out_reports())
+#print(this_reader.send_email("warnsender@gmail.com", "warnsender@gmail.com", "subject test", "body test"))
+
 # print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))
 #json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az'))

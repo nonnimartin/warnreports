@@ -103,3 +103,6 @@ class Writer:
             return rows
         except:
             logging.exception("Error getting contacts")
+
+this_writer = Writer()
+print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
