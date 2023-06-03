@@ -286,10 +286,12 @@ class Reader:
         except:
              logging.exception('Error writing file to disk: ' + state)
 
-    def read_all_reports(self):
+    def send_out_reports(self):
+        # go through all reports and map reports to contacts
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
-        response_list = list()
+        contact_list = list()
+        send_list = list()
         for state in states_list:
             f = open("./reports_json/" + state.lower() + ".json")
             parsed_dict = json.load(f)
@@ -302,9 +304,10 @@ class Reader:
                     else:
                         folks_to_contact = this_writer.get_contacts_by_company(line_dict["Company"], state)
                         if len(folks_to_contact) > 0:
+                            this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
                             for person in folks_to_contact:
-                                response_list.append(person)
-        return response_list
+                                # LOGIC TO SEND EMAILS GOES HERE
+        return send_list
     
     def get_warnings_by_state(self, company, state):
         this_path = "./reports_json/" + state.lower() + ".json"
@@ -319,6 +322,7 @@ class Reader:
 
 
 this_reader = Reader()          
-print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
+#print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
+print(this_reader.send_out_reports())
 # print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))
 #json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az'))
