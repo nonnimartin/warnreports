@@ -104,6 +104,17 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
+    def get_all_companies(self):
+
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('SELECT * from companies')
+            rows = cur.fetchall()
+            return json.dumps(rows)
+        except:
+            logging.exception("Error getting contacts")
+
     def update_companies(self):
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         
@@ -122,4 +133,5 @@ class Writer:
 
 this_writer = Writer()
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
-this_writer.update_companies()
+# this_writer.update_companies()
+print(this_writer.get_all_companies())
