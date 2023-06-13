@@ -1,6 +1,4 @@
 import uuid
-# import datetime
-# import rfeed.rfeed as rf
 from feedgen.feed import FeedGenerator
 import json
 import sqlite3
@@ -134,4 +132,4 @@ class Writer:
 this_writer = Writer()
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
-print(this_writer.get_all_companies())
+#print(this_writer.get_all_companies())

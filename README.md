@@ -6,5 +6,9 @@ Requires the following to be installed as below:
 
 `pip install "uvicorn[standard]"`
 
+To run service:
+
+`uvicorn main:app --reload`
+
 
 
