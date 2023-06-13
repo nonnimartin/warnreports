@@ -74,7 +74,10 @@ class Writer:
             cur = con.cursor()
             cur.execute('SELECT DISTINCT state from companies')
             rows = cur.fetchall()
-            return rows
+            return_list = list()
+            for i in rows:
+                return_list.append(i[0])
+            return return_list
         except:
             logging.exception("Error getting to companies by state")
 
