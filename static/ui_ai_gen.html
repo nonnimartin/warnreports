@@ -81,10 +81,13 @@
 
   <script>
     // Fetch companies from API and populate the company dropdown
-    $.getJSON("https://api.example.com/companies", function(data) {
+    $.getJSON("http://localhost:8000/all_companies", function(data) {
       var options = "";
-      data.forEach(function(company) {
-        options += `<option value="${company.id}">${company.name}</option>`;
+      console.log(data);
+      this_data = JSON.parse(data)
+      this_data.forEach(function(company) {
+        console.log(company);
+        options += `<option value="${company[0]}">${company[0]}</option>`;
       });
       $("#company").append(options);
     });
