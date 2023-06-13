@@ -59,6 +59,25 @@ class Writer:
         except:
             logging.exception("Error writing to company")
 
+    def get_companies_by_state(self, state):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('SELECT * from companies where (state = ?)', (state))
+            rows = cur.fetchall()
+        except:
+            logging.exception("Error getting to companies by state")
+
+    def get_all_states(self):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('SELECT DISTINCT state from companies')
+            rows = cur.fetchall()
+            return rows
+        except:
+            logging.exception("Error getting to companies by state")
+
     def get_contacts_by_company(self, company, state):
         try: 
             con = sqlite3.connect("warnDb.db")
@@ -100,3 +119,4 @@ this_writer = Writer()
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
 #print(this_writer.get_all_companies())
+print(this_writer.get_all_states())
