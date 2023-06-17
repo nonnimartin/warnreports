@@ -60,15 +60,16 @@ class Writer:
             logging.exception("Error writing to company")
 
     def store_company_set(self, this_set):
+        con = sqlite3.connect("warnDb.db")
+        cur = con.cursor()
         for company_tuple in this_set:
-            print(company_tuple)
-        # try: 
-        #     con = sqlite3.connect("warnDb.db")
-        #     cur = con.cursor()
-        #     cur.execute('INSERT INTO companies VALUES (?, ?)', (company, state))
-        #     con.commit()
-        # except:
-        #     logging.exception("Error writing to company")
+            company = company_tuple[0]
+            state = company_tuple[1]
+            try: 
+                cur.execute('INSERT OR REPLACE INTO companies VALUES (?, ?)', (company, state))
+            except:
+                logging.exception("Error writing to company")
+        con.commit()
 
     def get_companies_by_state(self, state):
         try: 
