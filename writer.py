@@ -113,6 +113,17 @@ class Writer:
             return json.dumps(rows)
         except:
             logging.exception("Error getting contacts")
+    
+    def get_all_states(self):
+
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('SELECT DISTINCT state from companies')
+            rows = cur.fetchall()
+            return json.dumps(rows)
+        except:
+            logging.exception("Error getting contacts")
 
     def update_companies(self):
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]

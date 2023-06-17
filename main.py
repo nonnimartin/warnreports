@@ -9,4 +9,9 @@ def read_root():
     this_writer = writer.Writer()
     return this_writer.get_all_companies()
 
+@app.get("/get_all_states")
+def read_root():
+    this_writer = writer.Writer()
+    return this_writer.get_all_states()
+
 app.mount("/static", StaticFiles(directory="static"), name="static")

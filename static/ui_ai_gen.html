@@ -83,20 +83,21 @@
     // Fetch companies from API and populate the company dropdown
     $.getJSON("http://localhost:8000/all_companies", function(data) {
       var options = "";
-      console.log(data);
       this_data = JSON.parse(data)
       this_data.forEach(function(company) {
-        console.log(company);
         options += `<option value="${company[0]}">${company[0]}</option>`;
       });
       $("#company").append(options);
     });
 
     // Fetch states from API and populate the state dropdown
-    $.getJSON("https://api.example.com/states", function(data) {
+    $.getJSON("http://localhost:8000/get_all_states", function(data) {
       var options = "";
-      data.forEach(function(state) {
-        options += `<option value="${state.code}">${state.name}</option>`;
+      console.log(data);
+      this_data = JSON.parse(data)
+      this_data.forEach(function(state) {
+        console.log(state);
+        options += `<option value="${state}">${state}</option>`;
       });
       $("#state").append(options);
     });
