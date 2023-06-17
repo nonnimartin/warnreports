@@ -291,7 +291,6 @@ class Reader:
         # go through all reports and map reports to contacts
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
-        contact_list = list()
         send_list = list()
         for state in states_list:
             f = open("./reports_json/" + state.lower() + ".json")
@@ -310,6 +309,27 @@ class Reader:
                                 this_body = 'WARN Report for ' + this_warning['Company'] + ' ' + ' in ' + this_warning['City'] + '\n' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '\n' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
                                 Reader().send_email("warnsender@gmail.com", person[0], this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company'], this_body)
         return send_list
+    
+    def update_companies(self):
+        this_writer = writer.Writer()
+        # go through all reports and map reports to contacts
+        states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
+        company_set = set()
+        for state in states_list:
+            f = open("./reports_json/" + state.lower() + ".json")
+            parsed_dict = json.load(f)
+
+            for line in parsed_dict.keys():
+                if isinstance(line, str):
+                    line_dict = parsed_dict[line]
+                    if "Company" not in line_dict.keys() or len(line_dict["Company"]) == 0:
+                        continue
+                    else:
+                        company = line_dict["Company"]
+                        company_set.add((company, state))
+        # write companies set to db
+        this_writer.store_company_set(company_set)
+        return
     
     def get_warnings_by_state(self, company, state):
         this_path = "./reports_json/" + state.lower() + ".json"
@@ -349,7 +369,8 @@ class Reader:
 
 this_reader = Reader()          
 #print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
-print(this_reader.send_out_reports())
+#print(this_reader.send_out_reports())
+this_reader.update_companies()
 #print(this_reader.send_email("warnsender@gmail.com", "warnsender@gmail.com", "subject test", "body test"))
 
 # print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))
