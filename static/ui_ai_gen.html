@@ -71,7 +71,7 @@
       <option value="">Select a state</option>
     </select>
 
-    <label for="company">Company:</label>
+    <label for="company" id="company_label">Company:</label>
     <select id="company" name="company" required>
       <option value="">Select a company</option>
     </select>
@@ -80,23 +80,38 @@
   </form>
 
   <script>
-    // Fetch companies from API and populate the company dropdown
-    $.getJSON("http://localhost:8000/all_companies", function(data) {
-      var options = "";
-      this_data = JSON.parse(data)
-      this_data.forEach(function(company) {
-        options += `<option value="${company[0]}">${company[0]}</option>`;
+
+    $(document).ready(function() {
+      // Hide the second element initially
+      $("#company").hide();
+      $("#company_label").hide();
+      
+      // Show the second element when the first select is chosen
+      $("#state").change(function() {
+        if ($("#company option").length > 0) {
+          removeOptions(document.getElementById('company'));
+        }
+        //Fetch companies from API and populate the company dropdown
+        $.getJSON("http://localhost:8000/get_companies_by_state" + "/" + this.value, function(data) {
+          var options = "";
+          this_data = JSON.parse(data)
+          this_data.forEach(function(company) {
+            options += `<option value="${company}">${company}</option>`;
+         });
+          $("#company").append(options);
+          $("#company").find(":selected").val([]);
+          $("#company").find(":selected").text('Select a company');
+        });
+        $("#company").show();
+        $("#company_label").show();
       });
-      $("#company").append(options);
     });
 
     // Fetch states from API and populate the state dropdown
     $.getJSON("http://localhost:8000/get_all_states", function(data) {
       var options = "";
-      console.log(data);
       this_data = JSON.parse(data)
       this_data.forEach(function(state) {
-        console.log(state);
         options += `<option value="${state}">${state}</option>`;
       });
       $("#state").append(options);
@@ -109,6 +124,13 @@
         event.preventDefault(); // Prevent form submission if validation fails
       }
     });
+
+  function removeOptions(selectElement) {
+    var i, L = selectElement.options.length - 1;
+    for (i = L; i >= 0; i--) {
+        selectElement.remove(i);
+    }
+}
   </script>
 </body>
 </html>

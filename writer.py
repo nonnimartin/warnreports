@@ -75,8 +75,14 @@ class Writer:
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            cur.execute('SELECT * from companies where (state = ?)', (state))
+            # comma there to make param a tuple
+            cur.execute('SELECT company from companies where (state = ?)', (state,))
             rows = cur.fetchall()
+            prepped_rows = list()
+            for row in rows:
+                prepped_rows.append(row[0])
+            prepped_rows.sort()
+            return json.dumps(prepped_rows)
         except:
             logging.exception("Error getting to companies by state")
 
@@ -89,7 +95,8 @@ class Writer:
             return_list = list()
             for i in rows:
                 return_list.append(i[0])
-            return return_list
+            return_list.sort()
+            return json.dumps(return_list)
         except:
             logging.exception("Error getting to companies by state")
 
@@ -113,17 +120,6 @@ class Writer:
             return json.dumps(rows)
         except:
             logging.exception("Error getting contacts")
-    
-    def get_all_states(self):
-
-        try: 
-            con = sqlite3.connect("warnDb.db")
-            cur = con.cursor()
-            cur.execute('SELECT DISTINCT state from companies')
-            rows = cur.fetchall()
-            return json.dumps(rows)
-        except:
-            logging.exception("Error getting contacts")
 
     def update_companies(self):
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
@@ -141,8 +137,9 @@ class Writer:
                 # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
 
 
-this_writer = Writer()
+#this_writer = Writer()
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
 #print(this_writer.get_all_companies())
-#print(this_writer.get_all_states())
+#this_writer.get_all_states()
+#this_writer.get_companies_by_state("CA")
