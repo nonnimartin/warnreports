@@ -1,5 +1,6 @@
 CREATE TABLE companies (
 	company TEXT NOT NULL,
-	state TEXT NOT NULL
+	state TEXT NOT NULL,
+	UNIQUE(company, state) ON CONFLICT REPLACE
 );
 CREATE TABLE contacts (email, company, state);
