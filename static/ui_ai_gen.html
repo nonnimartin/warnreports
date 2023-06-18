@@ -60,7 +60,7 @@
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
-  <form id="submitForm" action="submit.php" method="POST">
+  <form id="submitForm" action="../make_contact" method="post">
     <h1>Submit Form</h1>
 
     <label for="email">Email:</label>
@@ -130,7 +130,28 @@
     for (i = L; i >= 0; i--) {
         selectElement.remove(i);
     }
-}
+  }
+
+  const serialize_form = form => JSON.stringify(
+    Array.from(new FormData(form).entries())
+        .reduce((m, [ key, value ]) => Object.assign(m, { [key]: value }), {})
+  );
+
+    $('#submitForm').on('submit', function(event) {
+    event.preventDefault();
+    const json = serialize_form(this);
+    console.log(json);
+    $.ajax({
+      type: 'POST',
+      url: '../make_contact',
+      dataType: 'json',
+      data: json,
+      contentType: 'application/json',
+      success: function(data) {
+        return data;
+      }
+    });
+  });
   </script>
 </body>
 </html>

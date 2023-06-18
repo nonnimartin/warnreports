@@ -44,8 +44,7 @@ class Writer:
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            # cur.execute('INSERT INTO contacts VALUES ("' + email + '","' + company.replace("'","\\'") + '","' + state + '");')
-            cur.execute('INSERT INTO contacts VALUES (?, ?)', (email, state))
+            cur.execute('INSERT INTO contacts VALUES (?, ?, ?)', (email, company, state))
             con.commit()
         except:
             logging.exception("Error writing to contacts")
