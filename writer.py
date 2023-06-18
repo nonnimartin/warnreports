@@ -81,8 +81,8 @@ class Writer:
             prepped_rows = list()
             for row in rows:
                 prepped_rows.append(row[0])
-            prepped_rows.sort()
-            return json.dumps(prepped_rows)
+            sort_list = sorted(prepped_rows, key=lambda s: s.casefold())
+            return json.dumps(sort_list)
         except:
             logging.exception("Error getting to companies by state")
 
@@ -95,8 +95,8 @@ class Writer:
             return_list = list()
             for i in rows:
                 return_list.append(i[0])
-            return_list.sort()
-            return json.dumps(return_list)
+            sort_list = sorted(return_list, key=lambda s: s.casefold())
+            return json.dumps(sort_list)
         except:
             logging.exception("Error getting to companies by state")
 
