@@ -8,6 +8,7 @@ class Data(BaseModel):
     email: str
     state: str
     company: str
+    state_only: str
 
 @app.get("/all_companies")
 async def read_root():
@@ -33,7 +34,7 @@ async def make_contact(data: Data):
          raise HTTPException(status_code=400, detail="400 Bad Request")
     else:
         this_writer = writer.Writer()
-        this_writer.store_contact(data.email, data.company, data.state)
+        this_writer.store_contact(data.email, data.company, data.state, data.state_only)
         return data
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

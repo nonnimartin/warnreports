@@ -7,15 +7,22 @@ import time
 
 class Writer:
            
-    def store_contact(self, email, company, state):
+    def store_contact(self, email, company, state, state_only):
+        
+        if state_only == "on":
+            state_only = 1
+        else:
+            state_only = 0
+
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            # add unit timestamp for created
+            # set unit timestamp for created
             # set 0 for confirmed
             # set 0 for last notice
+            # set field for only receiving warns from contact's state
             now = int(time.time())
-            cur.execute('INSERT INTO contacts VALUES (?, ?, ?, ?, ?, ?)', (email, company, state, 0, now, 0))
+            cur.execute('INSERT INTO contacts VALUES (?, ?, ?, ?, ?, ?, ?)', (email, company, state, state_only, 0, now, 0))
             con.commit()
         except:
             logging.exception("Error writing to contacts")

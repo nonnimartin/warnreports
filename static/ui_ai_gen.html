@@ -76,6 +76,11 @@
       <option value="">Select a company</option>
     </select>
 
+    <label id="state_only">Receive only WARN Notices for the chosen state (otherwise you will get emails for all of the company's notices)
+      <input type="checkbox" name="state_only" id="state_only_checkbox">
+      <span class="checkmark"></span>
+    </label>
+
     <input type="submit" value="Submit">
   </form>
 
@@ -85,6 +90,7 @@
       // Hide the second element initially
       $("#company").hide();
       $("#company_label").hide();
+      $("#state_only").hide();
       
       // Show the second element when the first select is chosen
       $("#state").change(function() {
@@ -104,6 +110,7 @@
         });
         $("#company").show();
         $("#company_label").show();
+        $("#state_only").show();
       });
     });
 
