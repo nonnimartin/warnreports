@@ -316,7 +316,15 @@ class Reader:
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         company_set = set()
         for state in states_list:
-            f = open("./reports_json/" + state.lower() + ".json")
+            this_path = "./reports_json/" + state.lower() + ".json"
+            if not os.path.isfile(this_path):
+                try:
+                    with open(this_path, "w+") as to_open:
+                        pass
+                except:
+                    logging.exception('Error writing file to disk: ' + this_path)
+                    
+            f = open(this_path)
             parsed_dict = json.load(f)
 
             for line in parsed_dict.keys():
@@ -367,10 +375,10 @@ class Reader:
 
 
 
-this_reader = Reader()          
+#this_reader = Reader()          
 #print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
 #print(this_reader.send_out_reports())
-this_reader.update_companies()
+#this_reader.update_companies()
 #print(this_reader.send_email("warnsender@gmail.com", "warnsender@gmail.com", "subject test", "body test"))
 
 # print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))

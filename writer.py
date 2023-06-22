@@ -98,21 +98,6 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
-    def update_companies(self):
-        states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
-        
-        for state in states_list:
-            f = open("./reports_json/" + state.lower() + ".json")
-            parsed_dict = json.load(f)
-            for this_company in parsed_dict.keys():
-                this_warn = parsed_dict[this_company]
-                if "Company" not in this_warn.keys():
-                    continue
-                city = this_warn["City"]
-                company = this_warn["Company"]
-                
-                # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
-
 
 #this_writer = Writer()
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
