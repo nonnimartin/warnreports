@@ -98,10 +98,49 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
+    def get_companies_like(self, this_string):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            query_string = 'SELECT company from companies where company like "%' + this_string + '%"'
+            cur.execute(query_string)
+            rows = cur.fetchall()
+            return json.dumps(rows)
+        except:
+            logging.exception("Error getting contacts")
 
-#this_writer = Writer()
+
+    def clear_table(self, table):
+
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('DELETE FROM ' + table + ' WHERE 1=1')
+            con.commit()
+        except:
+            logging.exception("Error clearing table: " + table)
+
+    def update_companies(self):
+        states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
+        
+        for state in states_list:
+            f = open("./reports_json/" + state.lower() + ".json")
+            parsed_dict = json.load(f)
+            for this_company in parsed_dict.keys():
+                this_warn = parsed_dict[this_company]
+                if "Company" not in this_warn.keys():
+                    continue
+                city = this_warn["City"]
+                company = this_warn["Company"]
+                
+                # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
+
+
+this_writer = Writer()
+print(this_writer.get_companies_like('twit'))
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
 #print(this_writer.get_all_companies())
 #this_writer.get_all_states()
 #this_writer.get_companies_by_state("CA")
+

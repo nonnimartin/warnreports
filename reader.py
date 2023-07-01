@@ -376,7 +376,6 @@ class Reader:
 
 
 #this_reader = Reader()          
-#print(this_reader.get_warnings_by_state("Brooks Automation", "CA"))
 #print(this_reader.send_out_reports())
 #this_reader.update_companies()
 #print(this_reader.send_email("warnsender@gmail.com", "warnsender@gmail.com", "subject test", "body test"))

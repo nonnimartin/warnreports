@@ -36,5 +36,15 @@ async def make_contact(data: Data):
         this_writer = writer.Writer()
         this_writer.store_contact(data.email, data.company, data.state, data.state_only)
         return data
+    
+@app.get("/get_companies_like/{this_str}")
+def get_companies_like(this_str: str):
+    if not this_str:
+         raise HTTPException(status_code=400, detail="400 Bad Request")
+    else:
+        this_writer = writer.Writer()
+        return this_writer.get_companies_like(this_str)
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/scripts", StaticFiles(directory="scripts"), name="scripts")

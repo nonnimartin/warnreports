@@ -63,6 +63,10 @@
   <form id="submitForm" action="../make_contact" method="post">
     <h1>Submit Form</h1>
 
+    <div class="searchbox">
+      <input class="typeahead" type="text" placeholder="Company name...">
+    </div>
+
     <label for="email">Email:</label>
     <input type="email" id="email" name="email" required pattern="[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$">
 
@@ -84,6 +88,8 @@
     <input type="submit" value="Submit">
   </form>
 
+  <script src="/scripts/bloodhound.min.js"></script>
+  <script src="/scripts/typeahead.jquery.min.js"></script>
   <script>
 
     $(document).ready(function() {
@@ -139,11 +145,14 @@
     }
   }
 
-  const serialize_form = form => JSON.stringify(
-    Array.from(new FormData(form).entries())
+  const serialize_form = form => {
+    const thisArray = Array.from(new FormData(form).entries())
         .reduce((m, [ key, value ]) => Object.assign(m, { [key]: value }), {})
-  );
+    if (!("state_only" in Object.keys(thisArray))) thisArray.state_only = "off";
+    const strJSON = JSON.stringify(thisArray);
+    return strJSON;
 
+  }
     $('#submitForm').on('submit', function(event) {
     event.preventDefault();
     const json = serialize_form(this);
@@ -158,6 +167,106 @@
         return data;
       }
     });
+  });
+
+  var myData = [];
+  var substringMatcher = function(strs) {
+    return function findMatches(q, cb) {
+      console.log(q);
+      var matches, substringRegex;
+
+      // an array that will be populated with substring matches
+      matches = [];
+
+      // regex used to determine if a string contains the substring `q`
+      substrRegex = new RegExp(q, 'i');
+
+      // iterate through the pool of strings and for any string that
+      // contains the substring `q`, add it to the `matches` array
+      // $.each(strs, function(i, str) {
+      //   if (substrRegex.test(str)) {
+      //     matches.push(str);
+      //   }
+      // });
+
+      
+
+      cb(matches);
+    };
+  };
+
+  $('.typeahead').typeahead({
+    // options here
+  },
+  {
+    name: 'myData',
+    source: substringMatcher(myData)
+  });
+
+  var myData = new Bloodhound({
+      datumTokenizer: Bloodhound.tokenizers.whitespace,
+      queryTokenizer: Bloodhound.tokenizers.whitespace,
+      local: myData
+  });
+
+  $('#bloodhound .typeahead').typeahead({
+    // options
+  },
+  {
+    name: 'myData',
+    source: myData
+  });
+
+  $('.typeahead').typeahead({
+  // highlights search queries
+  highlight: false,
+
+  // shows/hides hint
+  hint: true,
+
+  // minimum character length to trigger the suggestion list
+  minLength: 1,
+
+  // default CSS classes
+  classNames: {
+    input: "tt-input",
+    hint: "tt-hint",
+    menu: "tt-menu",
+    dataset: "tt-dataset",
+    suggestion: "tt-suggestion",
+    selectable: "tt-selectable",
+    empty: "tt-empty",
+    open: "tt-open",
+    cursor: "tt-cursor",
+    highlight: "tt-highlight"
+  }
+  },
+  {
+    // data source
+    // a function with the signature (query, syncResults, asyncResults)
+    source: myData,
+
+    // if the source function expects 3 arguments, async will be set to true
+    async: false,
+
+    // the name of the dataset
+    name: '',
+
+    // specify the maximum number of suggestions to display
+    limit: 5,
+
+    // either a key string or a function that transforms a suggestion object into a string
+    display: null,
+
+    // custom rendering template. 
+    templates: {
+      notFound: null,
+      empty: null,
+      pending: null,
+      header: null,
+      footer: null,
+      suggestion: null
+    }
   });
   </script>
 </body>
