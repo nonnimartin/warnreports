@@ -169,6 +169,12 @@
     });
   });
 
+  function jsonParser(blob) {
+       let parsed = JSON.parse(blob);
+       if (typeof parsed === 'string') parsed = jsonParser(parsed);
+       return parsed;
+  }
+
   var myData = [];
   var substringMatcher = function(strs) {
     return function findMatches(q, cb) {
@@ -181,17 +187,27 @@
       // regex used to determine if a string contains the substring `q`
       substrRegex = new RegExp(q, 'i');
 
-      // iterate through the pool of strings and for any string that
-      // contains the substring `q`, add it to the `matches` array
-      // $.each(strs, function(i, str) {
-      //   if (substrRegex.test(str)) {
-      //     matches.push(str);
-      //   }
-      // });
-
-      
-
-      cb(matches);
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", "/get_companies_like/" + q, true);
+      xhr.onload = (e) => {
+        if (xhr.readyState === 4) {
+          if (xhr.status === 200) {
+            const parsed = jsonParser(xhr.responseText);
+            parsed.forEach( element => 
+                matches.push(element)
+            );
+            console.log(matches);
+            // cb is where it normally would put the items in the UI
+            cb(matches);
+          } else {
+            console.error(xhr.statusText);
+          }
+        }
+      };
+      xhr.onerror = (e) => {
+        console.error(xhr.statusText);
+      };
+      xhr.send(null);
     };
   };
 

@@ -38,7 +38,7 @@ async def make_contact(data: Data):
         return data
     
 @app.get("/get_companies_like/{this_str}")
-def get_companies_like(this_str: str):
+async def get_companies_like(this_str: str):
     if not this_str:
          raise HTTPException(status_code=400, detail="400 Bad Request")
     else:

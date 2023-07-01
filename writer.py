@@ -105,7 +105,10 @@ class Writer:
             query_string = 'SELECT company from companies where company like "%' + this_string + '%"'
             cur.execute(query_string)
             rows = cur.fetchall()
-            return json.dumps(rows)
+            new_rows = list()
+            for row in rows:
+                new_rows.append(row[0])
+            return json.dumps(new_rows)
         except:
             logging.exception("Error getting contacts")
 
