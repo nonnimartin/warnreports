@@ -3,12 +3,82 @@
 <head>
   <title>Search Page</title>
   <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.js" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #f2f2f2;
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      background-color: #fff;
+      border-radius: 6px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+
+    .typeahead {
+      position: relative;
+    }
+
+    .typeahead .tt-query {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 2px solid #ccc;
+      border-radius: 4px;
+      background-color: #fff;
+      transition: border-color 0.3s ease;
+    }
+
+    .typeahead .tt-query:focus {
+      border-color: #69c;
+      outline: none;
+    }
+
+    .typeahead .tt-menu {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      z-index: 100;
+      min-width: 280px;
+      max-width: 400px;
+      margin-top: 5px;
+      padding: 10px;
+      background-color: #fff;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+      overflow-y: auto;
+    }
+
+    .typeahead .tt-suggestion {
+      padding: 8px 12px;
+      font-size: 14px;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .typeahead .tt-suggestion:hover,
+    .typeahead .tt-suggestion:focus {
+      background-color: #f5f5f5;
+    }
+  </style>
 </head>
 <body>
   <div class="container">
     <h1>Search Page</h1>
-    <input type="text" class="typeahead form-control" placeholder="Search..." />
+    <div class="typeahead">
+      <input type="text" class="form-control tt-query" placeholder="Search..." />
+      <div class="tt-menu"></div>
+    </div>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
@@ -20,7 +90,6 @@
           url: '/get_companies_like/%QUERY',
           wildcard: '%QUERY',
           transform: function(response) {
-            // Convert JSON response to an array of strings
             return JSON.parse(response);
           }
         },
@@ -28,7 +97,7 @@
         queryTokenizer: Bloodhound.tokenizers.whitespace
       });
 
-      $('.typeahead').typeahead({
+      $('.tt-query').typeahead({
         hint: true,
         highlight: true,
         minLength: 3
@@ -37,7 +106,7 @@
         source: engine,
         templates: {
           suggestion: function(data) {
-            return '<p>' + data + '</p>';
+            return '<p class="tt-suggestion">' + data + '</p>';
           }
         }
       });
