@@ -1,289 +1,47 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Submit Form</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f2f2f2;
-    }
-
-    form {
-      max-width: 400px;
-      margin: 0 auto;
-      padding: 20px;
-      background-color: #ffffff;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    }
-
-    h1 {
-      text-align: center;
-      color: #333333;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 10px;
-      font-weight: bold;
-      color: #555555;
-    }
-
-    input[type="email"],
-    select {
-      width: 100%;
-      padding: 8px;
-      border: 1px solid #cccccc;
-      border-radius: 4px;
-      font-size: 16px;
-      margin-bottom: 15px;
-    }
-
-    input[type="submit"] {
-      background-color: #4caf50;
-      color: #ffffff;
-      border: none;
-      padding: 12px;
-      border-radius: 4px;
-      font-size: 16px;
-      cursor: pointer;
-    }
-
-    input[type="submit"]:hover {
-      background-color: #45a049;
-    }
-
-    input:invalid {
-      border-color: #ff3333;
-    }
-  </style>
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <title>Search Page</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.js" rel="stylesheet">
 </head>
 <body>
-  <form id="submitForm" action="../make_contact" method="post">
-    <h1>Submit Form</h1>
+  <div class="container">
+    <h1>Search Page</h1>
+    <input type="text" class="typeahead form-control" placeholder="Search..." />
+  </div>
 
-    <div class="searchbox">
-      <input class="typeahead" type="text" placeholder="Company name...">
-    </div>
-
-    <label for="email">Email:</label>
-    <input type="email" id="email" name="email" required pattern="[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$">
-
-    <label for="state">State:</label>
-    <select id="state" name="state" required>
-      <option value="">Select a state</option>
-    </select>
-
-    <label for="company" id="company_label">Company:</label>
-    <select id="company" name="company" required>
-      <option value="">Select a company</option>
-    </select>
-
-    <label id="state_only">Receive only WARN Notices for the chosen state (otherwise you will get emails for all of the company's notices)
-      <input type="checkbox" name="state_only" id="state_only_checkbox">
-      <span class="checkmark"></span>
-    </label>
-
-    <input type="submit" value="Submit">
-  </form>
-
-  <script src="/scripts/bloodhound.min.js"></script>
-  <script src="/scripts/typeahead.jquery.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.js"></script>
   <script>
-
     $(document).ready(function() {
-      // Hide the second element initially
-      $("#company").hide();
-      $("#company_label").hide();
-      $("#state_only").hide();
-      
-      // Show the second element when the first select is chosen
-      $("#state").change(function() {
-        if ($("#company option").length > 0) {
-          removeOptions(document.getElementById('company'));
-        }
-        //Fetch companies from API and populate the company dropdown
-        $.getJSON("http://localhost:8000/get_companies_by_state" + "/" + this.value, function(data) {
-          var options = "";
-          this_data = JSON.parse(data)
-          this_data.forEach(function(company) {
-            options += `<option value="${company}">${company}</option>`;
-         });
-          $("#company").append(options);
-          $("#company").find(":selected").val([]);
-          $("#company").find(":selected").text('Select a company');
-        });
-        $("#company").show();
-        $("#company_label").show();
-        $("#state_only").show();
+      var engine = new Bloodhound({
+        remote: {
+          url: '/get_companies_like/%QUERY',
+          wildcard: '%QUERY',
+          transform: function(response) {
+            // Convert JSON response to an array of strings
+            return JSON.parse(response);
+          }
+        },
+        datumTokenizer: Bloodhound.tokenizers.whitespace,
+        queryTokenizer: Bloodhound.tokenizers.whitespace
       });
-    });
 
-    // Fetch states from API and populate the state dropdown
-    $.getJSON("http://localhost:8000/get_all_states", function(data) {
-      var options = "";
-      this_data = JSON.parse(data)
-      this_data.forEach(function(state) {
-        options += `<option value="${state}">${state}</option>`;
-      });
-      $("#state").append(options);
-    });
-
-    // Validate and sanitize email address before form submission
-    $("#submitForm").submit(function(event) {
-      // No need for explicit email validation since HTML5 pattern attribute handles it
-      if (!this.checkValidity()) {
-        event.preventDefault(); // Prevent form submission if validation fails
-      }
-    });
-
-  function removeOptions(selectElement) {
-    var i, L = selectElement.options.length - 1;
-    for (i = L; i >= 0; i--) {
-        selectElement.remove(i);
-    }
-  }
-
-  const serialize_form = form => {
-    const thisArray = Array.from(new FormData(form).entries())
-        .reduce((m, [ key, value ]) => Object.assign(m, { [key]: value }), {})
-    if (!("state_only" in Object.keys(thisArray))) thisArray.state_only = "off";
-    const strJSON = JSON.stringify(thisArray);
-    return strJSON;
-
-  }
-    $('#submitForm').on('submit', function(event) {
-    event.preventDefault();
-    const json = serialize_form(this);
-    console.log(json);
-    $.ajax({
-      type: 'POST',
-      url: '../make_contact',
-      dataType: 'json',
-      data: json,
-      contentType: 'application/json',
-      success: function(data) {
-        return data;
-      }
-    });
-  });
-
-  function jsonParser(blob) {
-       let parsed = JSON.parse(blob);
-       if (typeof parsed === 'string') parsed = jsonParser(parsed);
-       return parsed;
-  }
-
-  var myData = [];
-  var substringMatcher = function(strs) {
-    return function findMatches(q, cb) {
-      console.log(q);
-      var matches, substringRegex;
-
-      // an array that will be populated with substring matches
-      matches = [];
-
-      // regex used to determine if a string contains the substring `q`
-      substrRegex = new RegExp(q, 'i');
-
-      const xhr = new XMLHttpRequest();
-      xhr.open("GET", "/get_companies_like/" + q, true);
-      xhr.onload = (e) => {
-        if (xhr.readyState === 4) {
-          if (xhr.status === 200) {
-            const parsed = jsonParser(xhr.responseText);
-            parsed.forEach( element => 
-                matches.push(element)
-            );
-            console.log(matches);
-            // cb is where it normally would put the items in the UI
-            cb(matches);
-          } else {
-            console.error(xhr.statusText);
+      $('.typeahead').typeahead({
+        hint: true,
+        highlight: true,
+        minLength: 3
+      }, {
+        name: 'search-results',
+        source: engine,
+        templates: {
+          suggestion: function(data) {
+            return '<p>' + data + '</p>';
           }
         }
-      };
-      xhr.onerror = (e) => {
-        console.error(xhr.statusText);
-      };
-      xhr.send(null);
-    };
-  };
-
-  $('.typeahead').typeahead({
-    // options here
-  },
-  {
-    name: 'myData',
-    source: substringMatcher(myData)
-  });
-
-  var myData = new Bloodhound({
-      datumTokenizer: Bloodhound.tokenizers.whitespace,
-      queryTokenizer: Bloodhound.tokenizers.whitespace,
-      local: myData
-  });
-
-  $('#bloodhound .typeahead').typeahead({
-    // options
-  },
-  {
-    name: 'myData',
-    source: myData
-  });
-
-  $('.typeahead').typeahead({
-  // highlights search queries
-  highlight: false,
-
-  // shows/hides hint
-  hint: true,
-
-  // minimum character length to trigger the suggestion list
-  minLength: 1,
-
-  // default CSS classes
-  classNames: {
-    input: "tt-input",
-    hint: "tt-hint",
-    menu: "tt-menu",
-    dataset: "tt-dataset",
-    suggestion: "tt-suggestion",
-    selectable: "tt-selectable",
-    empty: "tt-empty",
-    open: "tt-open",
-    cursor: "tt-cursor",
-    highlight: "tt-highlight"
-  }
-  },
-  {
-    // data source
-    // a function with the signature (query, syncResults, asyncResults)
-    source: myData,
-
-    // if the source function expects 3 arguments, async will be set to true
-    async: false,
-
-    // the name of the dataset
-    name: '',
-
-    // specify the maximum number of suggestions to display
-    limit: 5,
-
-    // either a key string or a function that transforms a suggestion object into a string
-    display: null,
-
-    // custom rendering template. 
-    templates: {
-      notFound: null,
-      empty: null,
-      pending: null,
-      header: null,
-      footer: null,
-      suggestion: null
-    }
-  });
+      });
+    });
   </script>
 </body>
 </html>
