@@ -7,4 +7,4 @@ CREATE TABLE contacts (
 	created INTEGER NOT NULL,
 	lastNotice INTEGER
 );
-CREATE TABLE contacts (email, company, state);
+CREATE TABLE companies (name, state);

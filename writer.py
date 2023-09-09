@@ -139,8 +139,8 @@ class Writer:
                 # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
 
 
-this_writer = Writer()
-print(this_writer.get_companies_like('twit'))
+#this_writer = Writer()
+#print(this_writer.get_companies_like('twit'))
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
 #print(this_writer.get_all_companies())

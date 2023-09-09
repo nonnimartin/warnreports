@@ -4,6 +4,7 @@ import os
 import logging
 import writer
 import boto3
+from pathlib import Path
 
 class Reader:                   
 
@@ -323,9 +324,11 @@ class Reader:
                         pass
                 except:
                     logging.exception('Error writing file to disk: ' + this_path)
-                    
-            f = open(this_path)
-            parsed_dict = json.load(f)
+            
+            parsed_dict = dict()
+            with open(this_path, 'r') as this_file:
+                data = this_file.read()
+                parsed_dict = json.loads(json.loads(data))
 
             for line in parsed_dict.keys():
                 if isinstance(line, str):

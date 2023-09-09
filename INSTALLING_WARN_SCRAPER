@@ -6,8 +6,15 @@ install dependencies in warn_reporter dir (not scraper) - `pipenv install`
 
 run make - `make ./warn-scraper/Makefile` in proj directory
 
+pip install fastapi
+
+pip install pydantic
+
 to run the script, for example for AK, `pipenv run python -m warn.cli AK`
 
+pip install feedgenerator
+
+pip install boto3
 -----
 run on all - 
 `pipenv run python -m warn.cli --log-level DEBUG all`

@@ -6,6 +6,8 @@ Requires the following to be installed as below:
 
 `pip install "uvicorn[standard]"`
 
+`pip install feedgen `
+
 To run service:
 
 `uvicorn main:app --reload`
