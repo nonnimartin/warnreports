@@ -7,12 +7,7 @@ import time
 
 class Writer:
            
-    def store_contact(self, email, company, state, state_only):
-        
-        if state_only == "on":
-            state_only = 1
-        else:
-            state_only = 0
+    def store_contact(self, email, company):
 
         try: 
             con = sqlite3.connect("warnDb.db")
@@ -22,7 +17,7 @@ class Writer:
             # set 0 for last notice
             # set field for only receiving warns from contact's state
             now = int(time.time())
-            cur.execute('INSERT INTO contacts VALUES (?, ?, ?, ?, ?, ?, ?)', (email, company, state, state_only, 0, now, 0))
+            cur.execute('INSERT INTO contacts VALUES (?, ?)', (email, company))
             con.commit()
         except:
             logging.exception("Error writing to contacts")
@@ -122,6 +117,9 @@ class Writer:
             con.commit()
         except:
             logging.exception("Error clearing table: " + table)
+
+    def submit_form(self, form_str):
+        print(form_str)
 
     def update_companies(self):
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]

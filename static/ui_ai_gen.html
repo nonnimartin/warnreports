@@ -75,10 +75,17 @@
 <body>
   <div class="container">
     <h1>Search Page</h1>
-    <div class="typeahead">
-      <input type="text" class="form-control tt-query" placeholder="Search..." />
-      <div class="tt-menu"></div>
-    </div>
+    <form>
+      <div class="typeahead">
+        <input type="text" id="company" class="form-control tt-query" placeholder="Search..." />
+        <div class="tt-menu"></div>
+        <div class="form-group">
+          <label for="email">Email Address:</label>
+          <input type="email" class="form-control" id="email" placeholder="Enter your email">
+        </div>
+        <button type="button" class="btn btn-primary" id="submitBtn">Submit</button>
+      </div>
+    </form>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
@@ -95,6 +102,27 @@
         },
         datumTokenizer: Bloodhound.tokenizers.whitespace,
         queryTokenizer: Bloodhound.tokenizers.whitespace
+      });
+
+        // Add a click event handler for the submit button
+        $('#submitBtn').click(function() {
+        var email = $('#email').val();
+        var company = $('#company').val();
+        
+        $.ajax({
+          url: '/make_contact',
+          method: 'POST',
+          data: JSON.stringify({company: company, email: email}),
+          contentType: "application/json; charset=utf-8",
+          success: function(response) {
+            // Handle the API response here
+            console.log(response);
+          },
+          error: function(error) {
+            // Handle errors here
+            console.error(error);
+          }
+        });
       });
 
       $('.tt-query').typeahead({

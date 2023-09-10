@@ -6,8 +6,8 @@ import json
 
 states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
 
-# new_scraper = scraper.Scraper()
-# new_scraper.scrape_all()
+new_scraper = scraper.Scraper()
+new_scraper.scrape_all()
 
 new_reader = reader.Reader()
 
