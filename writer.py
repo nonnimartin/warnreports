@@ -17,7 +17,7 @@ class Writer:
             # set 0 for last notice
             # set field for only receiving warns from contact's state
             now = int(time.time())
-            cur.execute('INSERT INTO contacts VALUES (?, ?)', (email, company))
+            cur.execute('INSERT INTO contacts VALUES (?, ?)', (email, company, now, 0, 0))
             con.commit()
         except:
             logging.exception("Error writing to contacts")
@@ -72,11 +72,12 @@ class Writer:
         except:
             logging.exception("Error getting to companies by state")
 
-    def get_contacts_by_company(self, company, state):
+    def get_contacts_by_company(self, company):
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            cur.execute('SELECT * from contacts where (company = ? and state = ?)', (company, state))
+            # comma makes the below a tuple, which is required
+            cur.execute('SELECT * from contacts where (company like ?) and confirmed = 1', ("%" + company + "%",))
             rows = cur.fetchall()
             return rows
         except:

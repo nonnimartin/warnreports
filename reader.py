@@ -4,7 +4,8 @@ import os
 import logging
 import writer
 import boto3
-from pathlib import Path
+#from pathlib import Path
+import time
 
 class Reader:                   
 
@@ -303,10 +304,13 @@ class Reader:
                     if "Company" not in line_dict.keys():
                         continue
                     else:
-                        folks_to_contact = this_writer.get_contacts_by_company(line_dict["Company"], state)
+                        folks_to_contact = this_writer.get_contacts_by_company(line_dict["Company"])
                         if len(folks_to_contact) > 0:
-                            this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
+                            this_warning = Reader().get_warnings_by_state(line_dict["Company"])
                             for person in folks_to_contact:
+                                #see if notified in last 5 days
+                                # by subtracting 431965 from unix epoch 
+                                
                                 this_body = 'WARN Report for ' + this_warning['Company'] + ' ' + ' in ' + this_warning['City'] + '\n' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '\n' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
                                 Reader().send_email("warnsender@gmail.com", person[0], this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company'], this_body)
         return send_list

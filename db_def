@@ -1,10 +1,12 @@
-CREATE TABLE contacts (
-	email TEXT NOT NULL PRIMARY KEY,
+CREATE TABLE "contacts" (
+	"email"	,
+	"company"	,
+	"created"	INTEGER,
+	"lastNotice"	INTEGER,
+	"confirmed"	INTEGER
+)
+CREATE TABLE companies (
 	company TEXT NOT NULL,
-	state TEXT,
-	stateOnly INTGER NOT NULL,
-	confirmed INTEGER,
-	created INTEGER NOT NULL,
-	lastNotice INTEGER
-);
-CREATE TABLE companies (name, state);
+	state TEXT NOT NULL,
+	UNIQUE(company, state) ON CONFLICT REPLACE
+)
