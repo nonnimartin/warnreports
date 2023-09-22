@@ -1,10 +1,13 @@
 CREATE TABLE "contacts" (
+	"id"	TEXT NOT NULL,
 	"email"	,
 	"company"	,
 	"created"	INTEGER,
 	"lastNotice"	INTEGER,
-	"confirmed"	INTEGER
-)
+	"confirmed"	INTEGER,
+	"api_token"	TEXT,
+	PRIMARY KEY("id")
+);
 CREATE TABLE companies (
 	company TEXT NOT NULL,
 	state TEXT NOT NULL,

@@ -43,6 +43,14 @@ async def get_companies_like(this_str: str):
         this_writer = writer.Writer()
         return this_writer.get_companies_like(this_str)
 
+@app.get("/unsubscribe/{this_id}")
+async def get_companies_like(this_str: str):
+    if not this_str:
+         raise HTTPException(status_code=400, detail="400 Bad Request")
+    else:
+        this_writer = writer.Writer()
+        return this_writer.get_companies_like(this_str)
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/scripts", StaticFiles(directory="scripts"), name="scripts")

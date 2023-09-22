@@ -1,14 +1,15 @@
-import uuid
 from feedgen.feed import FeedGenerator
 import json
 import sqlite3
 import logging
 import time
+from uuid import uuid4
+import hashlib
+
 
 class Writer:
            
     def store_contact(self, email, company):
-
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
@@ -17,10 +18,21 @@ class Writer:
             # set 0 for last notice
             # set field for only receiving warns from contact's state
             now = int(time.time())
-            cur.execute('INSERT INTO contacts VALUES (?, ?)', (email, company, now, 0, 0))
+            # create user uuid
+            user_uuid = uuid4()
+            cur.execute('INSERT INTO contacts VALUES (?, ?, ?, ?, ?, ?, ?)', (user_uuid.hex, email, company, now, 0, 0, None))
             con.commit()
         except:
             logging.exception("Error writing to contacts")
+
+    def make_api_token(self, user_id):
+        
+        f = open("./seed", "r")
+        seed_load = json.loads(f.read())
+        this_seed = seed_load["seed"]
+
+        my_hash = hashlib.sha256(user_id.encode('utf-8') + this_seed.encode('utf-8'))
+        return my_hash.hexdigest()
 
     def store_company(self, company, state):
         try: 
@@ -83,6 +95,17 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
+    def unsubscribe(self, email):
+
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('update contacts set confirmed = 0 where (email = ?)', (email))
+            rows = cur.fetchall()
+            return json.dumps(rows)
+        except:
+            logging.exception("Error getting contacts")
+
     def get_all_companies(self):
 
         try: 
@@ -118,9 +141,7 @@ class Writer:
             con.commit()
         except:
             logging.exception("Error clearing table: " + table)
-
-    def submit_form(self, form_str):
-        print(form_str)
+        
 
     def update_companies(self):
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
@@ -138,7 +159,8 @@ class Writer:
                 # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
 
 
-#this_writer = Writer()
+this_writer = Writer()
+print(this_writer.make_api_token("2c2833e1-bfa6-4ea2-82be-5203479179a7"))
 #print(this_writer.get_companies_like('twit'))
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
