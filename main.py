@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 import writer
 
 app = FastAPI()
+
 class Data(BaseModel):
     email: str
     company: str
@@ -43,13 +44,24 @@ async def get_companies_like(this_str: str):
         this_writer = writer.Writer()
         return this_writer.get_companies_like(this_str)
 
-@app.get("/unsubscribe/{this_id}")
-async def get_companies_like(this_str: str):
-    if not this_str:
+@app.get("/unsubscribe")
+async def unsubscribe(email: str, token: str):
+    this_writer = writer.Writer()
+    if not this_writer.validate_token(email, token):
+         raise HTTPException(status_code=401, detail="401 Unauthorized") 
+    if not (email and token):
          raise HTTPException(status_code=400, detail="400 Bad Request")
     else:
         this_writer = writer.Writer()
-        return this_writer.get_companies_like(this_str)
+        return this_writer.unsubscribe(email)
+
+@app.get("/resubscribe")
+async def resubscribe(email: str, token: str):
+    if not (email and token):
+         raise HTTPException(status_code=400, detail="400 Bad Request")
+    else:
+        this_writer = writer.Writer()
+        return this_writer.resubscribe(email)
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

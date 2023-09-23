@@ -95,14 +95,50 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
+    def get_user_by_email(self, email):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            # comma makes the below a tuple, which is required
+            cur.execute('SELECT * from contacts where (email = ?)', (email,))
+            rows = cur.fetchall()
+            return rows
+        except:
+            logging.exception("Error getting contacts")
+
+    def validate_token(self, email, token):
+
+        f = open("./seed", "r")
+        seed_load    = json.loads(f.read())
+        this_seed    = seed_load["seed"]
+        this_writer  = Writer()
+        this_user    = this_writer.get_user_by_email(email)
+        stored_key   = this_user[0][-1]
+
+        if stored_key == token:
+            return True
+        else:
+            return False
+
     def unsubscribe(self, email):
 
         try: 
             con = sqlite3.connect("warnDb.db")
             cur = con.cursor()
-            cur.execute('update contacts set confirmed = 0 where (email = ?)', (email))
-            rows = cur.fetchall()
-            return json.dumps(rows)
+            cur.execute('update contacts set confirmed = 0 where (email = ?)', (email,))
+            con.commit()
+            return True
+        except:
+            logging.exception("Error getting contacts")
+
+    def resubscribe(self, email):
+
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            cur.execute('update contacts set confirmed = 1 where (email = ?)', (email,))
+            con.commit()
+            return True
         except:
             logging.exception("Error getting contacts")
 
@@ -159,12 +195,15 @@ class Writer:
                 # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
 
 
-this_writer = Writer()
-print(this_writer.make_api_token("2c2833e1-bfa6-4ea2-82be-5203479179a7"))
 #print(this_writer.get_companies_like('twit'))
 #print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
 # this_writer.update_companies()
 #print(this_writer.get_all_companies())
 #this_writer.get_all_states()
 #this_writer.get_companies_by_state("CA")
+#this_writer = Writer()
+# this_writer.unsubscribe("warnwarn@testwarn.com", "")
+#this_writer.validate_token("warnwarn@testwarn.com", "")
+#print(this_writer.validate_token("warnwarn@testwarn.com", "b87c39c003f010f5ea8fbd1d0abf219efa3c8b1fc39ff7ba4c7ab645ab22fd78"))
+#this_writer.resubscribe("warnwarn@testwarn.com")
 

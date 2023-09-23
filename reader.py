@@ -312,6 +312,8 @@ class Reader:
                                 # by subtracting 431965 from unix epoch 
                                 if (int(time.time()) - 431965) < person["lastNotice"]:
                                     this_body = 'WARN Report for ' + this_warning['Company'] + ' ' + ' in ' + this_warning['City'] + '\n' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '\n' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
+                                    #  ADD THE unsubscribe functionality
+                                    #  this_body = this_body + ""
                                     Reader().send_email("warnsender@gmail.com", person[0], this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company'], this_body)
         return send_list
     
