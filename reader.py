@@ -289,14 +289,21 @@ class Reader:
         except:
              logging.exception('Error writing file to disk: ' + state)
 
+    def get_config():
+        # return config file content as dictionary
+        with open('config.json', 'r') as file:
+            return json.loads(file.read())
+
     def send_out_reports(self):
         # go through all reports and map reports to contacts
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
         send_list = list()
+
         for state in states_list:
-            f = open("./reports_json/" + state.lower() + ".json")
-            parsed_dict = json.load(f)
+            parsed_dict = dict()
+            with open("./reports_json/" + state.lower() + ".json", "r") as file:
+                parsed_dict = json.loads(json.load(file))
 
             for line in parsed_dict.keys():
                 if isinstance(line, str):
@@ -306,15 +313,25 @@ class Reader:
                     else:
                         folks_to_contact = this_writer.get_contacts_by_company(line_dict["Company"])
                         if len(folks_to_contact) > 0:
-                            this_warning = Reader().get_warnings_by_state(line_dict["Company"])
+                            this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
+                            if this_warning == False:
+                                continue
                             for person in folks_to_contact:
+                                print('person:')
+                                print(person)
+                                print('folks to contact:')
+                                print(folks_to_contact)
                                 #see if notified in last 5 days
-                                # by subtracting 431965 from unix epoch 
-                                if (int(time.time()) - 431965) < person["lastNotice"]:
-                                    this_body = 'WARN Report for ' + this_warning['Company'] + ' ' + ' in ' + this_warning['City'] + '\n' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '\n' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
-                                    #  ADD THE unsubscribe functionality
-                                    #  this_body = this_body + ""
-                                    Reader().send_email("warnsender@gmail.com", person[0], this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company'], this_body)
+                                # by subtracting 431965 from unix epoch
+                                if not ((int(time.time()) - 431965) < person[4]):
+                                    # construct email content
+                                    this_body = 'WARN Report for ' + this_warning['Company'] + ' in ' + this_warning['City'] + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
+                                    # send email
+                                    this_subject = this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company']
+                                    this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + Reader.get_config()["hostname"] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
+                                    Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
+                                    # exit due to loop issue
+                                    exit()
         return send_list
     
     def update_companies(self):
@@ -352,18 +369,22 @@ class Reader:
         this_path = "./reports_json/" + state.lower() + ".json"
         if os.path.exists(this_path):
             f = open(this_path)
-            report_dict = json.load(f)
+            report_dict = json.loads(json.loads(f.read()))
             if company in report_dict.keys():
                 return report_dict[company]
             else:
                 return False
             
     def send_email(self, sender, recipient, subject, body):
+        print(sender, recipient)
         ses_client = boto3.client('ses', region_name='us-west-2')  # Replace with your preferred region
         # Create the email message
         message = {
             'Subject': {'Data': subject},
-            'Body': {'Text': {'Data': body}}
+            'Body': {
+                    'Text': {'Data': body,'Charset': 'UTF-8'},
+                    'Html': {'Data': body, 'Charset': 'UTF-8'}
+                     }
         }
         
         # Send the email
@@ -372,7 +393,6 @@ class Reader:
             Destination={'ToAddresses': [recipient]},
             Message=message
         )
-        
         # Check the response
         if response['ResponseMetadata']['HTTPStatusCode'] == 200:
             print("Email sent successfully!")
