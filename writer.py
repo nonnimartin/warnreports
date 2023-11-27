@@ -25,6 +25,17 @@ class Writer:
         except:
             logging.exception("Error writing to contacts")
 
+    def update_last_notice(self, user_id):
+        try: 
+            con = sqlite3.connect("warnDb.db")
+            cur = con.cursor()
+            now = int(time.time())
+            cur.execute('UPDATE contacts SET lastNotice = (?) where id = (?)', (now, user_id))
+            con.commit()
+        except:
+            logging.exception("Error writing to contacts")
+
+
     def make_api_token(self, user_id):
         
         f = open("./seed", "r")

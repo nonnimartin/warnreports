@@ -6,6 +6,7 @@ import writer
 import boto3
 #from pathlib import Path
 import time
+from dateutil.parser import *
 
 class Reader:                   
 
@@ -40,7 +41,7 @@ class Reader:
 
         conversion_dict_co = {
             "company" : "Company",
-            "received_date" : "Initial Report Date",
+            "notice_date" : "Initial Report Date",
             "city" : "City",
             "jobs" : "Planned # Affected Employees",
             "occupations" : "Closing or Layoff",
@@ -58,7 +59,7 @@ class Reader:
 
         conversion_dict_de = {
             "employer" : "Company",
-            "Notice Date" : "Initial Report Date",
+            "notice_date" : "Initial Report Date",
             "City" : "City",
             "number_of_employees_affected" : "Planned # Affected Employees",
             "warn_type" : "Closing or Layoff"
@@ -243,15 +244,56 @@ class Reader:
             return conversion_dict_wi
         else:
             return
+        
+    def has_numbers(input):
+        # check if date value contains numbers to eliminate garbage rows
+        return any(char.isdigit() for char in input)
     
+    def has_letters(input):
+        # adding common nonalpha chars
+        chars = "!#%&?"
+        if any(ext in input for ext in chars):
+            return True
+        if any(c.isalpha() for c in input):
+            return True
 
+    def get_date(input):
+        # various attempts at handling irregular dates
+        if not Reader.has_numbers(input):
+            return False
+        if Reader.has_letters(input):
+            # break up by spaces to find possible dates
+            str_list = input.split(" ")
+            for item in str_list:
+                try:
+                    return str(parse(str(item), fuzzy=True).date())
+
+                except ValueError:
+                    return False
+                
+        # some strings like 7/6/19-7/31/19 do not parse but do have the desired info
+        if "-" in input:
+            str_list = input.split("-")
+            # check if splitting on "-" produces a date
+            for item in str_list:
+                try: 
+                    
+                    return str(parse(str(item), fuzzy=True).date())
+                except ValueError:
+                    return False
+        try: 
+            return str(parse(str(input), fuzzy=True).date())
+
+        except ValueError:
+            return False
+    
     # convert csv to dict
     def csv_to_dict(self, path, state):
         # this will have to be diff for each CSV, as they have diff structure
         first_loop = True
         headers_list = list()
         return_dict = dict()
-        convert_dict = self.convert_by_state(state) 
+        convert_dict = self.convert_by_state(state)
         with open(path,'r') as data:
             for line in csv.reader(data):
                 if first_loop == True:
@@ -262,6 +304,7 @@ class Reader:
                 company = str()
                 if first_loop == False:
                     this_dict = dict()
+                    # variable to exclude line from return dictionary
                     this_header = str()
                     for item in line:
                         header_index = line.index(item)
@@ -275,10 +318,23 @@ class Reader:
                             company = item
                     # we will have to put n/a into any fields not included
                     check_dict = ["City", "Initial Report Date", "Planned # Affected Employees", "Closing or Layoff", "Planned Starting Date"]
+                    
                     for field in check_dict:
                         if field not in this_dict:
                             this_dict[field] = "N/A or Not Provided"
+                    
+                    if "Initial Report Date" not in this_dict:
+                        continue
+                    if not Reader.get_date(this_dict["Initial Report Date"]):
+                        continue
+                    
+                    if Reader.get_date(this_dict["Initial Report Date"]):
+                        parsed_date = parse(Reader.get_date(this_dict["Initial Report Date"]))
+                        rep_epoch = int(parsed_date.timestamp())
+                        if rep_epoch < 1641024000:
+                            continue
                     return_dict[company] = this_dict
+
         return json.dumps(return_dict)
     
     def write_to_disk(self, json, state):
@@ -298,29 +354,40 @@ class Reader:
         # go through all reports and map reports to contacts
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
-        send_list = list()
 
         for state in states_list:
+            # open each state's file 
             parsed_dict = dict()
             with open("./reports_json/" + state.lower() + ".json", "r") as file:
                 parsed_dict = json.loads(json.load(file))
 
+            # list each line in 
             for line in parsed_dict.keys():
+                
                 if isinstance(line, str):
                     line_dict = parsed_dict[line]
+                    report_date_str = line_dict["Initial Report Date"]
+                    # parse most date formats to datetime
+                    if line_dict["Initial Report Date"] == "N/A or Not Provided":
+                        print(str(line_dict))
+                    report_dt = parse(report_date_str)
+                    report_epoch = int(report_dt.timestamp())
+                    # if the warn is over 2 months old, keep going
+                    if ((int(time.time()) - report_epoch) > 5097600):
+                        continue
+
+                    this_company = line_dict["Company"]
+                    
                     if "Company" not in line_dict.keys():
                         continue
                     else:
-                        folks_to_contact = this_writer.get_contacts_by_company(line_dict["Company"])
+                        folks_to_contact = this_writer.get_contacts_by_company(this_company)
                         if len(folks_to_contact) > 0:
                             this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
+                            continue
                             if this_warning == False:
                                 continue
                             for person in folks_to_contact:
-                                print('person:')
-                                print(person)
-                                print('folks to contact:')
-                                print(folks_to_contact)
                                 #see if notified in last 5 days
                                 # by subtracting 431965 from unix epoch
                                 if not ((int(time.time()) - 431965) < person[4]):
@@ -329,10 +396,13 @@ class Reader:
                                     # send email
                                     this_subject = this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company']
                                     this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + Reader.get_config()["hostname"] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
-                                    Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
-                                    # exit due to loop issue
-                                    exit()
-        return send_list
+                                    # Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
+                                    # make this conditional upon success
+                                    # update lastNotice in db
+                                    #this_writer.update_last_notice(person[0])
+                                    #exit()
+                            continue
+        return True
     
     def update_companies(self):
         this_writer = writer.Writer()
@@ -376,7 +446,7 @@ class Reader:
                 return False
             
     def send_email(self, sender, recipient, subject, body):
-        print(sender, recipient)
+        
         ses_client = boto3.client('ses', region_name='us-west-2')  # Replace with your preferred region
         # Create the email message
         message = {

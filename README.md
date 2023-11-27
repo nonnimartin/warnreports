@@ -1,5 +1,5 @@
 # warn_reporter
-
+Create seed file in base dir with json {"seed":"<YOURSEED>"}
 Requires the following to be installed as below:
 
 `pip install fastapi`
@@ -7,6 +7,8 @@ Requires the following to be installed as below:
 `pip install "uvicorn[standard]"`
 
 `pip install feedgen `
+
+`pip install python-dateutil`
 
 To run service:
 
