@@ -12,12 +12,21 @@ class Reader:
 
     def convert_by_state(self, state):
 
+        conversion_dict_ak = {
+            "Company" : "Company",
+            "Notice Date" : "Initial Report Date",
+            "Location" : "City",
+            "Employees Affected" : "Planned # Affected Employees",
+            "Layoff Date" : "No starting date specified",
+            "Notes" : "Closing or Layoff"
+        }
+
         conversion_dict_az = {
             "employer" : "Company",
             "notice_date" : "Initial Report Date",
             "city" : "City",
             "number_of_employees_affected" : "Planned # Affected Employees",
-            "Planned Starting Date" : "No starting date specified",
+            "Planned Starting Date" : "Planned Starting Date",
             "warn_type" : "Closing or Layoff"
         }
 
@@ -33,7 +42,7 @@ class Reader:
         conversion_dict_ca = {
             "company" : "Company",
             "notice_date" : "Initial Report Date",
-            "city" : "City",
+            "address" : "City",
             "num_employees" : "Planned # Affected Employees",
             "layoff_or_closure" : "Closing or Layoff",
             "effective_date" : "Planned Starting Date"
@@ -48,21 +57,40 @@ class Reader:
             "begin_date" : "Planned Starting Date"
         }
 
+        conversion_dict_ct = {
+            "company" : "Company",
+            "warn_date" : "Initial Report Date",
+            "layoff_location" : "City",
+            "number_workers" : "Planned # Affected Employees",
+            "closing" : "Closing or Layoff",
+            "layoff_date" : "Planned Starting Date"
+        }
+
         conversion_dict_dc = {
             "Organization Name" : "Company",
             "Notice Date" : "Initial Report Date",
             "city" : "City",
             "Number toEmployees Affected" : "Planned # Affected Employees",
             "layoff_or_closure" : "Closing or Layoff",
-            "begin_date" : "Planned Starting Date"
+            "Effective Layoff Date" : "Planned Starting Date"
         }
 
         conversion_dict_de = {
             "employer" : "Company",
             "notice_date" : "Initial Report Date",
-            "City" : "City",
+            "city" : "City",
             "number_of_employees_affected" : "Planned # Affected Employees",
-            "warn_type" : "Closing or Layoff"
+            "warn_type" : "Closing or Layoff",
+            
+        }
+
+        conversion_dict_fl = {
+            "Company Name" : "Company",
+            "State Notification Date" : "Initial Report Date",
+            "City" : "City",
+            "Employees Affected" : "Planned # Affected Employees",
+            "Notice Type" : "Closing or Layoff",
+            "Layoff Date" : "Planned Starting Date"
         }
 
         conversion_dict_ia = {
@@ -121,36 +149,34 @@ class Reader:
 
         conversion_dict_ny = {
             "company_name" : "Company",
-            "date_posted" : "Initial Report Date",
-            "City" : "City",
+            "notice_dated" : "Initial Report Date",
+            "date_posted" : "City",
             "Number Affected" : "Planned # Affected Employees",
-            "Dislocation Type" : "Closing or Layoff",
-            "notice_dated" : "Planned Starting Date"
+            "Dislocation Type" : "Closing or Layoff"
         }
 
         conversion_dict_ok = {
             "employer" : "Company",
-            "date_posted" : "Initial Report Date",
+            "notice_date" : "Initial Report Date",
             "city" : "City",
             "number_of_employees_affected" : "Planned # Affected Employees",
-            "warn_type" : "Closing or Layoff",
-            "notice_date" : "Planned Starting Date"
+            "warn_type" : "Closing or Layoff"
         }
 
         conversion_dict_or = {
-            "company" : "Company",
-            "date" : "Initial Report Date",
-            "location" : "City",
-            "jobs" : "Planned # Affected Employees",
+            "Company Name" : "Company",
+            "Received Date" : "Initial Report Date",
+            "Location" : "City",
+            "Laid Off" : "Planned # Affected Employees",
             "Layoff Type" : "Closing or Layoff",
             "Layoff Date" : "Planned Starting Date"
         }
 
         conversion_dict_sc = {
-            "Company Name" : "Company",
-            "Received Date" : "Initial Report Date",
-            "Location" : "City",
-            "Laid Off" : "Planned # Affected Employees",
+            "company" : "Company",
+            "date" : "Initial Report Date",
+            "location" : "City",
+            "jobs" : "Planned # Affected Employees",
             "Layoff Type" : "Closing or Layoff",
             "Layoff Date" : "Planned Starting Date"
         }
@@ -161,7 +187,7 @@ class Reader:
             "CITY_NAME" : "City",
             "TOTAL_LAYOFF_NUMBER" : "Planned # Affected Employees",
             "Layoff Type" : "Closing or Layoff",
-            "Layoff Date" : "Planned Starting Date"
+            "LayOff_Date" : "Planned Starting Date"
         }
 
         conversion_dict_ut = {
@@ -178,7 +204,7 @@ class Reader:
             "Notice Date" : "Initial Report Date",
             "Location City" : "City",
             "Employees Affected" : "Planned # Affected Employees",
-            "Layoff Type" : "Closing or Layoff",
+            "Layoff" : "Closing or Layoff",
             "Impact Date" : "Planned Starting Date"
         }
 
@@ -200,7 +226,9 @@ class Reader:
             "Layoff Begin Date" : "Planned Starting Date"
         }
 
-        if state == "az":
+        if state == "ak":
+            return conversion_dict_ak
+        elif state == "az":
             return conversion_dict_az
         elif state == "al":
             return conversion_dict_al
@@ -208,10 +236,14 @@ class Reader:
             return conversion_dict_ca
         elif state == "co":
             return conversion_dict_co
+        elif state == "ct":
+            return conversion_dict_ct
         elif state == "dc":
             return conversion_dict_dc
         elif state == "de":
             return conversion_dict_de
+        elif state == "fl":
+            return conversion_dict_fl
         elif state == "ia":
             return conversion_dict_ia
         elif state == "in":
@@ -277,7 +309,6 @@ class Reader:
             # check if splitting on "-" produces a date
             for item in str_list:
                 try: 
-                    
                     return str(parse(str(item), fuzzy=True).date())
                 except ValueError:
                     return False
@@ -296,6 +327,7 @@ class Reader:
         convert_dict = self.convert_by_state(state)
         with open(path,'r') as data:
             for line in csv.reader(data):
+
                 if first_loop == True:
                     headers_list = line
                     first_loop = False
@@ -304,6 +336,7 @@ class Reader:
                 company = str()
                 if first_loop == False:
                     this_dict = dict()
+                    
                     # variable to exclude line from return dictionary
                     this_header = str()
                     for item in line:
@@ -313,15 +346,12 @@ class Reader:
                             continue
                         if headers_list[header_index] in convert_dict:
                             this_header = convert_dict[headers_list[header_index]]
+                            if this_header == "Company":
+                                company = item
+                                this_dict["Company"] = company
+                                continue
                             this_dict[this_header] = item
-                        if this_header == "Company":
-                            company = item
-                    # we will have to put n/a into any fields not included
-                    check_dict = ["City", "Initial Report Date", "Planned # Affected Employees", "Closing or Layoff", "Planned Starting Date"]
-                    
-                    for field in check_dict:
-                        if field not in this_dict:
-                            this_dict[field] = "N/A or Not Provided"
+                            continue
                     
                     if "Initial Report Date" not in this_dict:
                         continue
@@ -332,8 +362,8 @@ class Reader:
                         parsed_date = parse(Reader.get_date(this_dict["Initial Report Date"]))
                         rep_epoch = int(parsed_date.timestamp())
                         if rep_epoch < 1641024000:
-                            continue
-                    return_dict[company] = this_dict
+                                continue
+                return_dict[company] = this_dict
 
         return json.dumps(return_dict)
     
@@ -368,10 +398,8 @@ class Reader:
                     line_dict = parsed_dict[line]
                     report_date_str = line_dict["Initial Report Date"]
                     # parse most date formats to datetime
-                    if line_dict["Initial Report Date"] == "N/A or Not Provided":
-                        print(str(line_dict))
-                    report_dt = parse(report_date_str)
-                    report_epoch = int(report_dt.timestamp())
+                    report_dt = Reader.get_date(report_date_str)
+                    report_epoch = int(parse(report_dt).timestamp())
                     # if the warn is over 2 months old, keep going
                     if ((int(time.time()) - report_epoch) > 5097600):
                         continue
@@ -384,7 +412,7 @@ class Reader:
                         folks_to_contact = this_writer.get_contacts_by_company(this_company)
                         if len(folks_to_contact) > 0:
                             this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
-                            continue
+                            
                             if this_warning == False:
                                 continue
                             for person in folks_to_contact:
@@ -392,22 +420,21 @@ class Reader:
                                 # by subtracting 431965 from unix epoch
                                 if not ((int(time.time()) - 431965) < person[4]):
                                     # construct email content
-                                    this_body = 'WARN Report for ' + this_warning['Company'] + ' in ' + this_warning['City'] + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '\n' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '\n' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
+                                    this_body = '<b> WARN Report for ' + this_warning['Company'] + ' in ' + this_warning['City'] + '</b>' + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '<br>' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '<br>' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
                                     # send email
                                     this_subject = this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company']
                                     this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + Reader.get_config()["hostname"] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
-                                    # Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
+                                    Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
                                     # make this conditional upon success
                                     # update lastNotice in db
-                                    #this_writer.update_last_notice(person[0])
-                                    #exit()
+                                    this_writer.update_last_notice(person[0])
                             continue
         return True
     
     def update_companies(self):
         this_writer = writer.Writer()
         # go through all reports and map reports to contacts
-        states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
+        states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         company_set = set()
         for state in states_list:
             this_path = "./reports_json/" + state.lower() + ".json"
@@ -468,7 +495,7 @@ class Reader:
             print("Email sent successfully!")
         else:
             print("Failed to send email.")
-            print(response)
+            #print(response)
         
     
 
