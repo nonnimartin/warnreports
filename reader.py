@@ -7,8 +7,10 @@ import boto3
 #from pathlib import Path
 import time
 from dateutil.parser import *
+import logging
+import sys
 
-class Reader:                   
+class Reader:      
 
     def convert_by_state(self, state):
 
@@ -135,7 +137,7 @@ class Reader:
             "city" : "City",
             "number_of_employees_affected" : "Planned # Affected Employees",
             "warn_type" : "Closing or Layoff",
-            "Effective Date" : "Planned Starting Date"
+            "notice_date" : "Planned Starting Date"
         }
 
         conversion_dict_mo = {
@@ -178,7 +180,7 @@ class Reader:
             "location" : "City",
             "jobs" : "Planned # Affected Employees",
             "Layoff Type" : "Closing or Layoff",
-            "Layoff Date" : "Planned Starting Date"
+            "date" : "Planned Starting Date"
         }
 
         conversion_dict_tx = {
@@ -351,7 +353,7 @@ class Reader:
                                 this_dict["Company"] = company
                                 continue
                             this_dict[this_header] = item
-                            continue
+                            continue 
                     
                     if "Initial Report Date" not in this_dict:
                         continue
@@ -363,13 +365,17 @@ class Reader:
                         rep_epoch = int(parsed_date.timestamp())
                         if rep_epoch < 1641024000:
                                 continue
+                check_dict = ["City", "Initial Report Date", "Planned # Affected Employees", "Closing or Layoff", "Planned Starting Date"]
+                for field in check_dict:
+                    if field not in this_dict:
+                        this_dict[field] = "N/A or Not Provided"
                 return_dict[company] = this_dict
 
         return json.dumps(return_dict)
     
     def write_to_disk(self, json, state):
         try:
-            filehandle = open('./reports_json/' + state + '.json', 'w')
+            filehandle = open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state + '.json', 'w')
             filehandle.write(json)
             filehandle.close()
         except:
@@ -377,7 +383,7 @@ class Reader:
 
     def get_config():
         # return config file content as dictionary
-        with open('config.json', 'r') as file:
+        with open(os.path.expanduser('~') + '/git/warn_reporter/' + 'config.json', 'r') as file:
             return json.loads(file.read())
 
     def send_out_reports(self):
@@ -388,7 +394,7 @@ class Reader:
         for state in states_list:
             # open each state's file 
             parsed_dict = dict()
-            with open("./reports_json/" + state.lower() + ".json", "r") as file:
+            with open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json', "r") as file:
                 parsed_dict = json.loads(json.load(file))
 
             # list each line in 
@@ -396,7 +402,7 @@ class Reader:
                 
                 if isinstance(line, str):
                     line_dict = parsed_dict[line]
-                    report_date_str = line_dict["Initial Report Date"]
+                    report_date_str = line_dict['Initial Report Date']
                     # parse most date formats to datetime
                     report_dt = Reader.get_date(report_date_str)
                     report_epoch = int(parse(report_dt).timestamp())
@@ -404,14 +410,14 @@ class Reader:
                     if ((int(time.time()) - report_epoch) > 5097600):
                         continue
 
-                    this_company = line_dict["Company"]
+                    this_company = line_dict['Company']
                     
-                    if "Company" not in line_dict.keys():
+                    if 'Company' not in line_dict.keys():
                         continue
                     else:
                         folks_to_contact = this_writer.get_contacts_by_company(this_company)
                         if len(folks_to_contact) > 0:
-                            this_warning = Reader().get_warnings_by_state(line_dict["Company"], state)
+                            this_warning = Reader().get_warnings_by_state(line_dict['Company'], state)
                             
                             if this_warning == False:
                                 continue
@@ -424,6 +430,7 @@ class Reader:
                                     # send email
                                     this_subject = this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company']
                                     this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + Reader.get_config()["hostname"] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
+                                    # CHANGE THIS HARDCODED EMAIL
                                     Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
                                     # make this conditional upon success
                                     # update lastNotice in db
@@ -437,7 +444,7 @@ class Reader:
         states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         company_set = set()
         for state in states_list:
-            this_path = "./reports_json/" + state.lower() + ".json"
+            this_path = os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json'
             if not os.path.isfile(this_path):
                 try:
                     with open(this_path, "w+") as to_open:
@@ -453,17 +460,17 @@ class Reader:
             for line in parsed_dict.keys():
                 if isinstance(line, str):
                     line_dict = parsed_dict[line]
-                    if "Company" not in line_dict.keys() or len(line_dict["Company"]) == 0:
+                    if 'Company' not in line_dict.keys() or len(line_dict['Company']) == 0:
                         continue
                     else:
-                        company = line_dict["Company"]
+                        company = line_dict['Company']
                         company_set.add((company, state))
         # write companies set to db
         this_writer.store_company_set(company_set)
         return
     
     def get_warnings_by_state(self, company, state):
-        this_path = "./reports_json/" + state.lower() + ".json"
+        this_path = os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json'
         if os.path.exists(this_path):
             f = open(this_path)
             report_dict = json.loads(json.loads(f.read()))
@@ -492,19 +499,6 @@ class Reader:
         )
         # Check the response
         if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-            print("Email sent successfully!")
+            print('Email sent successfully!')
         else:
-            print("Failed to send email.")
-            #print(response)
-        
-    
-
-
-
-#this_reader = Reader()          
-#print(this_reader.send_out_reports())
-#this_reader.update_companies()
-#print(this_reader.send_email("warnsender@gmail.com", "warnsender@gmail.com", "subject test", "body test"))
-
-# print(json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/mo.csv', 'mo')))
-#json.dumps(reader.csv_to_dict(os.path.expanduser('~') + '/.warn-scraper/exports/az.csv', 'az'))
+            print('Failed to send email.')

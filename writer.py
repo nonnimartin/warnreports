@@ -5,13 +5,15 @@ import logging
 import time
 from uuid import uuid4
 import hashlib
+import logging
+import os
 
 
 class Writer:
            
     def store_contact(self, email, company):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             # set unit timestamp for created
             # set 0 for confirmed
@@ -27,7 +29,7 @@ class Writer:
 
     def update_last_notice(self, user_id):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             now = int(time.time())
             cur.execute('UPDATE contacts SET lastNotice = (?) where id = (?)', (now, user_id))
@@ -38,7 +40,7 @@ class Writer:
 
     def make_api_token(self, user_id):
         
-        f = open("./seed", "r")
+        f = open(os.path.expanduser('~') + '/git/warn_reporter/' + '/seed', 'r')
         seed_load = json.loads(f.read())
         this_seed = seed_load["seed"]
 
@@ -47,7 +49,7 @@ class Writer:
 
     def store_company(self, company, state):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             cur.execute('INSERT INTO companies VALUES (?, ?)', (company, state))
             con.commit()
@@ -55,7 +57,7 @@ class Writer:
             logging.exception("Error writing to company")
 
     def store_company_set(self, this_set):
-        con = sqlite3.connect("warnDb.db")
+        con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
         cur = con.cursor()
         for company_tuple in this_set:
             company = company_tuple[0]
@@ -68,7 +70,7 @@ class Writer:
 
     def get_companies_by_state(self, state):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             # comma there to make param a tuple
             cur.execute('SELECT company from companies where (state = ?)', (state,))
@@ -83,7 +85,7 @@ class Writer:
 
     def get_all_states(self):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             cur.execute('SELECT DISTINCT state from companies')
             rows = cur.fetchall()
@@ -97,7 +99,7 @@ class Writer:
 
     def get_contacts_by_company(self, company):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             # comma makes the below a tuple, which is required
             cur.execute('SELECT * from contacts where (company like ?) and confirmed = 1', ("%" + company + "%",))
@@ -108,7 +110,7 @@ class Writer:
 
     def get_user_by_email(self, email):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             # comma makes the below a tuple, which is required
             cur.execute('SELECT * from contacts where (email = ?)', (email,))
@@ -119,7 +121,7 @@ class Writer:
 
     def validate_token(self, email, token):
 
-        f = open("./seed", "r")
+        f = open(os.path.expanduser('~') + '/git/warn_reporter/' + './seed', 'r')
         seed_load    = json.loads(f.read())
         this_seed    = seed_load["seed"]
         this_writer  = Writer()
@@ -134,7 +136,7 @@ class Writer:
     def unsubscribe(self, email):
 
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             cur.execute('update contacts set confirmed = 0 where (email = ?)', (email,))
             con.commit()
@@ -145,7 +147,7 @@ class Writer:
     def resubscribe(self, email):
 
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             cur.execute('update contacts set confirmed = 1 where (email = ?)', (email,))
             con.commit()
@@ -156,7 +158,7 @@ class Writer:
     def get_all_companies(self):
 
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             cur.execute('SELECT * from companies')
             rows = cur.fetchall()
@@ -166,7 +168,7 @@ class Writer:
 
     def get_companies_like(self, this_string):
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             query_string = 'SELECT company from companies where company like "%' + this_string + '%"'
             cur.execute(query_string)
@@ -182,7 +184,7 @@ class Writer:
     def clear_table(self, table):
 
         try: 
-            con = sqlite3.connect("warnDb.db")
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
             cur.execute('DELETE FROM ' + table + ' WHERE 1=1')
             con.commit()
@@ -194,7 +196,7 @@ class Writer:
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         
         for state in states_list:
-            f = open("./reports_json/" + state.lower() + ".json")
+            f = open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + ".json")
             parsed_dict = json.load(f)
             for this_company in parsed_dict.keys():
                 this_warn = parsed_dict[this_company]
