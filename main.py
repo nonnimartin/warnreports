@@ -29,14 +29,21 @@ async def get_companies_by_state(state: str):
 
 @app.post("/make_contact")
 async def make_contact(data: Data):
+    
+    this_writer = writer.Writer()
+    # only try to write to db if user doesn't exist with the same email and company
+    if this_writer.is_duplicate_user(data.email, data.company):
+        raise HTTPException(status_code=409, detail="409 Conflict: Duplicate User")
+    
     if not data:
          raise HTTPException(status_code=400, detail="400 Bad Request")
     else:
         this_writer = writer.Writer()
-        this_writer.store_contact(data.email, data.company)
+        this_writer.make_contact(data.email, data.company)
         return data
     
 @app.get("/get_companies_like/{this_str}")
+# make this secure
 async def get_companies_like(this_str: str):
     if not this_str:
          raise HTTPException(status_code=400, detail="400 Bad Request")

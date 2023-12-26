@@ -1,4 +1,3 @@
-from feedgen.feed import FeedGenerator
 import json
 import sqlite3
 import logging
@@ -11,7 +10,7 @@ import os
 
 class Writer:
            
-    def store_contact(self, email, company):
+    def make_contact(self, email, company):
         try: 
             con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
             cur = con.cursor()
@@ -19,10 +18,12 @@ class Writer:
             # set 0 for confirmed
             # set 0 for last notice
             # set field for only receiving warns from contact's state
+            # create api token
             now = int(time.time())
             # create user uuid
-            user_uuid = uuid4()
-            cur.execute('INSERT INTO contacts VALUES (?, ?, ?, ?, ?, ?, ?)', (user_uuid.hex, email, company, now, 0, 0, None))
+            user_uuid = uuid4().hex
+            token = Writer.make_api_token(user_uuid)
+            cur.execute('INSERT INTO contacts VALUES (?, ?, ?, ?, ?, ?, ?)', (user_uuid, email, company, now, 0, 0, token))
             con.commit()
         except:
             logging.exception("Error writing to contacts")
@@ -37,13 +38,23 @@ class Writer:
         except:
             logging.exception("Error writing to contacts")
 
+    def is_duplicate_user(self, email, company):
+        try: 
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
+            cur = con.cursor()
+            cur.execute('SELECT * from contacts where email = (?) and company = (?)', (email, company))
+            if len(cur.fetchall()) > 0:
+                return True
+            else:
+                return False
+        except:
+            logging.exception("Error writing to contacts")
 
-    def make_api_token(self, user_id):
+    def make_api_token(user_id):
         
         f = open(os.path.expanduser('~') + '/git/warn_reporter/' + '/seed', 'r')
         seed_load = json.loads(f.read())
         this_seed = seed_load["seed"]
-
         my_hash = hashlib.sha256(user_id.encode('utf-8') + this_seed.encode('utf-8'))
         return my_hash.hexdigest()
 
