@@ -131,18 +131,21 @@ class Writer:
             logging.exception("Error getting contacts")
 
     def validate_token(self, email, token):
+        
+        this_writer   = Writer()
+        users_list    = this_writer.get_user_by_email(email)
 
-        f = open(os.path.expanduser('~') + '/git/warn_reporter/' + './seed', 'r')
-        seed_load    = json.loads(f.read())
-        this_seed    = seed_load["seed"]
-        this_writer  = Writer()
-        this_user    = this_writer.get_user_by_email(email)
-        stored_key   = this_user[0][-1]
-
-        if stored_key == token:
-            return True
-        else:
+        if len(users_list) == 0:
             return False
+
+        for user in users_list:
+            stored_key   = user[-1]
+
+            if stored_key == token:
+                return True
+        
+        return False
+
 
     def unsubscribe(self, email):
 
@@ -155,7 +158,7 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
-    def resubscribe(self, email):
+    def confirm(self, email):
 
         try: 
             con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
@@ -217,17 +220,4 @@ class Writer:
                 company = this_warn["Company"]
                 
                 # PUT LOGIC TO WRITE COMPANY AND CITY TO DB
-
-
-#print(this_writer.get_companies_like('twit'))
-#print(this_writer.get_contacts_by_company("Walmart #3030", "WI"))
-# this_writer.update_companies()
-#print(this_writer.get_all_companies())
-#this_writer.get_all_states()
-#this_writer.get_companies_by_state("CA")
-#this_writer = Writer()
-# this_writer.unsubscribe("warnwarn@testwarn.com", "")
-#this_writer.validate_token("warnwarn@testwarn.com", "")
-#print(this_writer.validate_token("warnwarn@testwarn.com", "b87c39c003f010f5ea8fbd1d0abf219efa3c8b1fc39ff7ba4c7ab645ab22fd78"))
-#this_writer.resubscribe("warnwarn@testwarn.com")
 

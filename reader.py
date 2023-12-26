@@ -363,8 +363,16 @@ class Reader:
                     if Reader.get_date(this_dict["Initial Report Date"]):
                         parsed_date = parse(Reader.get_date(this_dict["Initial Report Date"]))
                         rep_epoch = int(parsed_date.timestamp())
-                        if rep_epoch < 1641024000:
-                                continue
+                        # if the warn is over year old, keep going
+                        print("###########################################################")
+                        print(company)
+                        print("date: " + str(this_dict["Initial Report Date"]))
+                        print("time = " + str(int(time.time())))
+                        print("rep_epoch: " + str(rep_epoch))
+                        print("result: " + str(int(time.time()) - rep_epoch))
+                        print((int(time.time()) - rep_epoch) > 31536000)
+                        if ((int(time.time()) - rep_epoch) > 31536000):
+                            continue
                 check_dict = ["City", "Initial Report Date", "Planned # Affected Employees", "Closing or Layoff", "Planned Starting Date"]
                 for field in check_dict:
                     if field not in this_dict:
@@ -407,14 +415,13 @@ class Reader:
                     report_dt = Reader.get_date(report_date_str)
                     report_epoch = int(parse(report_dt).timestamp())
                     # if the warn is over 2 months old, keep going
-                    if ((int(time.time()) - report_epoch) > 5097600):
+                    if ((int(time.time()) - report_epoch) > 5260000):
                         continue
-
-                    this_company = line_dict['Company']
                     
                     if 'Company' not in line_dict.keys():
                         continue
                     else:
+                        this_company = line_dict['Company']
                         folks_to_contact = this_writer.get_contacts_by_company(this_company)
                         if len(folks_to_contact) > 0:
                             this_warning = Reader().get_warnings_by_state(line_dict['Company'], state)
@@ -425,6 +432,7 @@ class Reader:
                                 #see if notified in last 5 days
                                 # by subtracting 431965 from unix epoch
                                 if not ((int(time.time()) - 431965) < person[4]):
+                                    print(this_company)
                                     # construct email content
                                     this_body = '<b> WARN Report for ' + this_warning['Company'] + ' in ' + this_warning['City'] + '</b>' + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '<br>' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '<br>' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
                                     # send email

@@ -54,6 +54,7 @@ async def get_companies_like(this_str: str):
 @app.get("/unsubscribe")
 async def unsubscribe(email: str, token: str):
     this_writer = writer.Writer()
+
     if not this_writer.validate_token(email, token):
          raise HTTPException(status_code=401, detail="401 Unauthorized") 
     if not (email and token):
@@ -62,13 +63,20 @@ async def unsubscribe(email: str, token: str):
         this_writer = writer.Writer()
         return this_writer.unsubscribe(email)
 
-@app.get("/resubscribe")
-async def resubscribe(email: str, token: str):
+@app.get("/confirm")
+async def confirm(email: str, token: str):
+    this_writer = writer.Writer()
+
+    if not this_writer.validate_token(email, token):
+         print("email: " + email)
+         print("token: " + token)
+         
+         raise HTTPException(status_code=401, detail="401 Unauthorized") 
     if not (email and token):
          raise HTTPException(status_code=400, detail="400 Bad Request")
     else:
         this_writer = writer.Writer()
-        return this_writer.resubscribe(email)
+        return this_writer.confirm(email)
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
