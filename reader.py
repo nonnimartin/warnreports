@@ -295,25 +295,6 @@ class Reader:
         # various attempts at handling irregular dates
         if not Reader.has_numbers(input):
             return False
-        if Reader.has_letters(input):
-            # break up by spaces to find possible dates
-            str_list = input.split(" ")
-            for item in str_list:
-                try:
-                    return str(parse(str(item), fuzzy=True).date())
-
-                except ValueError:
-                    return False
-                
-        # some strings like 7/6/19-7/31/19 do not parse but do have the desired info
-        if "-" in input:
-            str_list = input.split("-")
-            # check if splitting on "-" produces a date
-            for item in str_list:
-                try: 
-                    return str(parse(str(item), fuzzy=True).date())
-                except ValueError:
-                    return False
         try: 
             return str(parse(str(input), fuzzy=True).date())
 
@@ -349,7 +330,7 @@ class Reader:
                         if headers_list[header_index] in convert_dict:
                             this_header = convert_dict[headers_list[header_index]]
                             if this_header == "Company":
-                                company = item
+                                company = item.split('\n')[0].strip()
                                 this_dict["Company"] = company
                                 continue
                             this_dict[this_header] = item
@@ -364,13 +345,6 @@ class Reader:
                         parsed_date = parse(Reader.get_date(this_dict["Initial Report Date"]))
                         rep_epoch = int(parsed_date.timestamp())
                         # if the warn is over year old, keep going
-                        print("###########################################################")
-                        print(company)
-                        print("date: " + str(this_dict["Initial Report Date"]))
-                        print("time = " + str(int(time.time())))
-                        print("rep_epoch: " + str(rep_epoch))
-                        print("result: " + str(int(time.time()) - rep_epoch))
-                        print((int(time.time()) - rep_epoch) > 31536000)
                         if ((int(time.time()) - rep_epoch) > 31536000):
                             continue
                 check_dict = ["City", "Initial Report Date", "Planned # Affected Employees", "Closing or Layoff", "Planned Starting Date"]
@@ -432,14 +406,13 @@ class Reader:
                                 #see if notified in last 5 days
                                 # by subtracting 431965 from unix epoch
                                 if not ((int(time.time()) - 431965) < person[4]):
-                                    print(this_company)
+                                    this_config = Reader.get_config()
                                     # construct email content
                                     this_body = '<b> WARN Report for ' + this_warning['Company'] + ' in ' + this_warning['City'] + '</b>' + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '<br>' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '<br>' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
                                     # send email
                                     this_subject = this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company']
-                                    this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + Reader.get_config()["hostname"] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
-                                    # CHANGE THIS HARDCODED EMAIL
-                                    Reader().send_email('warnsender@gmail.com', person[1], this_subject, this_body)
+                                    this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + this_config['hostname'] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
+                                    Reader().send_email(this_config['email_account'], person[1], this_subject, this_body)
                                     # make this conditional upon success
                                     # update lastNotice in db
                                     this_writer.update_last_notice(person[0])
