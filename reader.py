@@ -353,7 +353,7 @@ class Reader:
                         this_dict[field] = "N/A or Not Provided"
                 return_dict[company] = this_dict
 
-        return json.dumps(return_dict)
+        return json.dumps(return_dict, indent=4)
     
     def write_to_disk(self, json, state):
         try:
@@ -377,7 +377,7 @@ class Reader:
             # open each state's file 
             parsed_dict = dict()
             with open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json', "r") as file:
-                parsed_dict = json.loads(json.load(file))
+                parsed_dict = json.load(file)
 
             # list each line in 
             for line in parsed_dict.keys():
@@ -436,7 +436,7 @@ class Reader:
             parsed_dict = dict()
             with open(this_path, 'r') as this_file:
                 data = this_file.read()
-                parsed_dict = json.loads(json.loads(data))
+                parsed_dict = json.loads(data)
 
             for line in parsed_dict.keys():
                 if isinstance(line, str):
@@ -454,7 +454,7 @@ class Reader:
         this_path = os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json'
         if os.path.exists(this_path):
             f = open(this_path)
-            report_dict = json.loads(json.loads(f.read()))
+            report_dict = json.loads(f.read())
             if company in report_dict.keys():
                 return report_dict[company]
             else:
