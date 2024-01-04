@@ -51,7 +51,7 @@ class Reader:
         }
 
         conversion_dict_co = {
-            "company" : "Company",
+            "letter" : "Company",
             "notice_date" : "Initial Report Date",
             "city" : "City",
             "jobs" : "Planned # Affected Employees",
@@ -60,7 +60,7 @@ class Reader:
         }
 
         conversion_dict_ct = {
-            "company" : "Company",
+            "affected_company" : "Company",
             "warn_date" : "Initial Report Date",
             "layoff_location" : "City",
             "number_workers" : "Planned # Affected Employees",
@@ -322,13 +322,15 @@ class Reader:
                     
                     # variable to exclude line from return dictionary
                     this_header = str()
+
                     for item in line:
                         header_index = line.index(item)
-
+                        
                         if (header_index > len(headers_list)-1):
                             continue
                         if headers_list[header_index] in convert_dict:
                             this_header = convert_dict[headers_list[header_index]]
+                            
                             if this_header == "Company":
                                 company = item.split('\n')[0].strip()
                                 this_dict["Company"] = company
@@ -351,7 +353,11 @@ class Reader:
                 for field in check_dict:
                     if field not in this_dict:
                         this_dict[field] = "N/A or Not Provided"
-                return_dict[company] = this_dict
+                warn_list = list()
+                if company in return_dict:
+                    warn_list = return_dict[company]
+                warn_list.append(this_dict)
+                return_dict[company] = warn_list
 
         return json.dumps(return_dict, indent=4)
     
@@ -372,51 +378,52 @@ class Reader:
         # go through all reports and map reports to contacts
         states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
-
+        this_config = Reader.get_config()
+        by_company_user_dict = dict()
+        # map from company to all warn notice, which has to be out of scope of state loop
+        warn_dict = dict()
         for state in states_list:
             # open each state's file 
             parsed_dict = dict()
             with open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json', "r") as file:
                 parsed_dict = json.load(file)
+            
+            for company in parsed_dict.keys():
+                warn_list = parsed_dict[company]
+                for this_warning in warn_list:
 
-            # list each line in 
-            for line in parsed_dict.keys():
-                
-                if isinstance(line, str):
-                    line_dict = parsed_dict[line]
-                    report_date_str = line_dict['Initial Report Date']
-                    # parse most date formats to datetime
-                    report_dt = Reader.get_date(report_date_str)
-                    report_epoch = int(parse(report_dt).timestamp())
+                    report_epoch = int(parse( this_warning['Initial Report Date']).timestamp())
                     # if the warn is over 2 months old, keep going
                     if ((int(time.time()) - report_epoch) > 5260000):
                         continue
+
+                    if company not in warn_dict.keys():
+                        warn_dict[company] = str()
+                    current_warn = warn_dict[company]
+
+                    new_warn = current_warn + '<b> WARN Report for ' + company + ' in ' + this_warning['City'] + '</b>' + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '<br>' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '<br>' + 'Planned Starting Date: ' + this_warning['Planned Starting Date'] + '<br><br>'
+                    warn_dict[company] = new_warn
+
+        for company in warn_dict.keys():
+            folks_to_contact = this_writer.get_contacts_by_company(company)
+            subject_text = 'WARN Notice for ' + company
+            
+            this_body = warn_dict[company]
+            if len(folks_to_contact) == 0:
+                continue
+
+            for person in folks_to_contact:
+                #see if notified in last 5 days
+                # by subtracting 431965 from unix epoch
+                if not ((int(time.time()) - 431965) < person[4]):
+                    for user in folks_to_contact:
+                        user_email = user[1]
+                        Reader().send_email(this_config['email_account'], user_email, subject_text, this_body + '<br>' + this_body + '<br>' + '<br>' + '<a href="' + this_config['hostname'] + '/unsubscribe?email=' + user_email + '&token=' + user[6] + '">Click here to unsubscribe from these emails.</a>')
+                        # update lastNotice in db
+                        this_writer.update_last_notice(user[0])
+                else:
+                    print('Skipping user ' + str(person[0]))
                     
-                    if 'Company' not in line_dict.keys():
-                        continue
-                    else:
-                        this_company = line_dict['Company']
-                        folks_to_contact = this_writer.get_contacts_by_company(this_company)
-                        if len(folks_to_contact) > 0:
-                            this_warning = Reader().get_warnings_by_state(line_dict['Company'], state)
-                            
-                            if this_warning == False:
-                                continue
-                            for person in folks_to_contact:
-                                #see if notified in last 5 days
-                                # by subtracting 431965 from unix epoch
-                                if not ((int(time.time()) - 431965) < person[4]):
-                                    this_config = Reader.get_config()
-                                    # construct email content
-                                    this_body = '<b> WARN Report for ' + this_warning['Company'] + ' in ' + this_warning['City'] + '</b>' + '<br>' + 'Planned # Affected Employees: ' + this_warning['Planned # Affected Employees'] + '<br>' + 'Initial Report Date: ' + this_warning['Initial Report Date'] + '<br>' + 'Closing or Layoff: ' + this_warning['Closing or Layoff'] + '<br>' + 'Planned Starting Date: ' + this_warning['Planned Starting Date']
-                                    # send email
-                                    this_subject = this_warning['Planned # Affected Employees'] + ' to be laid off at ' + this_warning['City'] + ' ' + this_warning['Company']
-                                    this_body = '<br>' + this_body + '<br>' + '<br>' + '<a href="' + this_config['hostname'] + '/unsubscribe?email=' + person[1] + '&token=' + person[6] + '">Click here to unsubscribe from these emails.</a>'
-                                    Reader().send_email(this_config['email_account'], person[1], this_subject, this_body)
-                                    # make this conditional upon success
-                                    # update lastNotice in db
-                                    this_writer.update_last_notice(person[0])
-                            continue
         return True
     
     def update_companies(self):
@@ -438,14 +445,9 @@ class Reader:
                 data = this_file.read()
                 parsed_dict = json.loads(data)
 
-            for line in parsed_dict.keys():
-                if isinstance(line, str):
-                    line_dict = parsed_dict[line]
-                    if 'Company' not in line_dict.keys() or len(line_dict['Company']) == 0:
-                        continue
-                    else:
-                        company = line_dict['Company']
-                        company_set.add((company, state))
+            for company in parsed_dict.keys():
+                company_set.add((company, state))
+
         # write companies set to db
         this_writer.store_company_set(company_set)
         return
