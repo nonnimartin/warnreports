@@ -194,6 +194,18 @@ class Writer:
         except:
             logging.exception("Error getting contacts")
 
+    def get_token_for_user(self, email):
+        try: 
+            con = sqlite3.connect(os.path.expanduser('~') + '/git/warn_reporter/' + 'warnDb.db')
+            cur = con.cursor()
+            cur.execute('SELECT api_token from contacts where (email = ?)', (email,))
+            rows = cur.fetchall()
+
+            # since users can have more than one entry, give first of api tokens
+            return rows[0][-1]
+        except:
+            logging.exception("Error getting contacts")
+
 
     def clear_table(self, table):
 

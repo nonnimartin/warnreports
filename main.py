@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 import writer
+import reader
 
 app = FastAPI()
 
@@ -37,9 +38,19 @@ async def make_contact(data: Data):
     
     if not data:
          raise HTTPException(status_code=400, detail="400 Bad Request")
+    
+    if len(data.company) == 0 or len(data.email) == 0:
+         raise HTTPException(status_code=400, detail="400 Bad Request")
     else:
         this_writer = writer.Writer()
+        this_reader = reader.Reader()
+        this_config = reader.Reader.get_config()
         this_writer.make_contact(data.email, data.company)
+        this_subject = 'WARN Notices - Confirm Your Account'
+        this_token = this_writer.get_token_for_user(data.email)
+        this_body = 'Hi!<br><br>To confirm your account, please <a href=' + this_config['hostname'] + '/confirm?token=' + this_token + '&email=' + data.email + '>click on this link</a>.'
+        this_reader.send_email(this_config['email_account'], data.email, this_subject, this_body)
+        
         return data
     
 @app.get("/get_companies_like/{this_str}")

@@ -308,6 +308,7 @@ class Reader:
         headers_list = list()
         return_dict = dict()
         convert_dict = self.convert_by_state(state)
+        this_config = Reader.get_config()
         with open(path,'r') as data:
             for line in csv.reader(data):
 
@@ -330,7 +331,11 @@ class Reader:
                             continue
                         if headers_list[header_index] in convert_dict:
                             this_header = convert_dict[headers_list[header_index]]
-                            
+                            if this_header == '':
+                                print('got empty header for ' + str(item))
+                                print('headers list = ' + str(headers_list))
+                                print('headers index = ' + str(header_index))
+                                Reader().send_email(this_config['email_account'], this_config['email_account'], 'Got empty string for Company Item', 'Header list:<br>' + str(headers_list) + 'Header index:<br>' + str(header_index))
                             if this_header == "Company":
                                 company = item.split('\n')[0].strip()
                                 this_dict["Company"] = company
