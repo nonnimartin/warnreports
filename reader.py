@@ -51,7 +51,7 @@ class Reader:
         }
 
         conversion_dict_co = {
-            "letter" : "Company",
+            "company" : "Company",
             "notice_date" : "Initial Report Date",
             "city" : "City",
             "jobs" : "Planned # Affected Employees",
@@ -109,6 +109,15 @@ class Reader:
             "Notice Date" : "Initial Report Date",
             "City" : "City",
             "Affected Workers" : "Planned # Affected Employees",
+            "Notice Type" : "Closing or Layoff",
+            "LO/CL Date" : "Planned Starting Date"
+        }
+
+        conversion_dict_hi = {
+            "Company" : "Company",
+            "Date" : "Initial Report Date",
+            "location" : "City",
+            "jobs" : "Planned # Affected Employees",
             "Notice Type" : "Closing or Layoff",
             "LO/CL Date" : "Planned Starting Date"
         }
@@ -250,6 +259,8 @@ class Reader:
             return conversion_dict_ia
         elif state == "in":
             return conversion_dict_in
+        elif state == "hi":
+            return conversion_dict_hi
         elif state == "ks":
             return conversion_dict_ks
         elif state == "md":
@@ -332,9 +343,6 @@ class Reader:
                         if headers_list[header_index] in convert_dict:
                             this_header = convert_dict[headers_list[header_index]]
                             if this_header == '':
-                                print('got empty header for ' + str(item))
-                                print('headers list = ' + str(headers_list))
-                                print('headers index = ' + str(header_index))
                                 Reader().send_email(this_config['email_account'], this_config['email_account'], 'Got empty string for Company Item', 'Header list:<br>' + str(headers_list) + 'Header index:<br>' + str(header_index))
                             if this_header == "Company":
                                 company = item.split('\n')[0].strip()
@@ -381,7 +389,7 @@ class Reader:
 
     def send_out_reports(self):
         # go through all reports and map reports to contacts
-        states_list = ["AL", "AZ", "CA", "CO", "DC", "DE", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
+        states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "HI", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
         this_config = Reader.get_config()
         by_company_user_dict = dict()
@@ -396,8 +404,17 @@ class Reader:
             for company in parsed_dict.keys():
                 warn_list = parsed_dict[company]
                 for this_warning in warn_list:
-
-                    report_epoch = int(parse( this_warning['Initial Report Date']).timestamp())
+                    report_date = this_warning['Initial Report Date']
+                    try:
+                        report_epoch = int(parse(report_date).timestamp())
+                    except :
+                        space_split = report_date.split(' ')
+                        for this_slice in space_split:
+                            try:
+                                report_epoch = int(parse(this_slice).timestamp())
+                            except:
+                                pass
+                    
                     # if the warn is over 2 months old, keep going
                     if ((int(time.time()) - report_epoch) > 5260000):
                         continue
@@ -434,7 +451,7 @@ class Reader:
     def update_companies(self):
         this_writer = writer.Writer()
         # go through all reports and map reports to contacts
-        states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
+        states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "HI", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         company_set = set()
         for state in states_list:
             this_path = os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json'
