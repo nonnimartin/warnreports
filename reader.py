@@ -8,6 +8,7 @@ import boto3
 import time
 from dateutil.parser import *
 import logging
+import settings
 import sys
 
 class Reader:      
@@ -319,7 +320,6 @@ class Reader:
         headers_list = list()
         return_dict = dict()
         convert_dict = self.convert_by_state(state)
-        this_config = Reader.get_config()
         with open(path,'r') as data:
             for line in csv.reader(data):
 
@@ -343,7 +343,7 @@ class Reader:
                         if headers_list[header_index] in convert_dict:
                             this_header = convert_dict[headers_list[header_index]]
                             if this_header == '':
-                                Reader().send_email(this_config['email_account'], this_config['email_account'], 'Got empty string for Company Item', 'Header list:<br>' + str(headers_list) + 'Header index:<br>' + str(header_index))
+                                Reader().send_email(settings.EMAIL_ACCOUNT, settings.EMAIL_ACCOUNT, 'Got empty string for Company Item', 'Header list:<br>' + str(headers_list) + 'Header index:<br>' + str(header_index))
                             if this_header == "Company":
                                 company = item.split('\n')[0].strip()
                                 this_dict["Company"] = company
@@ -376,29 +376,23 @@ class Reader:
     
     def write_to_disk(self, json, state):
         try:
-            filehandle = open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state + '.json', 'w')
+            filehandle = open(settings.REPORTS_DIR + '/' + state + '.json', 'w')
             filehandle.write(json)
             filehandle.close()
         except:
              logging.exception('Error writing file to disk: ' + state)
 
-    def get_config():
-        # return config file content as dictionary
-        with open(os.path.expanduser('~') + '/git/warn_reporter/' + 'config.json', 'r') as file:
-            return json.loads(file.read())
-
     def send_out_reports(self):
         # go through all reports and map reports to contacts
         states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "HI", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         this_writer = writer.Writer()
-        this_config = Reader.get_config()
         by_company_user_dict = dict()
         # map from company to all warn notice, which has to be out of scope of state loop
         warn_dict = dict()
         for state in states_list:
             # open each state's file 
             parsed_dict = dict()
-            with open(os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json', "r") as file:
+            with open(settings.REPORTS_DIR + '/' + state.lower() + '.json', "r") as file:
                 parsed_dict = json.load(file)
             
             for company in parsed_dict.keys():
@@ -440,7 +434,7 @@ class Reader:
                 if not ((int(time.time()) - 431965) < person[4]):
                     for user in folks_to_contact:
                         user_email = user[1]
-                        Reader().send_email(this_config['email_account'], user_email, subject_text, this_body + '<br>' + this_body + '<br>' + '<br>' + '<a href="' + this_config['hostname'] + '/unsubscribe?email=' + user_email + '&token=' + user[6] + '">Click here to unsubscribe from these emails.</a>')
+                        Reader().send_email(settings.EMAIL_ACCOUNT, user_email, subject_text, this_body + '<br>' + this_body + '<br>' + '<br>' + '<a href="' + settings.SITE_URL + '/unsubscribe?email=' + user_email + '&token=' + user[6] + '">Click here to unsubscribe from these emails.</a>')
                         # update lastNotice in db
                         this_writer.update_last_notice(user[0])
                 else:
@@ -454,7 +448,7 @@ class Reader:
         states_list = ["AL", "AK", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "HI", "IA", "IN", "KS", "MD", "ME", "MO", "NY", "OK", "OR", "SC", "TX", "UT", "VA", "VT", "WI"]
         company_set = set()
         for state in states_list:
-            this_path = os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json'
+            this_path = settings.REPORTS_DIR + '/' + state.lower() + '.json'
             if not os.path.isfile(this_path):
                 try:
                     with open(this_path, "w+") as to_open:
@@ -475,7 +469,7 @@ class Reader:
         return
     
     def get_warnings_by_state(self, company, state):
-        this_path = os.path.expanduser('~') + '/git/warn_reporter/' + 'reports_json/' + state.lower() + '.json'
+        this_path = settings.REPORTS_DIR + '/' + state.lower() + '.json'
         if os.path.exists(this_path):
             f = open(this_path)
             report_dict = json.loads(f.read())

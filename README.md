@@ -1,19 +1,6 @@
 # warn_reporter
-Create config.json file "{"email_account":"<SENDER_EMAIL>"}"
-Create seed file in base dir with json {"seed":"<YOURSEED>"}
-Requires the following to be installed as below:
 
-`pip install fastapi`
-
-`pip install "uvicorn[standard]"`
-
-`pip install feedgen `
-
-`pip install python-dateutil`
-
-To run service:
-
-`uvicorn main:app --reload`
-
-
-
+- Create `.env` file. See [.env.example](/.env.example) and [settings.py](/settings.py)
+- Install requirements: `pip install -r requirements.txt`
+- Create schema: `sqlite3 warnDb.db < db_def`
+- Run service: `uvicorn main:app --reload`
