@@ -1,0 +1,6 @@
+boto3
+fastapi
+feedgen
+python_dotenv
+python-dateutil
+uvicorn[standard]
