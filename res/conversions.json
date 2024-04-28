@@ -1,0 +1,197 @@
+{
+  "AL": {
+    "Company": "company",
+    "Initial Report Date": "reported",
+    "City": "location",
+    "Planned # Affected Employees": "employees",
+    "Closing or Layoff": "action",
+    "Planned Starting Date": "starting"
+  },
+  "AK": {
+    "Company": "company",
+    "Notice Date": "reported",
+    "Location": "location",
+    "Employees Affected": "employees",
+    "Layoff Date": "starting",
+    "Notes": "action"
+  },
+  "AZ": {
+    "employer": "company",
+    "notice_date": "reported",
+    "city": "location",
+    "number_of_employees_affected": "employees",
+    "Planned Starting Date": "starting",
+    "warn_type": "action"
+  },
+  "CA": {
+    "company": "company",
+    "notice_date": "reported",
+    "address": "location",
+    "num_employees": "employees",
+    "layoff_or_closure": "action",
+    "effective_date": "starting"
+  },
+  "CO": {
+    "company": "company",
+    "notice_date": "reported",
+    "city": "location",
+    "jobs": "employees",
+    "occupations": "action",
+    "begin_date": "starting"
+  },
+  "CT": {
+    "affected_company": "company",
+    "warn_date": "reported",
+    "layoff_location": "location",
+    "number_workers": "employees",
+    "closing": "action",
+    "layoff_date": "starting"
+  },
+  "DC": {
+    "Organization Name": "company",
+    "Notice Date": "reported",
+    "city": "location",
+    "Number toEmployees Affected": "employees",
+    "layoff_or_closure": "action",
+    "Effective Layoff Date": "starting"
+  },
+  "DE": {
+    "employer": "company",
+    "notice_date": "reported",
+    "city": "location",
+    "number_of_employees_affected": "employees",
+    "warn_type": "action"
+  },
+  "FL": {
+    "Company Name": "company",
+    "State Notification Date": "reported",
+    "City": "location",
+    "Employees Affected": "employees",
+    "Notice Type": "action",
+    "Layoff Date": "starting"
+  },
+  "HI": {
+    "Company": "company",
+    "Date": "reported",
+    "location": "location",
+    "jobs": "employees",
+    "Notice Type": "action",
+    "LO/CL Date": "starting"
+  },
+  "IA": {
+    "Company": "company",
+    "Notice Date": "reported",
+    "City": "location",
+    "Emp #": "employees",
+    "Notice Type": "action",
+    "Layoff Date": "starting"
+  },
+  "IN": {
+    "Company": "company",
+    "Notice Date": "reported",
+    "City": "location",
+    "Affected Workers": "employees",
+    "Notice Type": "action",
+    "LO/CL Date": "starting"
+  },
+  "KS": {
+    "employer": "company",
+    "notice_date": "reported",
+    "city": "location",
+    "number_of_employees_affected": "employees",
+    "warn_type": "action",
+    "LO/CL Date": "starting"
+  },
+  "MD": {
+    "Company": "company",
+    "Notice Date": "reported",
+    "Location": "location",
+    "Total Employees": "employees",
+    "Type": "action",
+    "Effective Date": "starting"
+  },
+  "ME": {
+    "employer": "company",
+    "notice_date": "starting",
+    "city": "location",
+    "number_of_employees_affected": "employees",
+    "warn_type": "action"
+  },
+  "MO": {
+    "Title": "company",
+    "Received Sort descending": "reported",
+    "Location(s)": "location",
+    "# affected": "employees",
+    "Type": "action",
+    "Layoff date(s)": "starting"
+  },
+  "NY": {
+    "company_name": "company",
+    "notice_dated": "reported",
+    "date_posted": "location",
+    "Number Affected": "employees",
+    "Dislocation Type": "action"
+  },
+  "OK": {
+    "employer": "company",
+    "notice_date": "reported",
+    "city": "location",
+    "number_of_employees_affected": "employees",
+    "warn_type": "action"
+  },
+  "OR": {
+    "Company Name": "company",
+    "Received Date": "reported",
+    "Location": "location",
+    "Laid Off": "employees",
+    "Layoff Type": "action",
+    "Layoff Date": "starting"
+  },
+  "SC": {
+    "company": "company",
+    "date": "starting",
+    "location": "location",
+    "jobs": "employees",
+    "Layoff Type": "action"
+  },
+  "TX": {
+    "JOB_SITE_NAME": "company",
+    "NOTICE_DATE": "reported",
+    "CITY_NAME": "location",
+    "TOTAL_LAYOFF_NUMBER": "employees",
+    "Layoff Type": "action",
+    "LayOff_Date": "starting"
+  },
+  "UT": {
+    "Company Name": "company",
+    "Date of Notice": "reported",
+    "Location": "location",
+    "Affected Workers": "employees",
+    "Layoff Type": "action",
+    "Layoff Date": "starting"
+  },
+  "VA": {
+    "Company Name": "company",
+    "Notice Date": "reported",
+    "Location City": "location",
+    "Employees Affected": "employees",
+    "Layoff": "action",
+    "Impact Date": "starting"
+  },
+  "VT": {
+    "employer": "company",
+    "notice_date": "reported",
+    "city": "location",
+    "number_of_employees_affected": "employees",
+    "warn_type": "action",
+    "Impact Date": "starting"
+  },
+  "WI": {
+    "Company": "company",
+    "Notice Received": "reported",
+    "City": "location",
+    "Affected Workers": "employees",
+    "Original Notice Type / Update Type": "action",
+    "Layoff Begin Date": "starting"
+  }
+}

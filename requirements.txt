@@ -1,6 +1,21 @@
 boto3
 fastapi
 feedgen
+peewee
 python_dotenv
 python-dateutil
 uvicorn[standard]
+
+# https://github.com/biglocalnews/warn-scraper
+beautifulsoup4
+html5lib
+requests
+openpyxl
+pdfplumber
+tenacity
+click
+xlrd
+retry
+jinja2
+
+urllib3==1.26.18
