@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-import settings
 import utils
 from models import Company, Contact
 
@@ -37,18 +36,14 @@ async def make_contact(data: Data):
         raise HTTPException(status_code=400, detail="400 Bad Request")
     if len(data.company) == 0 or len(data.email) == 0:
         raise HTTPException(status_code=400, detail="400 Bad Request")
-    # only try to write to db if user doesn't exist with the same email and company
     if Contact.get_or_none(
         Contact.email == data.email,
         Contact.company == data.company):
         raise HTTPException(status_code=409, detail="409 Conflict: Duplicate User")
     contact: Contact = Contact.create(email=data.email, company=data.company)
-    subject = 'WARN Notices - Confirm Your Account'
-    url = settings.SITE_URL + '/confirm?token=' + contact.token + '&email=' + contact.email
-    body = 'Hi!<br><br>To confirm your account, please <a href="' + url + '">click on this link</a>.'
-    utils.send_email(data.email, subject, body)
+    contact.send_confirm_email()
     return data
-    
+
 @app.get("/get_companies_like/{this_str}")
 async def get_companies_like(this_str: str):
     if not this_str:
@@ -61,23 +56,28 @@ async def get_companies_like(this_str: str):
 async def unsubscribe(email: str, token: str):
     if not (email and token):
         raise HTTPException(status_code=400, detail="400 Bad Request")
-    if not Contact.validate_token(email, token):
+    contact = authenticate(email, token)
+    if not contact:
         raise HTTPException(status_code=401, detail="401 Unauthorized")
-    q = Contact.update(confirmed=False)
-    q = q.where(Contact.email == email)
-    q.execute()
+    contact.delete_instance()
     return True
 
 @app.get("/confirm")
 async def confirm(email: str, token: str):
-    if not Contact.validate_token(email, token):
-        raise HTTPException(status_code=401, detail="401 Unauthorized") 
     if not (email and token):
         raise HTTPException(status_code=400, detail="400 Bad Request")
-    q = Contact.update(confirmed=True)
-    q = q.where(Contact.email == email)
-    q.execute()
+    contact = authenticate(email, token)
+    if not contact:
+        raise HTTPException(status_code=401, detail="401 Unauthorized")
+    contact.confirmed = utils.now()
+    contact.save()
     return True
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 # app.mount("/scripts", StaticFiles(directory="scripts"), name="scripts")
+
+def authenticate(email: str, token: str) -> Contact|None:
+    if email and token:
+        return Contact.get_or_none(
+            Contact.email == email,
+            Contact.token == token)

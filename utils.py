@@ -5,38 +5,22 @@ from datetime import datetime, timedelta
 
 import boto3
 import dateutil.parser
+import logging
+import jinja2
+
+from uuid import UUID
+import hashlib
 import settings
 
+jinja = jinja2.Environment(loader=jinja2.FileSystemLoader(settings.TEMPLATES_DIR))
 
-def send_email(recipient, subject, body):
-    sender = settings.EMAIL_ACCOUNT
-    ses_client = boto3.client('ses')
-    # Create the email message
-    message = {
-        'Subject': {'Data': subject},
-        'Body': {
-            'Text': {'Data': body,'Charset': 'UTF-8'},
-            'Html': {'Data': body, 'Charset': 'UTF-8'}}}
-    # Send the email
-    response = ses_client.send_email(
-        Source=sender,
-        Destination={'ToAddresses': [recipient]},
-        Message=message)
-    # Check the response
-    if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-        print('Email sent successfully!')
-    else:
-        print('Failed to send email.')
+def now(**kw) -> datetime:
+    dt = datetime.now(tz=kw.pop('tz', None))
+    if kw:
+        dt += timedelta(**kw)
+    return dt
 
-def makedirs(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
-
-def has_digit(input: str):
-    return any(filter(str.isdigit, input))
-
-def get_date(value: str) -> datetime|None:
-    # various attempts at handling irregular dates
+def parse_date(value: str) -> datetime|None:
     if not (value and has_digit(value)):
         return
     try:
@@ -47,7 +31,7 @@ def get_date(value: str) -> datetime|None:
     except ValueError:
         pass
 
-def get_int(value: str) -> int|None:
+def parse_int(value: str) -> int|None:
     if not (value and has_digit(value)):
         return
     try:
@@ -55,13 +39,62 @@ def get_int(value: str) -> int|None:
     except ValueError:
         pass
 
-def now(**kw) -> datetime:
-    dt = datetime.now()
-    if kw:
-        dt += timedelta(**kw)
-    return dt
+def has_digit(input: str):
+    return any(filter(str.isdigit, input))
+
+def render(template: str, *args, **kw) -> str:
+    return jinja.get_template(template).render(*args, **kw)
+
+def uuid_token(uuid: UUID) -> str:
+    key = uuid.hex + settings.SEED
+    return hashlib.sha256(key.encode('utf-8')).hexdigest()
 
 def json_default(value):
     if isinstance(value, datetime):
         return value.isoformat()
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
+
+def init_logging():
+    level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
+    logging.basicConfig(level=level)
+
+def makedirs(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+def send_email(recipient: str, subject: str, body: str) -> bool:
+    backend = email_backends[settings.EMAIL_BACKEND]
+    sender = settings.EMAIL_ACCOUNT
+    logging.info(f'Sending email {recipient=} {backend=} {subject=}')
+    success = backend.send(sender, recipient, subject, body)
+    if success:
+        logging.info('Email sent successfully!')
+    else:
+        logging.info('Failed to send email.')
+    return success
+
+class SesEmailBackend:
+
+    @staticmethod
+    def send(sender: str, recipient: str, subject: str, body: str) -> bool:
+        response = boto3.client('ses').send_email(
+            Source=sender,
+            Destination={'ToAddresses': [recipient]},
+            Message={
+                'Subject': {'Data': subject},
+                'Body': {
+                    fmt: {'Data': body,'Charset': 'UTF-8'}
+                    for fmt in ('Text', 'Html')}})
+        return response['ResponseMetadata']['HTTPStatusCode'] == 200
+
+class DebugEmailBackend:
+
+    @staticmethod
+    def send(sender: str, recipient: str, subject: str, body: str) -> bool:
+        logging.info(f'{sender=} {recipient=} {subject=} {body=}')
+        return True
+
+email_backends = {
+    'ses': SesEmailBackend(),
+    'debug': DebugEmailBackend()}
+

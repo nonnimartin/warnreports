@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import hashlib
-import logging
 from argparse import ArgumentParser
-from uuid import uuid4, UUID
-
+from uuid import uuid4
+from urllib.parse import urlencode
 import peewee as lib
 from playhouse import db_url
 
@@ -13,9 +11,6 @@ import utils
 
 db: lib.Database = db_url.connect(settings.DB_URL)
 
-def make_token(user_id: UUID) -> str:
-    key = user_id.hex + settings.SEED
-    return hashlib.sha256(key.encode('utf-8')).hexdigest()
 
 class Model(lib.Model):
     class Meta:
@@ -64,28 +59,34 @@ class Contact(Model):
 
     def save(self, *args, **kwargs):
         if not self.token:
-            self.token = make_token(self.id)
+            self.token = utils.uuid_token(self.id)
         return super().save(*args, **kwargs)
 
-    @classmethod
-    def validate_token(cls, email: str, token: str) -> bool:
-        return bool(
-            token and
-            cls.get_or_none(
-                cls.email == email,
-                cls.token == token))
+    def send_confirm_email(self) -> bool:
+        context = dict(
+            contact=self,
+            confirm_url=self._auth_url('/confirm'),
+            unsubscribe_url=self._auth_url('/unsubscribe'))
+        return utils.send_email(
+            recipient=self.email,
+            subject='WARN Notices - Confirm Your Account',
+            body=utils.render('confirm.jinja', context))
+
+    def _auth_url(self, path: str) -> str:
+        query = urlencode(dict(token=self.token, email=self.email))
+        return f'{settings.SITE_URL}{path}?{query}'
 
 def migrate():
     db.create_tables([Company, Report, Contact])
 
-parser = ArgumentParser()
-parser.add_argument('action', choices=['migrate'])
+actions = dict(migrate=migrate)
 
 def main():
+    parser = ArgumentParser()
+    parser.add_argument('action', choices=actions)
     opts = parser.parse_args()
-    if opts.action == 'migrate':
-        migrate()
+    actions[opts.action]()
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
+    utils.init_logging()
     main()

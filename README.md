@@ -1,7 +1,7 @@
 # warn_reporter
 
-- Create virtualenv: `virtualenv .venv`
-- Activate virtualenv: `source .venv/bin/activate`
+- Create virtual env: `virtualenv .venv`
+- Activate virtual env: `source .venv/bin/activate`
 - Create `.env` file. See [.env.example](/.env.example) and [settings.py](/settings.py)
 - Install requirements: `pip install -r requirements.txt`
 - Install warn-scraper: `./scripts/install-warn-scraper.sh`
