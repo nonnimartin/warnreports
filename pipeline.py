@@ -4,183 +4,154 @@ import csv
 import json
 import logging
 import os
+import uuid
 from argparse import ArgumentParser
-from datetime import datetime
 from typing import Any
 
-import fixed
 import settings
 import utils
 import warn.runner
-from models import Company, Report, db
+from models import Report, db
+from translators import translators
 
-
-class Translator:
-
-    state: str
-    registry = {}
-    datetime_fields = {'reported', 'starting'}
-
-    def __new__(cls, state: str):
-        return super().__new__(cls.registry.get(state.upper(), cls))
-
-    def __init__(self, state: str):
-        self.state = state.upper()
-
-    def entry(self, row: list[str], headers: list[str]) -> dict[str, Any]:
-        'Translate a source row to an entry'
-        entry = {}
-        for header, value in zip(headers, row):
-            field = self.field(header)
-            if not field:
-                continue
-            entry[field] = self.value(field, value)
-        return entry
-
-    def field(self, header: str) -> str|None:
-        'Translate a source header to a field name'
-        return fixed.conversions[self.state].get(header)
-
-    def value(self, field: str, value: str) -> Any:
-        'Translate a field value'
-        method = f'value_{field}'
-        if hasattr(self, method):
-            return getattr(self, method)(value)
-        return self.value_default(field, value)
-
-    def value_company(self, value: str) -> str:
-        return value.split('\n')[0].strip()
-
-    def value_action(self, value: str) -> str:
-        return value.strip('*').strip()
-
-    value_employees = staticmethod(utils.parse_int)
-
-    def value_default(self, field: str, value: str) -> str|datetime:
-        value = value.strip()
-        if field in self.datetime_fields:
-            value = utils.parse_date(value)
-        return value
-
-    def from_json(self, field: str, value: Any) -> Any:
-        if field in self.datetime_fields:
-            value = utils.parse_date(value)
-        return value
-
-    @classmethod
-    def register(cls, state: str, subcls: type[Translator]|None = None):
-        def decorate(subcls: type[Translator]):
-            cls.registry[state.upper()] = subcls
-            return subcls
-        return decorate(subcls) if subcls else decorate
-
-@Translator.register('CT')
-class TransCT(Translator):
-
-    def value_reported(self, value: str) -> datetime|None:
-        for value in value.split(' '):
-            value = utils.parse_date(value)
-            if value:
-                return value
 
 class Pipeline:
 
-    stages = ['extract', 'translate', 'load']
     fields = [
+        'id',
         'company',
-        'state',
         'location',
         'reported',
         'starting',
         'employees',
-        'action']
-    required_fields = [
-        'company',
-        'state',
-        'reported']
+        'action',
+        'url']
+    required_fields = {'company', 'reported'}
+    datetime_fields = {'reported', 'starting'}
+    uuid_fields = {'id'}
 
     def __init__(self, state: str) -> None:
         self.state = state.upper()
+        self.translator = translators[self.state]()
+        self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
+        self.summary = {}
         self.dirs = {
-            stage: settings.PIPELINE_DIR/stage
-            for stage in self.stages}
-        self.translator = Translator(self.state)
+            stage: settings.BUILD_DIR/stage
+            for stage in Stage}
         self.files = dict(
-            scrape=self.dirs['extract']/f'{state.lower()}.csv',
-            entries=self.dirs['translate']/f'{state.lower()}.json')
+            extract=self.dirs['extract']/f'{state.lower()}.csv',
+            translate=self.dirs['translate']/f'{state.lower()}.log')
+
+    def run(self, stage: Stage, clean: bool = False) -> None:
+        stage = Stage(stage)
+        if clean:
+            self.clean(stage)
+        logging.info(f'run {stage} {self.state}')
+        self.summary[stage] = getattr(self, stage)()
+        logging.info(f'run {stage} {self.state} {self.summary[stage]}')
+
+    def clean(self, stage: Stage) -> None:
+        stage = Stage(stage)
+        logging.info(f'clean {stage} {self.state}')
+        file = self.files.get(stage)
+        if file and os.path.exists(file):
+            os.unlink(file)
+        if stage is stage.Load:
+            Report.delete().where(Report.state == self.state).execute()
 
     def extract(self) -> dict:
-        path = self.dirs['extract']
+        stage = Stage.Extract
+        path = self.dirs[stage]
         scraper = warn.runner.Runner(path, path/'cache')
         scraper.scrape(self.state)
-        size = os.stat(self.files['scrape']).st_size
-        return dict(size=f'{size:,}')
+        size = os.stat(self.files[stage]).st_size
+        return dict(size=size)
 
     def translate(self) -> dict:
-        entries = []
-        utils.makedirs(self.dirs['translate'])
-        with open(self.files['scrape']) as f:
+        stage = Stage.Translate
+        count = 0
+        utils.makedirs(self.dirs[stage])
+        with open(self.files[stage.Extract]) as f:
             reader = csv.reader(f)
-            try:
-                headers = next(reader)
-            except StopIteration:
-                logging.warning(f'Empty csv')
-            for row in reader:
-                entry = self.translator.entry(row, headers)
-                entry.update(state=self.state, row=row)
-                entries.append(entry)
-        with open(self.files['entries'], 'w') as f:
-            json.dump(entries, f, indent=2, default=utils.json_default)
-        return dict(entries=len(entries))
+            with open(self.files[stage], 'w') as writer:
+                try:
+                    headers = next(reader)
+                except StopIteration:
+                    logging.warning(f'Empty csv')
+                for count, values in enumerate(reader, start=1):
+                    row = dict(zip(headers, values))
+                    entry = self.translator.entry(row)
+                    uid = uuid.uuid5(self.namespace, json.dumps(values))
+                    entry.update(id=uid, row=row)
+                    json.dump(entry, writer, default=utils.json_default)
+                    writer.write('\n')
+        return dict(count=count)
 
     def load(self) -> dict:
-        with open(self.files['entries']) as f:
-            entries = json.load(f)
-        created = 0
-        skipped = 0
-        with db.atomic():
-            for entry in entries:
-                try:
-                    created += self.load_entry(entry)
-                except SkipEntry:
-                    skipped += 1
-                    logging.debug(f'Skipping {entry=}')
-        return dict(read=len(entries), created=created, skipped=skipped)
+        stage = Stage.Load
+        counts = dict.fromkeys(map(str, SaveType), 0)
+        with open(self.files[stage.Translate]) as f:
+            with db.atomic():
+                for entry in utils.json_lines(f):
+                    action = self.save(entry)
+                    counts[action] += 1
+                    logging.debug(f'{action} {entry=}')
+        counts['total'] = sum(counts.values())
+        return counts
 
-    def load_entry(self, entry: dict) -> int:
+    def save(self, entry: dict) -> SaveType:
+        save = SaveType.Nochange
         record = {
-            field: self.translator.from_json(field, entry[field])
+            field: self.from_json(field, entry[field])
             for field in self.fields if field in entry}
+        uid = record.pop('id')
         if not all(map(record.get, self.required_fields)):
-            raise SkipEntry
-        count = 0
-        company, created = Company.get_or_create(
-            name=record.pop('company'),
-            state=record.pop('state'))
-        count += created
-        if created:
-            logging.debug(f'Created {company=}')
-        report, created = Report.get_or_create(company=company, **record)
-        count += created
-        if created:
-            logging.debug(f'Created {report=}')
-        return count
+            return save.Skip
+        try:
+            report = Report.get_by_id(uid)
+        except Report.DoesNotExist:
+            report = Report(id=uid, state=self.state)
+            save = save.Create
+        for field, value in record.items():
+            if save is save.Create or getattr(report, field) != value:
+                setattr(report, field, value)
+        if save is save.Nochange and report.dirty_fields:
+            save = save.Update
+        if save is not save.Nochange:
+            report.save(force_insert=save is save.Create)
+        return save
 
-class SkipEntry(Exception):
-    pass
+    def from_json(self, field: str, value: Any) -> Any:
+        if field in self.datetime_fields:
+            value = utils.parse_date(value)
+        elif field in self.uuid_fields:
+            value = uuid.UUID(value)
+        return value
+
+class SaveType(utils.StrEnum):
+    Create = 'create'
+    Update = 'update'
+    Nochange = 'nochange'
+    Skip = 'skip'
+
+class Stage(utils.StrEnum):
+    Extract = 'extract'
+    Translate = 'translate'
+    Load = 'load'
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument('stage', choices=Pipeline.stages)
-    parser.add_argument('states', nargs='*', choices=fixed.states)
+    parser.add_argument('stage', choices=Stage)
+    parser.add_argument('states', nargs='*', choices=translators)
+    parser.add_argument('--clean', '-c', action='store_true')
+    parser.add_argument('--clean-only', '-x', action='store_true')
     opts = parser.parse_args()
-    stage = opts.stage
-    states = opts.states or fixed.states
-    for state in states:
-        logging.info(f'{stage=} {state=}')
+    for state in opts.states or translators:
         pipeline = Pipeline(state)
-        summary = getattr(pipeline, opts.stage)()
-        logging.info(f'{stage=} {state=} {summary=}')
+        if opts.clean_only:
+            pipeline.clean(opts.stage)
+        else:
+            pipeline.run(opts.stage, clean=opts.clean)
 
 if __name__ == '__main__':
     utils.init_logging()

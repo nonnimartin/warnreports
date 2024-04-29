@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import enum
+import io
+import json
+import logging
 import os.path
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Iterator
+from uuid import UUID
 
 import boto3
 import dateutil.parser
-import logging
 import jinja2
 
-from uuid import UUID
-import hashlib
 import settings
 
 jinja = jinja2.Environment(loader=jinja2.FileSystemLoader(settings.TEMPLATES_DIR))
@@ -39,26 +43,31 @@ def parse_int(value: str) -> int|None:
     except ValueError:
         pass
 
-def has_digit(input: str):
+def has_digit(input: str) -> bool:
     return any(filter(str.isdigit, input))
 
 def render(template: str, *args, **kw) -> str:
     return jinja.get_template(template).render(*args, **kw)
 
-def uuid_token(uuid: UUID) -> str:
-    key = uuid.hex + settings.SEED
-    return hashlib.sha256(key.encode('utf-8')).hexdigest()
-
-def json_default(value):
+def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value, UUID):
+        return value.hex
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
 
-def init_logging():
+def json_lines(fp: io.TextIOBase) -> Iterator[Any]:
+    while True:
+        line = fp.readline()
+        if not line:
+            break
+        yield json.loads(line)
+
+def init_logging() -> None:
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level)
 
-def makedirs(path):
+def makedirs(path: Path) -> None:
     if not os.path.exists(path):
         os.makedirs(path)
 
@@ -98,3 +107,7 @@ email_backends = {
     'ses': SesEmailBackend(),
     'debug': DebugEmailBackend()}
 
+class StrEnum(str, enum.Enum):
+
+    def __str__(self):
+        return self.value

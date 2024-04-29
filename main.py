@@ -1,83 +1,85 @@
+from __future__ import annotations
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
+import settings
 import utils
-from models import Company, Contact
+from models import *
 
 app = FastAPI()
+app.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name='static')
 
-class Data(BaseModel):
-    email: str
-    company: str
+@app.get('/reports')
+async def reports_list(
+    search: str|None = None,
+    company: str|None = None,
+    state: State|None = None,
+    location: str|None = None,
+    limit: Limit = 50,
+    offset: Offset = 0
+) -> list[ReportData]:
+    fields = ReportData.orm_fields(Report)
+    filters = ReportData.filters(search, company, state, location)
+    q = Report.select(*fields)
+    q = q.where(*filters)
+    q = q.order_by(
+        Report.reported.desc(),
+        Report.state.collate('NOCASE'),
+        Report.company.collate('NOCASE'))
+    q = q.limit(limit).offset(offset)
+    return q
 
-@app.get("/all_companies")
-async def read_root():
-    q = Company.select(Company.name, Company.state)
-    return list(q.tuples())
+@app.get('/companies')
+async def companies_list(
+    search: str|None = None,
+    company: str|None = None,
+    state: State|None = None,
+    limit: Limit = 50,
+    offset: Offset = 0
+) -> list[CompanyData]:
+    fields = CompanyData.orm_fields(Report)
+    filters = ReportData.filters(search, company, state)
+    q = Report.select(*fields).distinct()
+    q = q.where(*filters)
+    q = q.order_by(Report.company.collate('NOCASE'))
+    q = q.limit(limit).offset(offset)
+    return q
 
-@app.get("/get_all_states")
-async def get_all_states():
-    q = Company.select(Company.state).distinct()
-    return [c.state for c in q]
+@app.get('/states')
+async def states_list() -> list[StateData]:
+    fields = StateData.orm_fields(Report)
+    q = Report.select(*fields).distinct()
+    q = q.order_by(Report.state)
+    return q
 
-@app.get("/get_companies_by_state/{state}")
-async def get_companies_by_state(state: str):
-    if not state:
-        raise HTTPException(status_code=400, detail="400 Bad Request")
-    q = Company.select(Company.name, Company.state)
-    q = q.where(Company.state.ilike(state))
-    q = q.order_by(Company.name.collate('NOCASE'))
-    return list(q.tuples())
+@app.post('/follow')
+async def follow_create(data: FollowData) -> FollowData:
+    try:
+        follow = Follow.get_or_create(**vars(data))[0]
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail='409 Conflict')
+    if not follow.confirmed:
+        follow.send_confirm_email()
+    return follow
 
-@app.post("/make_contact")
-async def make_contact(data: Data):
-    if not data:
-        raise HTTPException(status_code=400, detail="400 Bad Request")
-    if len(data.company) == 0 or len(data.email) == 0:
-        raise HTTPException(status_code=400, detail="400 Bad Request")
-    if Contact.get_or_none(
-        Contact.email == data.email,
-        Contact.company == data.company):
-        raise HTTPException(status_code=409, detail="409 Conflict: Duplicate User")
-    contact: Contact = Contact.create(email=data.email, company=data.company)
-    contact.send_confirm_email()
-    return data
+@app.get('/follow/confirm')
+async def follow_confirm(email: EmailStr, token: Token) -> SuccessData:
+    follow = authenticate(email, token)
+    if not follow.confirmed:
+        follow.confirmed = utils.now()
+        follow.save()
+    return {}
 
-@app.get("/get_companies_like/{this_str}")
-async def get_companies_like(this_str: str):
-    if not this_str:
-        raise HTTPException(status_code=400, detail="400 Bad Request")
-    q = Company.select(Company.name, Company.state)
-    q = q.where(Company.name.ilike(f'%{this_str}%'))
-    return list(q.tuples())
+@app.get('/follow/cancel')
+async def follow_cancel(email: EmailStr, token: Token) -> SuccessData:
+    follow = authenticate(email, token)
+    follow.delete_instance()
+    return {}
 
-@app.get("/unsubscribe")
-async def unsubscribe(email: str, token: str):
-    if not (email and token):
-        raise HTTPException(status_code=400, detail="400 Bad Request")
-    contact = authenticate(email, token)
-    if not contact:
-        raise HTTPException(status_code=401, detail="401 Unauthorized")
-    contact.delete_instance()
-    return True
 
-@app.get("/confirm")
-async def confirm(email: str, token: str):
-    if not (email and token):
-        raise HTTPException(status_code=400, detail="400 Bad Request")
-    contact = authenticate(email, token)
-    if not contact:
-        raise HTTPException(status_code=401, detail="401 Unauthorized")
-    contact.confirmed = utils.now()
-    contact.save()
-    return True
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
-# app.mount("/scripts", StaticFiles(directory="scripts"), name="scripts")
-
-def authenticate(email: str, token: str) -> Contact|None:
-    if email and token:
-        return Contact.get_or_none(
-            Contact.email == email,
-            Contact.token == token)
+def authenticate(email: EmailStr, token: Token) -> Follow:
+    try:
+        return Follow.get(email=email, token=token)
+    except Follow.DoesNotExist:
+        raise HTTPException(status_code=401, detail='401 Unauthorized')

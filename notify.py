@@ -1,44 +1,46 @@
 from __future__ import annotations
 
 import logging
+from argparse import ArgumentParser
 
 import utils
-from models import Company, Contact, Report
+from models import Follow, Report
 
 
-def notify_all():
-    for contact in Contact.select().where(Contact.confirmed):
-        notify(contact)
-
-def get_reports(contact: Contact):
-    reports = Report.select().join(Company).where(
-        Report.reported > utils.now(days=-60),
-        not contact.notified or Report.reported > contact.notified,
-        Company.name.ilike(f'%{contact.company}%'),
-        not contact.state or Company.state.like(contact.state))
-    return reports.order_by(Report.reported.desc())
-
-def notify(contact: Contact):
-    if not contact.confirmed:
-        logging.warning(f'Skipping unconfirmed {contact=}')
+def notify(follow: Follow):
+    if not follow.confirmed:
+        logging.warning(f'Skipping unconfirmed {follow=}')
         return
-    reports = get_reports(contact)
+    reports = get_reports(follow)
     if not reports:
-        logging.info(f'No new reports for {contact=}')
+        logging.info(f'No new reports for {follow=}')
         return
-    logging.info(f'Notifying {contact=} reports={len(reports)}')
-    template = 'notify.jinja'
-    context = dict(reports=reports, contact=contact)
+    logging.info(f'Notifying {follow=} reports={len(reports)}')
+    context = dict(reports=reports, follow=follow)
     notified = utils.now()
     success = utils.send_email(
-        recipient=contact.email,
-        subject=f'WARN Notice for {contact.company}',
-        body=utils.render(template, context))
+        recipient=follow.email,
+        subject=f'WARN Notice for {follow.company}',
+        body=utils.render('email/notify.jinja', context))
     if success:
-        contact.notified = notified
-        contact.save()
+        follow.notified = notified
+        follow.save()
+
+def get_reports(follow: Follow):
+    reports = Report.select().where(
+        Report.reported > utils.now(days=-60),
+        not follow.notified or Report.reported > follow.notified,
+        Report.company.ilike(f'%{follow.company}%'),
+        follow.state == '*' or Report.state.like(follow.state))
+    return reports.order_by(Report.reported.desc())
+
+def notify_all():
+    for follow in Follow.select().where(Follow.confirmed):
+        notify(follow)
 
 def main():
+    parser = ArgumentParser()
+    opts = parser.parse_args()
     notify_all()
 
 if __name__ == '__main__':

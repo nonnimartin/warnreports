@@ -1,14 +1,14 @@
 {%- for report in reports %}
-<h2>{{ report.company.name }}</h2>
+<h2>{{ report.company }}</h2>
 <table>
     <tbody>
         <tr>
             <th scope="row">Company</th>
-            <td>{{ report.company.name }}</td>
+            <td>{{ report.company }}</td>
         </tr>
         <tr>
             <th scope="row">State</th>
-            <td>{{ report.company.state }}</td>
+            <td>{{ report.state }}</td>
         </tr>
         {%- if report.location %}
         <tr>
@@ -38,6 +38,16 @@
             <th scope="row">Reported</th>
             <td>{{ report.reported.date() }}</td>
         </tr>
+        {%- if report.url %}
+        <tr>
+            <th scope="row">URL</th>
+            <td><a href="{{ report.url }}">{{ report.url }}</a></td>
+        </tr>
+        {%- endif %}
     </tbody>
 </table>
 {%- endfor %}
+<br>
+<br>
+<hr>
+To cancel/unsubscribe, <a href="{{ follow.cancel_url }}">click here</a>.

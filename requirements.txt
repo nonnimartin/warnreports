@@ -2,6 +2,7 @@ boto3
 fastapi
 feedgen
 peewee
+pydantic[email]
 python_dotenv
 python-dateutil
 uvicorn[standard]
