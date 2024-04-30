@@ -232,6 +232,18 @@ class ID(Translator, state='ID'):
         """
         return utils.parse_int(value.split(' ')[0])
 
+class IL(Translator, state='IL'):
+    headermap = {
+        'Location Name': 'company',
+        'Location City': 'location',
+        'Total # of Employees': 'employees',
+        'Last Report Date': 'reported',
+        'Initial Date Reported': 'reported',
+        'Impact Date': 'starting',
+        'Layoff Type': 'action',
+        'NAICS Codes': 'naics'
+    }
+
 class IN(Translator, state='IN'):
     headermap = {
         'Company': 'company',

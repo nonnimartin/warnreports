@@ -27,8 +27,10 @@ class Pipeline:
         'action',
         'url']
     required_fields = {'company', 'reported'}
-    datetime_fields = {'reported', 'starting'}
-    uuid_fields = {'id'}
+    json_types = {
+        'id': uuid.UUID,
+        'reported': utils.parse_date,
+        'starting': utils.parse_date}
 
     def __init__(self, state: str) -> None:
         self.state = state.upper()
@@ -104,9 +106,9 @@ class Pipeline:
         record = {
             field: self.from_json(field, entry[field])
             for field in self.fields if field in entry}
-        uid = record.pop('id')
         if not all(map(record.get, self.required_fields)):
             return save.Skip
+        uid = record.pop('id')
         try:
             report = Report.get_by_id(uid)
         except Report.DoesNotExist:
@@ -122,10 +124,8 @@ class Pipeline:
         return save
 
     def from_json(self, field: str, value: Any) -> Any:
-        if field in self.datetime_fields:
-            value = utils.parse_date(value)
-        elif field in self.uuid_fields:
-            value = uuid.UUID(value)
+        if field in self.json_types:
+            value = self.json_types[field](value)
         return value
 
 class SaveType(utils.StrEnum):

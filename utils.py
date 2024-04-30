@@ -50,7 +50,7 @@ def has_digit(input: str) -> bool:
     return any(filter(str.isdigit, input))
 
 def is_sane_year(year: int) -> bool:
-    return 1990 <= year <= now().year + 10
+    return 1980 <= year <= now().year + 10
 
 def render(template: str, *args, **kw) -> str:
     return jinja.get_template(template).render(*args, **kw)
