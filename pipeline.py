@@ -36,20 +36,16 @@ class Pipeline:
         self.state = state.upper()
         self.translator = translators[self.state]()
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
-        self.summary = {}
-        self.dirs = {
-            stage: settings.BUILD_DIR/stage
-            for stage in Stage}
+        self.dirs = {stage: settings.BUILD_DIR/stage for stage in Stage}
         self.files = dict(
             extract=self.dirs['extract']/f'{state.lower()}.csv',
             translate=self.dirs['translate']/f'{state.lower()}.log')
+        self.summary = {}
 
     def run(self, stage: Stage, clean: bool = False) -> None:
         stage = Stage(stage)
-        if clean:
-            self.clean(stage)
         logging.info(f'run {stage} {self.state}')
-        self.summary[stage] = getattr(self, stage)()
+        self.summary[stage] = getattr(self, stage)(clean=clean)
         logging.info(f'run {stage} {self.state} {self.summary[stage]}')
 
     def clean(self, stage: Stage) -> None:
@@ -61,16 +57,20 @@ class Pipeline:
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
 
-    def extract(self) -> dict:
+    def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
+        if clean:
+            self.clean(stage)
         path = self.dirs[stage]
         scraper = warn.runner.Runner(path, path/'cache')
         scraper.scrape(self.state)
         size = os.stat(self.files[stage]).st_size
         return dict(size=size)
 
-    def translate(self) -> dict:
+    def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
+        if clean:
+            self.clean(stage)
         count = 0
         utils.makedirs(self.dirs[stage])
         with open(self.files[stage.Extract]) as f:
@@ -89,11 +89,13 @@ class Pipeline:
                     writer.write('\n')
         return dict(count=count)
 
-    def load(self) -> dict:
+    def load(self, clean: bool = False) -> dict:
         stage = Stage.Load
         counts = dict.fromkeys(map(str, SaveType), 0)
         with open(self.files[stage.Translate]) as f:
             with db.atomic():
+                if clean:
+                    self.clean(stage)
                 for entry in utils.json_lines(f):
                     action = self.save(entry)
                     counts[action] += 1
