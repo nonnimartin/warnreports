@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from argparse import ArgumentParser
 import re
 from datetime import datetime
 from typing import Any
 
+import settings
 import utils
 from models import HttpUrl, ValidationError
 
@@ -35,10 +37,10 @@ class Translator:
         return value
 
     def value_reported(self, value: str) -> datetime|None:
-        return self.parse_date(value)
+        return max(self.parse_dates(value), default=None)
 
     def value_starting(self, value: str) -> datetime|None:
-        return self.parse_date(value)
+        return min(self.parse_dates(value), default=None)
 
     def value_employees(self, value: str) -> int|None:
         return utils.parse_int(value)
@@ -68,6 +70,11 @@ class Translator:
 
     def parse_date(self, value: str) -> datetime|None:
         return utils.parse_date(value)
+
+    def parse_dates(self, value: str) -> list[datetime]:
+        value = re.sub(r'[^\d\s/-]', ' ', value).strip(' /-')
+        it = map(self.parse_date, PAT_SPACES.split(value))
+        return list(filter(None, it))
 
     def __init_subclass__(cls, state: str|None = None) -> None:
         if state:
@@ -138,10 +145,6 @@ class CT(Translator, state='CT'):
         value = value.replace('*', '').strip()
         return super().value_company(value)
 
-    def value_reported(self, value: str) -> datetime|None:
-        it = map(self.parse_date, value.split(' '))
-        return max(filter(None, it), default=None)
-
 class DC(Translator, state='DC'):
     headermap = {
         'Organization Name': 'company',
@@ -171,10 +174,6 @@ class FL(Translator, state='FL'):
         'Notice Type': 'action',
         'Layoff Date': 'starting'
     }
-
-    def parse_date(self, value: str) -> datetime|None:
-        value = value.split('\n')[0].strip()
-        return super().parse_date(value)
 
 class GA(Translator, state='GA'):
     # TODO: reported
@@ -218,23 +217,6 @@ class ID(Translator, state='ID'):
         'No. of Employees Affected': 'employees',
         'Effective or Commencing Date': 'starting'
     }
-
-    def value_reported(self, value: str) -> datetime|None:
-        """
-        2/18/22 (rec'd 3/21/22)
-        4/29/2020 (Rec'd 5/5/2020)
-        2/19/219 (rec'd 2/26/19)
-        1/6/2016 (revised thru 5/5/16)
-        4/1/2020 - REVISED 4/8/2020
-        3/31/2020 (rec' 4/1/2020)
-        4/3/2020, 4/15/2020, & 5/1/2020
-        """
-        dt = self.parse_date(value)
-        if dt:
-            return dt
-        value = re.sub(r'[^\d/ ]', '', value)
-        it = map(self.parse_date, PAT_SPACES.split(value))
-        return max(filter(None, it), default=None)
 
     def value_company(self, value: str) -> str:
         """
@@ -294,6 +276,20 @@ class KY(Translator, state='KY'):
         'Notice URL': 'url',
         'NAICS Code': 'naics'
     }
+
+class LA(Translator, state='LA'):
+    headermap = {
+        'Company Name': 'company',
+        'Notice Date': 'reported',
+        'Location': 'location',
+        'Employees Affected': 'employees',
+        'Layoff Date': 'starting',
+        # 'Industry': ...
+    }
+    
+    def value_employees(self, value: str) -> int|None:
+        it = map(utils.parse_int, PAT_SPACES.split(value))
+        return max(filter(None, it), default=None)
 
 class MD(Translator, state='MD'):
     headermap = {
@@ -416,3 +412,32 @@ class WI(Translator, state='WI'):
         'Original Notice Type / Update Type': 'action',
         'Layoff Begin Date': 'starting'
     }
+
+
+def main():
+    parser = ArgumentParser()
+    parser.add_argument('state', choices=translators)
+    parser.add_argument('column')
+    opts = parser.parse_args()
+    import csv
+    import tabulate
+    import itertools
+    file = settings.BUILD_DIR/'extract'/f'{opts.state.lower()}.csv'
+    with open(file) as f:
+        reader = csv.reader(f)
+        i = next(reader).index(opts.column)
+        values = [row[i] for row in reader]
+    translator = translators[opts.state]()
+    field = translator.headermap.get(opts.column)
+    headers = [opts.column]
+    if field:
+        headers.append(field)
+        rhs = ([translator.value(field, value)] for value in values)
+    else:
+        rhs = itertools.repeat([], len(values))
+    rows = [[value, *trans] for value, trans in zip(values, rhs)]
+    print(tabulate.tabulate(rows, headers))
+
+if __name__ == '__main__':
+    utils.init_logging()
+    main()

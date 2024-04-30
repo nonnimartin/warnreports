@@ -41,6 +41,7 @@ def parse_date(value: str, sane: bool = True) -> datetime|None:
 def parse_int(value: str) -> int|None:
     if not (value and has_digit(value)):
         return
+    value = value.replace(',', '')
     try:
         return int(value)
     except ValueError:

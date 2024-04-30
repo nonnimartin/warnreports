@@ -5,6 +5,7 @@ peewee
 pydantic[email]
 python_dotenv
 python-dateutil
+tabulate
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
