@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-
+import re
 import utils
 
 translators: dict[str, type[Translator]] = {}
@@ -56,16 +56,6 @@ class Translator:
         if state:
             translators[state.upper()] = cls
 
-class AL(Translator, state='AL'):
-    headermap = {
-        'Company': 'company',
-        'Initial Report Date': 'reported',
-        'City': 'location',
-        'Planned # Affected Employees': 'employees',
-        'Closing or Layoff': 'action',
-        'Planned Starting Date': 'starting'
-    }
-
 class AK(Translator, state='AK'):
     headermap = {
         'Company': 'company',
@@ -74,6 +64,16 @@ class AK(Translator, state='AK'):
         'Employees Affected': 'employees',
         'Layoff Date': 'starting',
         'Notes': 'action'
+    }
+
+class AL(Translator, state='AL'):
+    headermap = {
+        'Company': 'company',
+        'Initial Report Date': 'reported',
+        'City': 'location',
+        'Planned # Affected Employees': 'employees',
+        'Closing or Layoff': 'action',
+        'Planned Starting Date': 'starting'
     }
 
 class AZ(Translator, state='AZ'):
@@ -140,7 +140,8 @@ class DE(Translator, state='DE'):
         'notice_date': 'reported',
         'city': 'location',
         'number_of_employees_affected': 'employees',
-        'warn_type': 'action'
+        'warn_type': 'action',
+        'detail_page_url': 'url'
     }
 
 class FL(Translator, state='FL'):
@@ -156,6 +157,19 @@ class FL(Translator, state='FL'):
     def parse_date(self, value: str) -> datetime|None:
         value = value.split('\n')[0].strip()
         return super().parse_date(value)
+
+class GA(Translator, state='GA'):
+    # TODO: reported
+    headermap = {
+        'Company Name': 'company',
+        'Type of Layoff or Closure': 'action',
+        'First Date of Separation': 'starting',
+        'Number of Employees Affected': 'employees',
+        'Total Number of Affected Employees': 'employees',
+        'First Location Address': 'location',
+        'County': 'location',
+        'NAICS': 'naics'
+    }
 
 class HI(Translator, state='HI'):
     headermap = {
@@ -177,6 +191,46 @@ class IA(Translator, state='IA'):
         'Notice Type': 'action',
         'Layoff Date': 'starting'
     }
+
+class ID(Translator, state='ID'):
+    headermap = {
+        'Company': 'company',
+        'Date of Letter': 'reported',
+        'City': 'location',
+        'No. of Employees Affected': 'employees',
+        'Effective or Commencing Date': 'starting'
+    }
+
+    def value_reported(self, value: str) -> datetime|None:
+        """
+        2/18/22 (rec'd 3/21/22)
+        4/29/2020 (Rec'd 5/5/2020)
+        2/19/219 (rec'd 2/26/19)
+        1/6/2016 (revised thru 5/5/16)
+        4/1/2020 - REVISED 4/8/2020
+        3/31/2020 (rec' 4/1/2020)
+        4/3/2020, 4/15/2020, & 5/1/2020
+        """
+        dt = self.parse_date(value)
+        if dt:
+            return dt
+        value = re.sub(r'[^\d/ ]', '', value)
+        it = map(self.parse_date, re.split(r'\s+', value))
+        return max(filter(None, it), default=None)
+
+    def value_company(self, value: str) -> str:
+        """
+        D e n n y ' s
+        """
+        if value.lower() == "D e n n y ' s".lower():
+            value = value.replace(' ', '')
+        return super().value_company(value)
+
+    def value_employees(self, value: str) -> int|None:
+        """
+        120 (2 in ID)
+        """
+        return utils.parse_int(value.split(' ')[0])
 
 class IN(Translator, state='IN'):
     headermap = {

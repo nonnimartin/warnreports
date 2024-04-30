@@ -24,14 +24,17 @@ def now(**kw) -> datetime:
         dt += timedelta(**kw)
     return dt
 
-def parse_date(value: str) -> datetime|None:
+def parse_date(value: str, sane: bool = True) -> datetime|None:
     if not (value and has_digit(value)):
         return
     try:
         dt = dateutil.parser.parse(value, fuzzy=True)
-        dt.timestamp()
-        if dt.year > 1:
-            return dt
+        dt.timestamp() # ValueError
+        if dt.year <= 1:
+            raise ValueError
+        if sane and not is_sane_year(dt.year):
+            raise ValueError
+        return dt
     except ValueError:
         pass
 
@@ -45,6 +48,9 @@ def parse_int(value: str) -> int|None:
 
 def has_digit(input: str) -> bool:
     return any(filter(str.isdigit, input))
+
+def is_sane_year(year: int) -> bool:
+    return 1990 <= year <= now().year + 10
 
 def render(template: str, *args, **kw) -> str:
     return jinja.get_template(template).render(*args, **kw)
