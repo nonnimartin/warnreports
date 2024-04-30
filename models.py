@@ -12,6 +12,7 @@ from peewee import IntegrityError as IntegrityError
 from playhouse import db_url
 from pydantic import BaseModel as DataModel
 from pydantic import EmailStr, HttpUrl, NonNegativeInt, StringConstraints
+from pydantic_core import ValidationError as ValidationError
 
 import settings
 import utils
@@ -82,7 +83,8 @@ __all__ += [
     'State',
     'StateData',
     'SuccessData',
-    'Token']
+    'Token',
+    'ValidationError']
 
 Token: TypeAlias = UUID
 Offset: TypeAlias = NonNegativeInt

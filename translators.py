@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
-import re
-import utils
 
+import utils
+from models import HttpUrl, ValidationError
+
+PAT_SPACES = re.compile(r'\s+')
 translators: dict[str, type[Translator]] = {}
 
 class Translator:
@@ -41,10 +44,24 @@ class Translator:
         return utils.parse_int(value)
 
     def value_company(self, value: str) -> str:
-        return value.split('\n')[0].strip()
+        value = value.split('\n')[0].strip()
+        value = PAT_SPACES.sub(' ', value)
+        return value
 
     def value_action(self, value: str) -> str:
         return value.strip('*').strip()
+
+    def value_url(self, value: str) -> str|None:
+        try:
+            HttpUrl(value)
+        except ValidationError:
+            value = None
+        return value
+
+    def value_naics(self, value: str) -> str|None:
+        value = utils.parse_int(value)
+        if value and 2 <= len(str(value)) <= 6:
+            return value
 
     def sanitize(self, value: str) -> str:
         return value.strip()
@@ -118,7 +135,8 @@ class CT(Translator, state='CT'):
     }
 
     def value_company(self, value: str) -> str:
-        return value.replace('*', '').strip()
+        value = value.replace('*', '').strip()
+        return super().value_company(value)
 
     def value_reported(self, value: str) -> datetime|None:
         it = map(self.parse_date, value.split(' '))
@@ -215,7 +233,7 @@ class ID(Translator, state='ID'):
         if dt:
             return dt
         value = re.sub(r'[^\d/ ]', '', value)
-        it = map(self.parse_date, re.split(r'\s+', value))
+        it = map(self.parse_date, PAT_SPACES.split(value))
         return max(filter(None, it), default=None)
 
     def value_company(self, value: str) -> str:
@@ -263,6 +281,18 @@ class KS(Translator, state='KS'):
         'warn_type': 'action',
         'LO/CL Date': 'starting',
         'detail_page_url': 'url'
+    }
+
+class KY(Translator, state='KY'):
+    headermap = {
+        'Date Received': 'reported',
+        'Company Name': 'company',
+        'County': 'location',
+        'Employees': 'employees',
+        'Closure or Layoff?': 'action',
+        'Projected Date': 'starting',
+        'Notice URL': 'url',
+        'NAICS Code': 'naics'
     }
 
 class MD(Translator, state='MD'):
