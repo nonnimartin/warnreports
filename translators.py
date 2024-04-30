@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser
 import re
+from argparse import ArgumentParser
 from datetime import datetime
 from typing import Any
 
@@ -14,7 +14,6 @@ translators: dict[str, type[Translator]] = {}
 
 class Translator:
 
-    registry = {}
     headermap = {}
 
     def entry(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -414,30 +413,67 @@ class WI(Translator, state='WI'):
     }
 
 
-def main():
-    parser = ArgumentParser()
-    parser.add_argument('state', choices=translators)
-    parser.add_argument('column')
-    opts = parser.parse_args()
-    import csv
-    import tabulate
-    import itertools
-    file = settings.BUILD_DIR/'extract'/f'{opts.state.lower()}.csv'
-    with open(file) as f:
-        reader = csv.reader(f)
-        i = next(reader).index(opts.column)
-        values = [row[i] for row in reader]
-    translator = translators[opts.state]()
-    field = translator.headermap.get(opts.column)
-    headers = [opts.column]
-    if field:
-        headers.append(field)
-        rhs = ([translator.value(field, value)] for value in values)
-    else:
-        rhs = itertools.repeat([], len(values))
-    rows = [[value, *trans] for value, trans in zip(values, rhs)]
-    print(tabulate.tabulate(rows, headers))
+class Command:
+    """
+    Print values & translations for given field/header.
+    """
+
+    @classmethod
+    def parser(cls) -> ArgumentParser:
+        parser = ArgumentParser(cls.__doc__)
+        parser.add_argument(
+            'state',
+            help='The 2-letter state code',
+            metavar='state',
+            choices=translators,
+            type=str.upper)
+        parser.add_argument(
+            'label',
+            metavar='field',
+            help='The field name, or if type is column, the CSV header name')
+        parser.add_argument(
+            '--type', '-t',
+            help='Whether the label is a field or CSV header, default field',
+            choices=['column', 'field'],
+            default='field')
+        return parser
+
+    def __init__(self, opts):
+        self.translator = translators[opts.state]()
+        self.file = settings.BUILD_DIR/'extract'/f'{opts.state.lower()}.csv'
+        self.headermap = self.translator.headermap
+        if opts.type == 'column':
+            self.columns = [opts.label]
+            self.field = self.headermap.get(opts.label)
+        else:
+            self.columns = [
+                header for header, field in self.headermap.items()
+                if field == opts.label]
+            self.field = opts.label
+
+    def run(self):
+        import tabulate
+        self.validate()
+        headers = list(self.columns)
+        if self.field:
+            headers.append(self.field)
+        rows = map(self.row, utils.csvdicts(self.file))
+        print(tabulate.tabulate(rows, headers))
+
+    def row(self, row: dict):
+        for column in self.columns:
+            yield row[column]
+        if self.field:
+            yield self.translator.entry(row).get(self.field)
+
+    def validate(self):
+        for header in self.columns:
+            if header not in self.headermap:
+                raise ValueError(f'Unknown {header=}')
+        if self.field and self.field not in self.headermap.values():
+            raise ValueError(f'Unknown field={self.field}')
 
 if __name__ == '__main__':
     utils.init_logging()
-    main()
+    opts = Command.parser().parse_args()
+    Command(opts).run()

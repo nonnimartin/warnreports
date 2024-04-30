@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import enum
 import io
 import json
@@ -23,6 +24,16 @@ def now(**kw) -> datetime:
     if kw:
         dt += timedelta(**kw)
     return dt
+
+def csvdicts(path: Path, **kw) -> Iterator[Iterator[tuple[str, str]]]:
+    with open(path) as f:
+        reader = csv.reader(f, **kw)
+        try:
+            keys = next(reader)
+        except StopIteration:
+            logging.warning(f'Empty CSV: {path}')
+        for values in reader:
+            yield dict(zip(keys, values))
 
 def parse_date(value: str, sane: bool = True) -> datetime|None:
     if not (value and has_digit(value)):

@@ -71,23 +71,17 @@ class Pipeline:
         stage = Stage.Translate
         if clean:
             self.clean(stage)
-        count = 0
         utils.makedirs(self.dirs[stage])
-        with open(self.files[stage.Extract]) as f:
-            reader = csv.reader(f)
-            with open(self.files[stage], 'w') as writer:
-                try:
-                    headers = next(reader)
-                except StopIteration:
-                    logging.warning(f'Empty csv')
-                for count, values in enumerate(reader, start=1):
-                    row = dict(zip(headers, values))
-                    entry = self.translator.entry(row)
-                    uid = uuid.uuid5(self.namespace, json.dumps(values))
-                    entry.update(id=uid, row=row)
-                    json.dump(entry, writer, default=utils.json_default)
-                    writer.write('\n')
-        return dict(count=count)
+        with open(self.files[stage], 'w') as writer:
+            count = 0
+            it = utils.csvdicts(self.files[stage.Extract])
+            for count, row in enumerate(it, start=1):
+                entry = dict(id=self.row_uuid(row), row=row)
+                entry = self.translator.entry(row) | entry
+                json.dump(entry, writer, default=utils.json_default)
+                writer.write('\n')
+        size = os.stat(self.files[stage]).st_size
+        return dict(count=count, size=size)
 
     def load(self, clean: bool = False) -> dict:
         stage = Stage.Load
@@ -100,8 +94,7 @@ class Pipeline:
                     action = self.save(entry)
                     counts[action] += 1
                     logging.debug(f'{action} {entry=}')
-        counts['total'] = sum(counts.values())
-        return counts
+        return counts | dict(total=sum(counts.values()))
 
     def save(self, entry: dict) -> SaveType:
         save = SaveType.Nochange
@@ -125,6 +118,9 @@ class Pipeline:
             report.save(force_insert=save is save.Create)
         return save
 
+    def row_uuid(self, row: dict[str, str]) -> uuid.UUID:
+        return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
+    
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:
             value = self.json_types[field](value)
