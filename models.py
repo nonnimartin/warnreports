@@ -11,7 +11,7 @@ from annotated_types import Le
 from peewee import IntegrityError as IntegrityError
 from playhouse import db_url
 from pydantic import BaseModel as DataModel
-from pydantic import EmailStr, NonNegativeInt, StringConstraints
+from pydantic import EmailStr, HttpUrl, NonNegativeInt, StringConstraints
 
 import settings
 import utils
@@ -35,7 +35,7 @@ class Report(OrmModel):
     starting = orm.DateTimeField(null=True, index=True)
     employees = orm.IntegerField(null=True)
     action = orm.CharField(max_length=64, null=True, index=True)
-    url = orm.CharField(max_length=255, null=True)
+    url = orm.CharField(max_length=2083, null=True)
 
 class Follow(OrmModel):
     id = orm.UUIDField(primary_key=True, default=uuid4)
@@ -105,10 +105,10 @@ class ReportData(DataModel):
     starting: datetime|None
     employees: int|None
     action: str|None
-    url: str|None
+    url: HttpUrl|None
 
     @staticmethod
-    def filters(
+    def orm_filters(
         search: str|None = None,
         company: str|None = None,
         state: State|None = None,

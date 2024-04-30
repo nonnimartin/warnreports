@@ -6,23 +6,21 @@ from argparse import ArgumentParser
 import utils
 from models import Follow, Report
 
+template = 'email/notify.jinja'
 
 def notify(follow: Follow):
     if not follow.confirmed:
         logging.warning(f'Skipping unconfirmed {follow=}')
         return
+    notified = utils.now()
     reports = get_reports(follow)
     if not reports:
         logging.info(f'No new reports for {follow=}')
         return
+    subject = f'WARN Notice for {follow.company}'
+    body = utils.render(template, reports=reports, follow=follow)
     logging.info(f'Notifying {follow=} reports={len(reports)}')
-    context = dict(reports=reports, follow=follow)
-    notified = utils.now()
-    success = utils.send_email(
-        recipient=follow.email,
-        subject=f'WARN Notice for {follow.company}',
-        body=utils.render('email/notify.jinja', context))
-    if success:
+    if utils.send_email(follow.email, subject, body):
         follow.notified = notified
         follow.save()
 
