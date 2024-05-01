@@ -14,8 +14,7 @@ from pydantic import BaseModel as DataModel
 from pydantic import EmailStr, HttpUrl, NonNegativeInt, StringConstraints
 from pydantic_core import ValidationError as ValidationError
 
-import settings
-import utils
+from . import settings, utils
 
 __all__ = ['Follow', 'IntegrityError', 'Report']
 

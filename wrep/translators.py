@@ -5,12 +5,11 @@ from argparse import ArgumentParser
 from datetime import datetime
 from typing import Any
 
-import settings
-import utils
-from models import HttpUrl, ValidationError
+from . import utils
+from .models import HttpUrl, ValidationError, State
 
 PAT_SPACES = re.compile(r'\s+')
-translators: dict[str, type[Translator]] = {}
+translators: dict[State, type[Translator]] = {}
 
 class Translator:
 
@@ -59,7 +58,7 @@ class Translator:
             value = None
         return value
 
-    def value_naics(self, value: str) -> str|None:
+    def value_naics(self, value: str) -> int|None:
         value = utils.parse_int(value)
         if value and 2 <= len(str(value)) <= 6:
             return value
@@ -414,6 +413,7 @@ class WI(Translator, state='WI'):
     }
 
 
+
 class Command:
     """
     Print values & translations for given field/header.
@@ -421,7 +421,7 @@ class Command:
 
     @classmethod
     def parser(cls) -> ArgumentParser:
-        parser = ArgumentParser(cls.__doc__)
+        parser = ArgumentParser(description=cls.__doc__)
         parser.add_argument(
             'state',
             help='The 2-letter state code',
@@ -439,29 +439,47 @@ class Command:
             default='field')
         return parser
 
+    @classmethod
+    def main(cls, args=None):
+        cls(cls.parse(args)).run()
+
+    @classmethod
+    def parse(cls, args=None):
+        return cls.parser().parse_args(args)
+
     def __init__(self, opts):
+        self.opts = opts
         self.translator = translators[opts.state]()
-        self.file = settings.BUILD_DIR/'extract'/f'{opts.state.lower()}.csv'
         self.headermap = self.translator.headermap
-        if opts.type == 'column':
-            self.columns = [opts.label]
+        self.columns = []
+        if self.opts.type == 'column':
             self.field = self.headermap.get(opts.label)
+            self.columns.append(self.opts.label)
         else:
-            self.columns = [
-                header for header, field in self.headermap.items()
-                if field == opts.label]
             self.field = opts.label
+            for header, field in self.headermap.items():
+                if field == self.opts.label:
+                    self.columns.append(header)
 
     def run(self):
-        import tabulate
         self.validate()
-        headers = list(self.columns)
-        if self.field:
-            headers.append(self.field)
-        rows = map(self.row, utils.csvdicts(self.file))
-        print(tabulate.tabulate(rows, headers))
+        print(self.table())
 
-    def row(self, row: dict):
+    def table(self):
+        import tabulate
+        return tabulate.tabulate(self.rows(), self.headers())
+
+    def rows(self):
+        from .pipeline import Stage
+        file = Stage.Extract.file(self.opts.state)
+        return map(self.values, utils.csvdicts(file))
+
+    def headers(self):
+        yield from self.columns
+        if self.field:
+            yield self.field
+
+    def values(self, row: dict):
         for column in self.columns:
             yield row[column]
         if self.field:
@@ -476,5 +494,4 @@ class Command:
 
 if __name__ == '__main__':
     utils.init_logging()
-    opts = Command.parser().parse_args()
-    Command(opts).run()
+    Command.main()

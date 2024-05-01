@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from models import *
+from ..models import *
 
 router = APIRouter()
 

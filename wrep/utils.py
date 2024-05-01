@@ -2,22 +2,18 @@ from __future__ import annotations
 
 import csv
 import enum
-import io
 import json
 import logging
 import os.path
 from datetime import datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
 
-import boto3
 import dateutil.parser
-import jinja2
 
-import settings
-
-jinja = jinja2.Environment(loader=jinja2.FileSystemLoader(settings.TEMPLATES_DIR))
+from . import settings
 
 def now(**kw) -> datetime:
     dt = datetime.now(tz=kw.pop('tz', None))
@@ -25,9 +21,9 @@ def now(**kw) -> datetime:
         dt += timedelta(**kw)
     return dt
 
-def csvdicts(path: Path, **kw) -> Iterator[Iterator[tuple[str, str]]]:
-    with open(path) as f:
-        reader = csv.reader(f, **kw)
+def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
+    with open(path) as file:
+        reader = csv.reader(file, **kw)
         try:
             keys = next(reader)
         except StopIteration:
@@ -35,9 +31,18 @@ def csvdicts(path: Path, **kw) -> Iterator[Iterator[tuple[str, str]]]:
         for values in reader:
             yield dict(zip(keys, values))
 
+def logdicts(path: Path) -> Iterator[dict[str, str]]:
+    with open(path) as file:
+        while True:
+            line = file.readline()
+            if not line:
+                break
+            yield json.loads(line)
+
 def parse_date(value: str, sane: bool = True) -> datetime|None:
-    if not (value and has_digit(value)):
-        return
+    value = value or ''
+    # if not (value and has_digit(value)):
+    #     return
     try:
         dt = dateutil.parser.parse(value, fuzzy=True)
         dt.timestamp() # ValueError
@@ -50,8 +55,7 @@ def parse_date(value: str, sane: bool = True) -> datetime|None:
         pass
 
 def parse_int(value: str) -> int|None:
-    if not (value and has_digit(value)):
-        return
+    value = value or ''
     value = value.replace(',', '')
     try:
         return int(value)
@@ -65,21 +69,14 @@ def is_sane_year(year: int) -> bool:
     return 1980 <= year <= now().year + 10
 
 def render(template: str, *args, **kw) -> str:
-    return jinja.get_template(template).render(*args, **kw)
-
+    return jinja_env().get_template(template).render(*args, **kw)
+    
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, UUID):
         return value.hex
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
-
-def json_lines(fp: io.TextIOBase) -> Iterator[Any]:
-    while True:
-        line = fp.readline()
-        if not line:
-            break
-        yield json.loads(line)
 
 def init_logging() -> None:
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
@@ -102,9 +99,14 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
 
 class SesEmailBackend:
 
-    @staticmethod
-    def send(sender: str, recipient: str, subject: str, body: str) -> bool:
-        response = boto3.client('ses').send_email(
+    @property
+    @cache
+    def client(self):
+        import boto3
+        return boto3.client('ses')
+
+    def send(self, sender: str, recipient: str, subject: str, body: str) -> bool:
+        response = self.client.send_email(
             Source=sender,
             Destination={'ToAddresses': [recipient]},
             Message={
@@ -124,6 +126,12 @@ class DebugEmailBackend:
 email_backends = {
     'ses': SesEmailBackend(),
     'debug': DebugEmailBackend()}
+
+@cache
+def jinja_env():
+    import jinja2
+    loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
+    return jinja2.Environment(loader=loader)
 
 class StrEnum(str, enum.Enum):
 

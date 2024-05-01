@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from argparse import ArgumentParser
 
-import utils
-from models import Follow, Report
+from . import utils
+from .models import Follow, Report
 
 template = 'email/notify.jinja'
 

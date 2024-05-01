@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-import settings
-from routers import *
+from . import settings
+from .routers import *
 
 app = FastAPI(title='WARN Reporter')
 
