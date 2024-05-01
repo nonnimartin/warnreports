@@ -79,6 +79,7 @@ class Translator:
         if state:
             translators[state.upper()] = cls
 
+
 class AK(Translator, state='AK'):
     headermap = {
         'Company': 'company',

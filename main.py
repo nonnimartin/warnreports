@@ -19,6 +19,6 @@ app.include_router(
 static = StaticFiles(directory=settings.STATIC_DIR)
 app.mount('/static', static, name='static')
 
-@app.get('/')
+@app.get('/', include_in_schema=False)
 def root() -> RedirectResponse:
     return RedirectResponse('/follow/new')
