@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from argparse import ArgumentParser
 from pathlib import Path
 from typing import Any
 
 import warn.runner
 
-from . import settings, utils
+from . import utils
 from .models import Report, State, db
+from .settings import BUILD_DIR
 from .translators import translators
 
 class Stage(utils.StrEnum):
@@ -20,14 +20,18 @@ class Stage(utils.StrEnum):
 
     @property
     def dir(self) -> Path:
-        return settings.BUILD_DIR/self
+        return BUILD_DIR/self
+
+    @property
+    def fileext(self) -> str|None:
+        if self is self.Extract:
+            return 'csv'
+        if self is self.Translate:
+            return 'log'
 
     def file(self, state: State) -> Path|None:
-        base = self.dir/state.lower()
-        if self is self.Extract:
-            return Path(f'{base}.csv')
-        if self is self.Translate:
-            return Path(f'{base}.log')
+        if self.fileext:
+            return Path(self.dir, f'{state.lower()}.{self.fileext}')
 
 
 class Pipeline:
@@ -62,47 +66,46 @@ class Pipeline:
     def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logging.info(f'clean {stage} {self.state}')
-        file = stage.file(self.state)
-        if file and file.exists():
-            file.unlink()
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
+        else:
+            self.file(stage).unlink(missing_ok=True)
 
     def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
         if clean:
             self.clean(stage)
-        path = stage.dir
-        scraper = warn.runner.Runner(path, path/'cache')
+        file = self.file(stage)
+        parent = file.parent
+        scraper = warn.runner.Runner(parent, parent/'cache')
         scraper.scrape(self.state)
-        size = stage.file(self.state).stat().st_size
-        return dict(size=size)
+        return dict(size=file.stat().st_size)
 
     def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
         if clean:
             self.clean(stage)
-        utils.makedirs(stage.dir)
-        with open(stage.file(self.state), 'w') as writer:
+        file = self.file(stage)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        with file.open('w') as writer:
             count = 0
-            it = utils.csvdicts(stage.Extract.file(self.state))
+            it = utils.csvdicts(self.file(stage.Extract))
             for count, row in enumerate(it, start=1):
                 entry = dict(id=self.row_uuid(row), row=row)
                 entry = self.translator.entry(row) | entry
                 json.dump(entry, writer, default=utils.json_default)
                 writer.write('\n')
-        size = stage.file(self.state).stat().st_size
-        return dict(count=count, size=size)
+        return dict(count=count, size=file.stat().st_size)
 
     def load(self, clean: bool = False) -> dict:
         stage = Stage.Load
         counts = dict.fromkeys(map(str, SaveType), 0)
+        it = utils.logdicts(self.file(stage.Translate))
         with db.atomic():
             if clean:
                 self.clean(stage)
-            for entry in utils.logdicts(stage.Translate.file(self.state)):
-                action = self.save(entry)
-                counts[action] += 1
+            for entry in it:
+                counts[self.save(entry)] += 1
         return counts | dict(total=sum(counts.values()))
 
     def save(self, entry: dict) -> SaveType:
@@ -127,9 +130,12 @@ class Pipeline:
             report.save(force_insert=save is save.Create)
         return save
 
+    def file(self, stage: Stage) -> Path|None:
+        return Stage(stage).file(self.state)
+
     def row_uuid(self, row: dict[str, str]) -> uuid.UUID:
         return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
-    
+
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:
             value = self.json_types[field](value)
@@ -141,20 +147,27 @@ class SaveType(utils.StrEnum):
     Nochange = 'nochange'
     Skip = 'skip'
 
-def main():
-    parser = ArgumentParser()
-    parser.add_argument('stage', choices=Stage)
-    parser.add_argument('states', nargs='*', choices=translators)
-    parser.add_argument('--clean', '-c', action='store_true')
-    parser.add_argument('--clean-only', '-x', action='store_true')
-    opts = parser.parse_args()
-    for state in opts.states or translators:
-        pipeline = Pipeline(state)
-        if opts.clean_only:
-            pipeline.clean(opts.stage)
-        else:
-            pipeline.run(opts.stage, clean=opts.clean)
+class Command(utils.BaseCommand):
+    'Run a pipeline stage'
+
+    @classmethod
+    def parser(cls):
+        parser = super().parser()
+        parser.add_argument('stage', choices=Stage)
+        parser.add_argument('states', nargs='*', choices=translators)
+        parser.add_argument('--clean', '-c', action='store_true')
+        parser.add_argument('--clean-only', '-x', action='store_true')
+        return parser
+
+    def run(self):
+        opts = self.opts
+        for state in opts.states or translators:
+            pipeline = Pipeline(state)
+            if opts.clean_only:
+                pipeline.clean(opts.stage)
+            else:
+                pipeline.run(opts.stage, clean=opts.clean)
 
 if __name__ == '__main__':
     utils.init_logging()
-    main()
+    Command.main()

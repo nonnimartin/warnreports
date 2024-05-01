@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from argparse import ArgumentParser
 
 from . import utils
 from .models import Follow, Report
@@ -36,11 +35,12 @@ def notify_all():
     for follow in Follow.select().where(Follow.confirmed):
         notify(follow)
 
-def main():
-    parser = ArgumentParser()
-    opts = parser.parse_args()
-    notify_all()
+class Command(utils.BaseCommand):
+    'Send follow notifications'
+
+    def run(self):
+        notify_all()
 
 if __name__ == '__main__':
     utils.init_logging()
-    main()
+    Command.main()

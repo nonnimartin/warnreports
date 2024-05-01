@@ -4,7 +4,7 @@ import csv
 import enum
 import json
 import logging
-import os.path
+from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -14,6 +14,7 @@ from uuid import UUID
 import dateutil.parser
 
 from . import settings
+
 
 def now(**kw) -> datetime:
     dt = datetime.now(tz=kw.pop('tz', None))
@@ -82,10 +83,6 @@ def init_logging() -> None:
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level)
 
-def makedirs(path: Path) -> None:
-    if not os.path.exists(path):
-        os.makedirs(path)
-
 def send_email(recipient: str, subject: str, body: str) -> bool:
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_ACCOUNT
@@ -137,3 +134,27 @@ class StrEnum(str, enum.Enum):
 
     def __str__(self):
         return self.value
+
+class BaseCommand:
+
+    @classmethod
+    def parser(cls) -> ArgumentParser:
+        return ArgumentParser(description=cls.__doc__)
+
+    @classmethod
+    def main(cls, args=None):
+        cls(cls.parse(args)).run()
+
+    @classmethod
+    def parse(cls, args=None):
+        return cls.parser().parse_args(args)
+
+    def __init__(self, opts):
+        self.opts = opts
+        self.setup(opts)
+
+    def setup(self, opts):
+        pass
+
+    def run(self):
+        pass

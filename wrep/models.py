@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 from urllib.parse import urlencode
@@ -145,12 +144,17 @@ def migrate() -> None:
 
 actions = dict(migrate=migrate)
 
-def main():
-    parser = ArgumentParser()
-    parser.add_argument('action', choices=actions)
-    opts = parser.parse_args()
-    actions[opts.action]()
+class Command(utils.BaseCommand):
+
+    @classmethod
+    def parser(cls):
+        parser = super().parser()
+        parser.add_argument('action', choices=actions)
+        return parser
+
+    def run(self):
+        actions[self.opts.action]()
 
 if __name__ == '__main__':
     utils.init_logging()
-    main()
+    Command.main()

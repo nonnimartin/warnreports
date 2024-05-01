@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from argparse import ArgumentParser
 from datetime import datetime
 from typing import Any
 
@@ -310,6 +309,10 @@ class ME(Translator, state='ME'):
         'detail_page_url': 'url'
     }
 
+class MI(Translator, state='MI'):
+    # TODO
+    headermap = {}
+
 class MO(Translator, state='MO'):
     headermap = {
         'Title': 'company',
@@ -319,6 +322,22 @@ class MO(Translator, state='MO'):
         'Type': 'action',
         'Layoff date(s)': 'starting'
     }
+
+class MT(Translator, state='MT'):
+    # TODO
+    headermap = {}
+
+class NE(Translator, state='NE'):
+    # TODO
+    headermap = {}
+
+class NJ(Translator, state='NJ'):
+    # TODO
+    headermap = {}
+
+class NM(Translator, state='NM'):
+    # TODO
+    headermap = {}
 
 class NY(Translator, state='NY'):
     headermap = {
@@ -331,6 +350,10 @@ class NY(Translator, state='NY'):
         'Number Affected': 'employees',
         'Dislocation Type': 'action'
     }
+
+class OH(Translator, state='OH'):
+    # TODO
+    headermap = {}
 
 class OK(Translator, state='OK'):
     headermap = {
@@ -352,6 +375,10 @@ class OR(Translator, state='OR'):
         'Layoff Date': 'starting'
     }
 
+class RI(Translator, state='RI'):
+    # TODO
+    headermap = {}
+
 class SC(Translator, state='SC'):
     headermap = {
         'company': 'company',
@@ -360,6 +387,14 @@ class SC(Translator, state='SC'):
         'jobs': 'employees',
         'Layoff Type': 'action'
     }
+
+class SD(Translator, state='SD'):
+    # TODO
+    headermap = {}
+
+class TN(Translator, state='TN'):
+    # TODO
+    headermap = {}
 
 class TX(Translator, state='TX'):
     headermap = {
@@ -402,6 +437,10 @@ class VT(Translator, state='VT'):
         'detail_page_url': 'url'
     }
 
+class WA(Translator, state='WA'):
+    # TODO
+    headermap = {}
+
 class WI(Translator, state='WI'):
     headermap = {
         'Company': 'company',
@@ -414,14 +453,14 @@ class WI(Translator, state='WI'):
 
 
 
-class Command:
+class Command(utils.BaseCommand):
     """
     Print values & translations for given field/header.
     """
 
     @classmethod
-    def parser(cls) -> ArgumentParser:
-        parser = ArgumentParser(description=cls.__doc__)
+    def parser(cls):
+        parser = super().parser()
         parser.add_argument(
             'state',
             help='The 2-letter state code',
@@ -439,16 +478,7 @@ class Command:
             default='field')
         return parser
 
-    @classmethod
-    def main(cls, args=None):
-        cls(cls.parse(args)).run()
-
-    @classmethod
-    def parse(cls, args=None):
-        return cls.parser().parse_args(args)
-
-    def __init__(self, opts):
-        self.opts = opts
+    def setup(self, opts):
         self.translator = translators[opts.state]()
         self.headermap = self.translator.headermap
         self.columns = []
