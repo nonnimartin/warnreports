@@ -459,8 +459,7 @@ class Command(utils.BaseCommand):
     """
 
     @classmethod
-    def parser(cls):
-        parser = super().parser()
+    def add_arguments(cls, parser):
         parser.add_argument(
             'state',
             help='The 2-letter state code',
@@ -476,7 +475,6 @@ class Command(utils.BaseCommand):
             help='Whether the label is a field or CSV header, default field',
             choices=['column', 'field'],
             default='field')
-        return parser
 
     def setup(self, opts):
         self.translator = translators[opts.state]()
@@ -523,5 +521,4 @@ class Command(utils.BaseCommand):
             raise ValueError(f'Unknown field={self.field}')
 
 if __name__ == '__main__':
-    utils.init_logging()
     Command.main()

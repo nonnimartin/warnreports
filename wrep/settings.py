@@ -2,10 +2,6 @@ from os import getenv
 from pathlib import Path
 from uuid import UUID
 
-import dotenv
-
-dotenv.load_dotenv()
-
 BASEDIR = Path(__file__).parent
 REPODIR = BASEDIR.parent
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()

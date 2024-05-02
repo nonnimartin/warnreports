@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,8 @@ from . import utils
 from .models import Report, State, db
 from .settings import BUILD_DIR
 from .translators import translators
+
+logger = utils.get_logger('pipeline')
 
 class Stage(utils.StrEnum):
     Extract = 'extract'
@@ -59,13 +60,13 @@ class Pipeline:
 
     def run(self, stage: Stage, clean: bool = False) -> None:
         stage = Stage(stage)
-        logging.info(f'run {stage} {self.state}')
+        logger.info(f'run {stage} {self.state}')
         self.summary[stage] = getattr(self, stage)(clean=clean)
-        logging.info(f'run {stage} {self.state} {self.summary[stage]}')
+        logger.info(f'run {stage} {self.state} {self.summary[stage]}')
 
     def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
-        logging.info(f'clean {stage} {self.state}')
+        logger.info(f'clean {stage} {self.state}')
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
         else:
@@ -151,13 +152,11 @@ class Command(utils.BaseCommand):
     'Run a pipeline stage'
 
     @classmethod
-    def parser(cls):
-        parser = super().parser()
+    def add_arguments(cls, parser):
         parser.add_argument('stage', choices=Stage)
         parser.add_argument('states', nargs='*', choices=translators)
         parser.add_argument('--clean', '-c', action='store_true')
         parser.add_argument('--clean-only', '-x', action='store_true')
-        return parser
 
     def run(self):
         opts = self.opts
@@ -169,5 +168,4 @@ class Command(utils.BaseCommand):
                 pipeline.run(opts.stage, clean=opts.clean)
 
 if __name__ == '__main__':
-    utils.init_logging()
     Command.main()

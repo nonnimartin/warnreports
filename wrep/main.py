@@ -1,3 +1,5 @@
+import click
+import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,3 +24,13 @@ app.mount('/static', static, name='static')
 @app.get('/', include_in_schema=False)
 def root() -> RedirectResponse:
     return RedirectResponse('/follow/new')
+
+main = click.Command(
+    name='main',
+    callback=lambda *args, **kw: (
+        uvicorn.main.callback('wrep.main:app', *args, **kw)),
+    params=uvicorn.main.params[1:],
+    context_settings=uvicorn.main.context_settings)
+
+if __name__ == '__main__':
+    main()

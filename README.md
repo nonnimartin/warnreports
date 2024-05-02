@@ -26,15 +26,14 @@ Optional:
 ## Run
 
 ```sh
+# Server
+python -m wrep.main
+
 # Pipeline
 python -m wrep.pipeline extract
 python -m wrep.pipeline translate
 python -m wrep.pipeline load
 
-# Server
-python -m uvicorn wrep.main:app --reload
-
 # Notifications
 python -m wrep.notify
 ```
-

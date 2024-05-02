@@ -147,14 +147,11 @@ actions = dict(migrate=migrate)
 class Command(utils.BaseCommand):
 
     @classmethod
-    def parser(cls):
-        parser = super().parser()
+    def add_arguments(cls, parser) -> None:
         parser.add_argument('action', choices=actions)
-        return parser
 
     def run(self):
         actions[self.opts.action]()
 
 if __name__ == '__main__':
-    utils.init_logging()
     Command.main()

@@ -15,6 +15,14 @@ import dateutil.parser
 
 from . import settings
 
+def get_logger(name: str|None = None) -> logging.Logger:
+    if name:
+        name = f'{__package__}.{name}'
+    else:
+        name = __package__
+    return logging.getLogger(name)
+
+logger = get_logger('utils')
 
 def now(**kw) -> datetime:
     dt = datetime.now(tz=kw.pop('tz', None))
@@ -28,7 +36,7 @@ def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
         try:
             keys = next(reader)
         except StopIteration:
-            logging.warning(f'Empty CSV: {path}')
+            logger.warning(f'Empty CSV: {path}')
         for values in reader:
             yield dict(zip(keys, values))
 
@@ -86,12 +94,12 @@ def init_logging() -> None:
 def send_email(recipient: str, subject: str, body: str) -> bool:
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_ACCOUNT
-    logging.info(f'Sending email {recipient=} {backend=} {subject=}')
+    logger.info(f'Sending email {recipient=} {backend=} {subject=}')
     success = backend.send(sender, recipient, subject, body)
     if success:
-        logging.info('Email sent successfully!')
+        logger.info('Email sent successfully!')
     else:
-        logging.info('Failed to send email.')
+        logger.info('Failed to send email.')
     return success
 
 class SesEmailBackend:
@@ -117,7 +125,7 @@ class DebugEmailBackend:
 
     @staticmethod
     def send(sender: str, recipient: str, subject: str, body: str) -> bool:
-        logging.info(f'{sender=} {recipient=} {subject=} {body=}')
+        logger.info(f'{sender=} {recipient=} {subject=} {body=}')
         return True
 
 email_backends = {
@@ -139,7 +147,13 @@ class BaseCommand:
 
     @classmethod
     def parser(cls) -> ArgumentParser:
-        return ArgumentParser(description=cls.__doc__)
+        parser = ArgumentParser(description=cls.__doc__)
+        cls.add_arguments(parser)
+        return parser
+
+    @classmethod
+    def add_arguments(cls, parser: ArgumentParser) -> None:
+        pass
 
     @classmethod
     def main(cls, args=None):
