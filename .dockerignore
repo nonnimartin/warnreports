@@ -1,0 +1,11 @@
+.docker*
+.env
+.git*
+.venv
+**/__pycache__
+**/*.db*
+**/*.pyc
+**/*.sqlite*
+build
+Dockerfile
+warn

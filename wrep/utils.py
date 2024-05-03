@@ -59,8 +59,6 @@ def logdicts(path: Path) -> Iterator[dict[str, str]]:
 
 def parse_date(value: str, sane: bool = True) -> datetime|None:
     value = value or ''
-    # if not (value and has_digit(value)):
-    #     return
     try:
         dt = dateutil.parser.parse(value, fuzzy=True)
         dt.timestamp() # ValueError
@@ -79,9 +77,6 @@ def parse_int(value: str) -> int|None:
         return int(value)
     except ValueError:
         pass
-
-def has_digit(input: str) -> bool:
-    return any(filter(str.isdigit, input))
 
 def is_sane_year(year: int) -> bool:
     return 1980 <= year <= now().year + 10
