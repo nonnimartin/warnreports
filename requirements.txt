@@ -6,13 +6,13 @@ peewee
 pydantic[email]
 python_dotenv
 python-dateutil
+requests
 tabulate
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
 beautifulsoup4
 html5lib
-requests
 openpyxl
 pdfplumber
 tenacity

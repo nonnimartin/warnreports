@@ -57,10 +57,17 @@ class Translator:
             value = None
         return value
 
-    def value_naics(self, value: str) -> int|None:
-        value = utils.parse_int(value)
-        if value and 2 <= len(str(value)) <= 6:
-            return value
+    def value_naics(self, value: str) -> list[int]:
+        values = set()
+        for value in re.split(r'[\s,]+', value):
+            if value in ('31-33', '44-45', '48-49'):
+                minmax = list(map(int, value.split('-')))
+                values.update(range(minmax[0], minmax[1] + 1))
+                continue
+            value = utils.parse_int(value)
+            if value and 2 <= len(str(value)) <= 6:
+                values.add(value)
+        return sorted(values)
 
     def sanitize(self, value: str) -> str:
         return value.strip()
@@ -249,7 +256,8 @@ class IN(Translator, state='IN'):
         'City': 'location',
         'Affected Workers': 'employees',
         'Notice Type': 'action',
-        'LO/CL Date': 'starting'
+        'LO/CL Date': 'starting',
+        'NAICS': 'naics'
     }
 
 class KS(Translator, state='KS'):
@@ -275,6 +283,10 @@ class KY(Translator, state='KY'):
         'NAICS Code': 'naics'
     }
 
+    def value_naics(self, value: str) -> list[int]:
+        value = value.replace('/', ', ')
+        return super().value_naics(value)
+
 class LA(Translator, state='LA'):
     headermap = {
         'Company Name': 'company',
@@ -284,7 +296,7 @@ class LA(Translator, state='LA'):
         'Layoff Date': 'starting',
         # 'Industry': ...
     }
-    
+
     def value_employees(self, value: str) -> int|None:
         it = map(utils.parse_int, PAT_SPACES.split(value))
         return max(filter(None, it), default=None)
@@ -320,7 +332,8 @@ class MO(Translator, state='MO'):
         'Location(s)': 'location',
         '# affected': 'employees',
         'Type': 'action',
-        'Layoff date(s)': 'starting'
+        'Layoff date(s)': 'starting',
+        'NAICS Code': 'naics'
     }
 
 class MT(Translator, state='MT'):
@@ -348,8 +361,17 @@ class NY(Translator, state='NY'):
         'City': 'location',
         'date_posted': 'location',
         'Number Affected': 'employees',
-        'Dislocation Type': 'action'
+        'Dislocation Type': 'action',
+        'NAISC': 'naics', # sic
+        'NAICS': 'naics' # in case it's fixed
     }
+
+    def value_naics(self, value: str) -> list[int]:
+        codes = super().value_naics(value)
+        if 79 in codes:
+            # One invalid entry
+            codes.remove(79)
+        return codes
 
 class OH(Translator, state='OH'):
     # TODO
@@ -471,6 +493,10 @@ class Command(utils.BaseCommand):
             metavar='field',
             help='The field name, or if type is column, the CSV header name')
         parser.add_argument(
+            '--empty', '-e',
+            action='store_true',
+            help='Include empty values')
+        parser.add_argument(
             '--type', '-t',
             help='Whether the label is a field or CSV header, default field',
             choices=['column', 'field'],
@@ -500,7 +526,10 @@ class Command(utils.BaseCommand):
     def rows(self):
         from .pipeline import Stage
         file = Stage.Extract.file(self.opts.state)
-        return map(self.values, utils.csvdicts(file))
+        it = map(self.values, utils.csvdicts(file))
+        if not self.opts.empty:
+            it = filter(any, map(list, it))
+        yield from it
 
     def headers(self):
         yield from self.columns
@@ -508,8 +537,7 @@ class Command(utils.BaseCommand):
             yield self.field
 
     def values(self, row: dict):
-        for column in self.columns:
-            yield row[column]
+        yield from map(row.get, self.columns)
         if self.field:
             yield self.translator.entry(row).get(self.field)
 
@@ -521,4 +549,7 @@ class Command(utils.BaseCommand):
             raise ValueError(f'Unknown field={self.field}')
 
 if __name__ == '__main__':
-    Command.main()
+    try:
+        Command.main()
+    except BrokenPipeError:
+        pass

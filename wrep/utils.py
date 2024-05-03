@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import enum
+import hashlib
 import json
 import logging
 from argparse import ArgumentParser
@@ -30,6 +31,13 @@ def now(**kw) -> datetime:
         dt += timedelta(**kw)
     return dt
 
+def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
+    try:
+        return hashlib.new(alg, path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        if not missing_ok:
+            raise
+
 def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
     with open(path) as file:
         reader = csv.reader(file, **kw)
@@ -37,6 +45,7 @@ def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
             keys = next(reader)
         except StopIteration:
             logger.warning(f'Empty CSV: {path}')
+            return
         for values in reader:
             yield dict(zip(keys, values))
 
