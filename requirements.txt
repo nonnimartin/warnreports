@@ -1,3 +1,4 @@
+beautifulsoup4
 boto3
 fastapi
 feedgen
@@ -11,7 +12,6 @@ tabulate
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
-beautifulsoup4
 html5lib
 openpyxl
 pdfplumber

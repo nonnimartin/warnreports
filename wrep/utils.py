@@ -168,3 +168,23 @@ class BaseCommand:
 
     def run(self):
         pass
+
+class Stage(StrEnum):
+    Extract = 'extract'
+    Translate = 'translate'
+    Load = 'load'
+
+    @property
+    def dir(self) -> Path:
+        return settings.BUILD_DIR/self
+
+    @property
+    def ext(self) -> str|None:
+        if self is self.Extract:
+            return 'csv'
+        if self is self.Translate:
+            return 'log'
+
+    def file(self, state: str) -> Path|None:
+        if self.ext:
+            return Path(self.dir, f'{state.lower()}.{self.ext}')
