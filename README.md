@@ -30,9 +30,7 @@ Optional:
 python -m wrep.main
 
 # Pipeline
-python -m wrep.pipeline extract
-python -m wrep.pipeline translate
-python -m wrep.pipeline load
+python -m wrep.pipeline -h
 
 # Notifications
 python -m wrep.notify

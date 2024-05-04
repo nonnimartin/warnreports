@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import click
 import uvicorn
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
-from . import settings
+from . import settings, utils
 from .routers import *
 
 app = FastAPI(title='WARN Reporter')
+templates = Jinja2Templates(env=utils.jinja_env())
 
 app.include_router(
-    prefix='/api/v1',
+    prefix='/api/v0',
     router=api.router)
 
 app.include_router(
@@ -22,8 +26,8 @@ static = StaticFiles(directory=settings.STATIC_DIR)
 app.mount('/static', static, name='static')
 
 @app.get('/', include_in_schema=False)
-def root() -> RedirectResponse:
-    return RedirectResponse('/follow/new')
+async def index(req: Request) -> HTMLResponse:
+    return templates.TemplateResponse(req, 'index.jinja')
 
 main = click.Command(
     name='main',
