@@ -4,5 +4,5 @@ basedir="$(dirname "$0")/.."
 version=1.2.72
 url="https://github.com/biglocalnews/warn-scraper/archive/refs/tags/$version.tar.gz"
 cd "$basedir"
-curl -fsL "$url" | tar x --strip-components 1 "warn-scraper-$version/warn"
+curl -fsL "$url" | tar xz --strip-components 1 "warn-scraper-$version/warn"
 echo '*' > warn/.gitignore

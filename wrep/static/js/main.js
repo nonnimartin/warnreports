@@ -34,7 +34,7 @@ $(function () {
         name: 'search-results',
         source: new Bloodhound({
             remote: {
-                url: '/api/v1/companies?company=%QUERY',
+                url: '/api/v0/companies?company=%QUERY',
                 wildcard: '%QUERY',
             },
             datumTokenizer: Bloodhound.tokenizers.whitespace,

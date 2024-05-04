@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from argparse import ArgumentParser
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 from urllib.parse import urlencode
@@ -14,10 +13,9 @@ from pydantic import BaseModel as DataModel
 from pydantic import EmailStr, HttpUrl, NonNegativeInt, StringConstraints
 from pydantic_core import ValidationError as ValidationError
 
-import settings
-import utils
+from . import settings, utils
 
-__all__ = ['Follow', 'IntegrityError', 'Report']
+__all__ = ['Follow', 'IntegrityError', 'Naics', 'NaicsReport', 'Report']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
@@ -37,6 +35,20 @@ class Report(OrmModel):
     employees = orm.IntegerField(null=True)
     action = orm.CharField(max_length=64, null=True, index=True)
     url = orm.CharField(max_length=2083, null=True)
+
+class Naics(OrmModel):
+    id = orm.IntegerField(primary_key=True)
+    code = orm.CharField(max_length=32, index=True)
+    title = orm.CharField(max_length=255, index=True, collation='NOCASE')
+
+class NaicsReport(OrmModel):
+    naics = orm.ForeignKeyField(Naics, on_delete='CASCADE')
+    report = orm.ForeignKeyField(Report, on_delete='CASCADE')
+
+    class Meta:
+        indexes = [
+            (('naics', 'report'), True)
+        ]
 
 class Follow(OrmModel):
     id = orm.UUIDField(primary_key=True, default=uuid4)
@@ -142,16 +154,31 @@ class SuccessData(DataModel):
 # ----------------------------
 
 def migrate() -> None:
-    db.create_tables([Report, Follow])
+    db.create_tables([Report, Naics, NaicsReport, Follow])
 
-actions = dict(migrate=migrate)
+def load_naics() -> None:
+    import requests
+    rep = requests.get(settings.NAICS_DOWNLOAD)
+    rep.raise_for_status()
+    records = (
+        dict(
+            id=entry['code'],
+            code=entry['code_raw'],
+            title=entry['title'])
+        for entry in rep.json())
+    with db.atomic():
+        Naics.replace_many(records).execute()
 
-def main():
-    parser = ArgumentParser()
-    parser.add_argument('action', choices=actions)
-    opts = parser.parse_args()
-    actions[opts.action]()
+actions = dict(migrate=migrate, load_naics=load_naics)
+
+class Command(utils.BaseCommand):
+
+    @classmethod
+    def add_arguments(cls, parser) -> None:
+        parser.add_argument('action', choices=actions)
+
+    def run(self):
+        actions[self.opts.action]()
 
 if __name__ == '__main__':
-    utils.init_logging()
-    main()
+    Command.main()

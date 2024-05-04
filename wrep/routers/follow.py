@@ -4,11 +4,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-import utils
-from models import *
+from .. import utils
+from ..models import *
 
 router = APIRouter()
-templates = Jinja2Templates(env=utils.jinja)
+templates = Jinja2Templates(env=utils.jinja_env())
 
 @router.get('/new')
 async def form(req: Request) -> HTMLResponse:

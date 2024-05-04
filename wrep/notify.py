@@ -1,25 +1,23 @@
 from __future__ import annotations
 
-import logging
-from argparse import ArgumentParser
+from . import utils
+from .models import Follow, Report
 
-import utils
-from models import Follow, Report
-
+logger = utils.get_logger('notify')
 template = 'email/notify.jinja'
 
 def notify(follow: Follow):
     if not follow.confirmed:
-        logging.warning(f'Skipping unconfirmed {follow=}')
+        logger.warning(f'Skipping unconfirmed {follow=}')
         return
     notified = utils.now()
     reports = get_reports(follow)
     if not reports:
-        logging.info(f'No new reports for {follow=}')
+        logger.info(f'No new reports for {follow=}')
         return
     subject = f'WARN Notice for {follow.company}'
     body = utils.render(template, reports=reports, follow=follow)
-    logging.info(f'Notifying {follow=} reports={len(reports)}')
+    logger.info(f'Notifying {follow=} reports={len(reports)}')
     if utils.send_email(follow.email, subject, body):
         follow.notified = notified
         follow.save()
@@ -36,11 +34,11 @@ def notify_all():
     for follow in Follow.select().where(Follow.confirmed):
         notify(follow)
 
-def main():
-    parser = ArgumentParser()
-    opts = parser.parse_args()
-    notify_all()
+class Command(utils.BaseCommand):
+    'Send follow notifications'
+
+    def run(self):
+        notify_all()
 
 if __name__ == '__main__':
-    utils.init_logging()
-    main()
+    Command.main()
