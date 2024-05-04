@@ -57,29 +57,21 @@ def logdicts(path: Path) -> Iterator[dict[str, str]]:
                 break
             yield json.loads(line)
 
-def parse_date(value: str, sane: bool = True) -> datetime|None:
+def parse_date(value: str) -> datetime|None:
     value = value or ''
     try:
         dt = dateutil.parser.parse(value, fuzzy=True)
-        dt.timestamp() # ValueError
-        if dt.year <= 1:
-            raise ValueError
-        if sane and not is_sane_year(dt.year):
-            raise ValueError
+        dt.timestamp()
         return dt
     except ValueError:
         pass
 
 def parse_int(value: str) -> int|None:
     value = value or ''
-    value = value.replace(',', '')
     try:
         return int(value)
     except ValueError:
         pass
-
-def is_sane_year(year: int) -> bool:
-    return 1980 <= year <= now().year + 10
 
 def render(template: str, *args, **kw) -> str:
     return jinja_env().get_template(template).render(*args, **kw)
