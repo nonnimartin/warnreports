@@ -1,4 +1,8 @@
 __pycache__
 .env
 *.db*
+*.sqlite*
 *.pyc
+/warn
+/warn-scraper
+/build
