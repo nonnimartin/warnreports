@@ -5,35 +5,13 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import warn.runner
-
 from . import utils
-from .models import Naics, NaicsReport, Report, State, db
-from .settings import BUILD_DIR
+from .models import Naics, NaicsReport, Report, db
+from .scrapers import scrapers, Scraper
 from .translators import translators
+from .utils import Stage
 
 logger = utils.get_logger('pipeline')
-
-class Stage(utils.StrEnum):
-    Extract = 'extract'
-    Translate = 'translate'
-    Load = 'load'
-
-    @property
-    def dir(self) -> Path:
-        return BUILD_DIR/self
-
-    @property
-    def ext(self) -> str|None:
-        if self is self.Extract:
-            return 'csv'
-        if self is self.Translate:
-            return 'log'
-
-    def file(self, state: State) -> Path|None:
-        if self.ext:
-            return Path(self.dir, f'{state.lower()}.{self.ext}')
-
 
 class Pipeline:
 
@@ -53,8 +31,9 @@ class Pipeline:
         'reported': utils.parse_date,
         'starting': utils.parse_date}
 
-    def __init__(self, state: State) -> None:
+    def __init__(self, state: str) -> None:
         self.state = state.upper()
+        self.scraper = scrapers.get(self.state, Scraper)(self.state)
         self.translator = translators[self.state]()
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
         self.summary = {}
@@ -70,6 +49,8 @@ class Pipeline:
         logger.info(f'clean {stage} {self.state}')
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
+        elif stage is stage.Extract:
+            self.scraper.clean()
         else:
             self.file(stage).unlink(missing_ok=True)
 
@@ -79,8 +60,7 @@ class Pipeline:
         hashes = dict(prev=utils.hashfile(file, missing_ok=True))
         if clean:
             self.clean(stage)
-        scraper = warn.runner.Runner(file.parent, file.parent/'cache')
-        scraper.scrape(self.state)
+        self.scraper.scrape()
         hashes.update(cur=utils.hashfile(file))
         change = len(set(hashes.values())) > 1
         size = file.stat().st_size

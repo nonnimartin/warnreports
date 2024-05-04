@@ -5,18 +5,19 @@ from datetime import datetime
 from typing import Any
 
 from . import utils
-from .models import HttpUrl, State, ValidationError
+from .models import HttpUrl, ValidationError
 
 PAT_SPACES = re.compile(r'\s+')
 PAT_NONDIGITS = re.compile(r'[^\d]+')
 logger = utils.get_logger('translators')
-translators: dict[State, type[Translator]] = {}
+translators: dict[str, type[Translator]] = {}
 
 _r = re.compile
 
 class Translator:
 
     headermap: dict[str, str] = {}
+    default_url: str|None = None
     rewrites: dict[str, list[tuple[str|re.Pattern, str]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
@@ -35,6 +36,7 @@ class Translator:
             value = self.value(field, row[header])
             if value:
                 entry[field] = value
+        self.finish(entry, row)
         return entry
 
     def value(self, field: str, value: str) -> Any:
@@ -98,6 +100,10 @@ class Translator:
                     value = srch.sub(repl, value)
         return value
 
+    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
+        if not entry.get('url') and self.default_url:
+            entry['url'] = self.default_url
+
     def parse_date(self, value: str) -> datetime|None:
         dt = utils.parse_date(value)
         if dt and (
@@ -133,7 +139,8 @@ class AK(Translator, state='AK'):
         'Location': 'location',
         'Employees Affected': 'employees',
         'Layoff Date': 'starting',
-        'Notes': 'action'
+        'Notes': 'action',
+        'url': 'url',
     }
     rewrites = dict(
         starting=[
@@ -144,6 +151,7 @@ class AK(Translator, state='AK'):
     )
 
 class AL(Translator, state='AL'):
+    default_url = 'https://www.madeinalabama.com/warn-list/'
     headermap = {
         'Company': 'company',
         'Initial Report Date': 'reported',
@@ -161,26 +169,32 @@ class AZ(Translator, state='AZ'):
         'number_of_employees_affected': 'employees',
         'Planned Starting Date': 'starting',
         'warn_type': 'action',
-        'detail_page_url': 'url'
+        'detail_page_url': 'url',
     }
 
 class CA(Translator, state='CA'):
+    default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
     headermap = {
         'company': 'company',
         'notice_date': 'reported',
         'address': 'location',
         'num_employees': 'employees',
         'layoff_or_closure': 'action',
-        'effective_date': 'starting'
+        'effective_date': 'starting',
+        'source_file': 'url',
     }
     rewrites = dict(
         starting=[
             ('03/30/3030', '2020-03-30'),
             ('03/09/2121', '2021-03-09'),
         ],
+        url=[
+            (_r(r'^(.+)$'), r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1'),
+        ]
     )
 
 class CO(Translator, state='CO'):
+    default_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'
     headermap = {
         'company': 'company',
         'notice_date': 'reported',
@@ -198,6 +212,8 @@ class CO(Translator, state='CO'):
     )
 
 class CT(Translator, state='CT'):
+    base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
+    default_url = f'{base_url}/warnreports.htm'
     headermap = {
         'affected_company': 'company',
         'warn_date': 'reported',
@@ -225,20 +241,27 @@ class CT(Translator, state='CT'):
         ],
     )
 
+    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
+        reported = entry.get('reported')
+        if isinstance(reported, datetime) and reported.year >= 2015:
+            entry['url'] = f'{self.base_url}/warn{reported.year}.htm'
+        super().finish(entry, row)
+
 class DC(Translator, state='DC'):
+    base_url = 'https://does.dc.gov'
+    default_url = f'{base_url}/page/rapid-response'
     headermap = {
         'Organization Name': 'company',
         'Notice Date': 'reported',
-        'city': 'location',
         'Number toEmployees Affected': 'employees',
-        'layoff_or_closure': 'action',
+        'Code Type': 'action',
         'Effective Layoff Date': 'starting'
     }
     rewrites = dict(
         reported=[
             ('May 2 and 5, 2020', '2020-05-05'),
             ('May 7,14 & 31, 2012', '2012-05-31'),
-            ('31, 2019', ''),
+            ('31, 2019', '2019-10-31'),
         ],
         starting=[
             ('February 28, 2022 March 31, 2022', '2022-02-28'),
@@ -250,7 +273,17 @@ class DC(Translator, state='DC'):
             ('May 31, 2012 June 15, 2012', '2012-05-31'),
             ('June 29, 2012 & August 3, 2012', '2012-06-29'),
         ],
+        action=[
+            ('1', 'Layoff'),
+            ('2', 'Permanent Closure'),
+        ],
     )
+
+    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
+        reported = entry.get('reported')
+        if isinstance(reported, datetime) and reported.year >= 2012 and reported.year != 2014:
+            entry['url'] = f'{self.base_url}/page/industry-closings-and-layoffs-warn-notifications-{reported.year}'
+        super().finish(entry, row)
 
 class DE(Translator, state='DE'):
     headermap = {
@@ -263,6 +296,7 @@ class DE(Translator, state='DE'):
     }
 
 class FL(Translator, state='FL'):
+    default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
     headermap = {
         'Company Name': 'company',
         'State Notification Date': 'reported',
@@ -272,8 +306,15 @@ class FL(Translator, state='FL'):
         'Layoff Date': 'starting'
     }
 
+    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
+        reported = entry.get('reported')
+        if isinstance(reported, datetime) and reported.year >= 2017:
+            entry['url'] = f'https://reactwarn.floridajobs.org/WarnList/viewPreviousYearsPDF?year={reported.year}'
+        super().finish(entry, row)
+
 class GA(Translator, state='GA'):
     # TODO: reported
+    default_url = 'https://www.tcsg.edu/warn-public-view/'
     headermap = {
         'Company Name': 'company',
         'Type of Layoff or Closure': 'action',
@@ -286,15 +327,15 @@ class GA(Translator, state='GA'):
     }
 
 class HI(Translator, state='HI'):
+    # TODO: starting
+    default_url = 'https://labor.hawaii.gov/wdc/real-time-warn-updates/'
     headermap = {
         'Company': 'company',
         'Date': 'reported',
         'location': 'location',
         'jobs': 'employees',
         'Notice Type': 'action',
-        # TODO: no data
-        'LO/CL Date': 'starting',
-        'PDF url': 'url'
+        'PDF url': 'url',
     }
     rewrites = dict(
         reported=[
@@ -303,6 +344,7 @@ class HI(Translator, state='HI'):
     )
 
 class IA(Translator, state='IA'):
+    default_url = 'https://workforce.iowa.gov/employers/business-resources/warn'
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
@@ -318,6 +360,7 @@ class IA(Translator, state='IA'):
     )
 
 class ID(Translator, state='ID'):
+    default_url = 'https://www.labor.idaho.gov/warnnotice/'
     headermap = {
         'Company': 'company',
         'Date of Letter': 'reported',
@@ -335,6 +378,7 @@ class ID(Translator, state='ID'):
     )
 
 class IL(Translator, state='IL'):
+    default_url = 'https://dceo.illinois.gov/workforcedevelopment/warn.html'
     headermap = {
         'Location Name': 'company',
         'Location City': 'location',
@@ -347,6 +391,7 @@ class IL(Translator, state='IL'):
     }
 
 class IN(Translator, state='IN'):
+    default_url = 'https://www.in.gov/dwd/warn-notices/current-warn-notices/'
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
@@ -382,6 +427,7 @@ class IN(Translator, state='IN'):
     )
 
 class KS(Translator, state='KS'):
+    default_url = 'https://www.kansasworks.com/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': 'reported',
@@ -389,10 +435,11 @@ class KS(Translator, state='KS'):
         'number_of_employees_affected': 'employees',
         'warn_type': 'action',
         'LO/CL Date': 'starting',
-        'detail_page_url': 'url'
+        'detail_page_url': 'url',
     }
 
 class KY(Translator, state='KY'):
+    default_url = 'https://kcc.ky.gov/Pages/News.aspx'
     headermap = {
         'Date Received': 'reported',
         'Company Name': 'company',
@@ -428,6 +475,7 @@ class KY(Translator, state='KY'):
     )
 
 class LA(Translator, state='LA'):
+    default_url = 'https://www.laworks.net'
     headermap = {
         'Company Name': 'company',
         'Notice Date': 'reported',
@@ -444,14 +492,22 @@ class LA(Translator, state='LA'):
         ],
     )
 
+    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
+        reported = entry.get('reported')
+        if isinstance(reported, datetime) and reported.year >= 2007:
+            entry['url'] = f'https://www.laworks.net/Downloads/WFD/WarnNotices{reported.year}.pdf'
+        super().finish(entry, row)
+
 class MD(Translator, state='MD'):
+    default_url = 'https://www.dllr.state.md.us/employment/warn.shtml'
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
         'Location': 'location',
         'Total Employees': 'employees',
         'Type': 'action',
-        'Effective Date': 'starting'
+        'Effective Date': 'starting',
+        'NAICS Code': 'naics',
     }
     rewrites = dict(
         starting=[
@@ -464,6 +520,10 @@ class MD(Translator, state='MD'):
             ('4/82011', '2011-08-04'),
             ('7/62011', '2011-06-07'),
         ],
+        reported=[
+            ('3/3020/17', '2017-03-30'),
+            ('5/62011', '2011-05-06'),
+        ],
         employees=[
             *Translator.rewrites['employees'],
             (_r(r'December 2013$'), ''),
@@ -471,6 +531,7 @@ class MD(Translator, state='MD'):
     )
 
 class ME(Translator, state='ME'):
+    default_url = 'https://joblink.maine.gov/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': 'reported',
@@ -485,6 +546,7 @@ class MI(Translator, state='MI'):
     headermap = {}
 
 class MO(Translator, state='MO'):
+    default_url = 'https://jobs.mo.gov/warn/'
     headermap = {
         'Title': 'company',
         'Received Sort descending': 'reported',
@@ -492,14 +554,7 @@ class MO(Translator, state='MO'):
         '# affected': 'employees',
         'Type': 'action',
         'Layoff date(s)': 'starting',
-        'NAICS Code': 'naics'
     }
-    rewrites = dict(
-        reported=[
-            ('3/3020/17', '2017-03-30'),
-            ('5/62011', '2011-05-06'),
-        ]
-    )
 
 class MT(Translator, state='MT'):
     # TODO
@@ -518,6 +573,7 @@ class NM(Translator, state='NM'):
     headermap = {}
 
 class NY(Translator, state='NY'):
+    default_url = 'https://dol.ny.gov/warn-notices'
     headermap = {
         'company_name': 'company',
         'Company': 'company',
@@ -541,6 +597,7 @@ class OH(Translator, state='OH'):
     headermap = {}
 
 class OK(Translator, state='OK'):
+    default_url = 'https://okjobmatch.com/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': 'reported',
@@ -551,14 +608,22 @@ class OK(Translator, state='OK'):
     }
 
 class OR(Translator, state='OR'):
+    base_url = 'https://ccwd.hecc.oregon.gov/Layoff/WARN'
+    default_url = base_url
     headermap = {
         'Company Name': 'company',
         'Received Date': 'reported',
         'Location': 'location',
         'Laid Off': 'employees',
         'Layoff Type': 'action',
-        'Layoff Date': 'starting'
+        'Layoff Date': 'starting',
+        'WARN#': 'url',
     }
+    rewrites = dict(
+        url=[
+            (_r(r'^(\d+)$'), f'{base_url}/UploadIndex/\\1'),
+        ]
+    )
 
 class RI(Translator, state='RI'):
     # TODO
@@ -566,6 +631,7 @@ class RI(Translator, state='RI'):
 
 class SC(Translator, state='SC'):
     # TODO: reported
+    default_url = 'https://scworks.org/employer/employer-programs/risk-closing/layoff-notification-reports'
     headermap = {
         'company': 'company',
         'date': 'starting',
@@ -589,6 +655,7 @@ class TN(Translator, state='TN'):
     headermap = {}
 
 class TX(Translator, state='TX'):
+    default_url = 'https://www.twc.texas.gov/data-reports/warn-notice'
     headermap = {
         'JOB_SITE_NAME': 'company',
         'NOTICE_DATE': 'reported',
@@ -605,6 +672,7 @@ class TX(Translator, state='TX'):
     )
 
 class UT(Translator, state='UT'):
+    default_url = 'https://jobs.utah.gov/employer/business/warnnotices.html'
     headermap = {
         'Company Name': 'company',
         'Date of Notice': 'reported',
@@ -622,6 +690,7 @@ class UT(Translator, state='UT'):
     )
 
 class VA(Translator, state='VA'):
+    default_url = 'https://www.vec.virginia.gov/warn-notices'
     headermap = {
         'Company Name': 'company',
         'Notice Date': 'reported',
@@ -637,6 +706,7 @@ class VA(Translator, state='VA'):
     )
 
 class VT(Translator, state='VT'):
+    default_url = 'https://www.vermontjoblink.com/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': 'reported',
@@ -652,6 +722,7 @@ class WA(Translator, state='WA'):
     headermap = {}
 
 class WI(Translator, state='WI'):
+    default_url = 'https://dwd.wisconsin.gov/dislocatedworker/warn/'
     headermap = {
         'Company': 'company',
         'Notice Received': 'reported',
@@ -664,7 +735,7 @@ class WI(Translator, state='WI'):
 
 class ReviewTable:
 
-    def __init__(self, state: State, field: str, empty: bool = False):
+    def __init__(self, state: str, field: str, empty: bool = False):
         self.state = state.upper()
         self.field = field
         self.empty = empty
@@ -676,8 +747,7 @@ class ReviewTable:
                 self.columns.append(header)
 
     def rows(self):
-        from .pipeline import Stage
-        file = Stage.Extract.file(self.state)
+        file = utils.Stage.Extract.file(self.state)
         it = map(self.values, utils.csvdicts(file))
         if not self.empty:
             it = filter(any, map(list, it))
@@ -692,13 +762,6 @@ class ReviewTable:
     def values(self, row: dict):
         yield self.translator.entry(row).get(self.field)
         yield from map(row.get, self.columns)
-
-    def validate(self):
-        for header in self.columns:
-            if header not in self.headermap:
-                raise ValueError(f'Unknown {header=}')
-        if self.field not in self.headermap.values():
-            raise ValueError(f'Unknown field={self.field}')
 
 class Command(utils.BaseCommand):
     """
@@ -724,22 +787,11 @@ class Command(utils.BaseCommand):
         self.tables = [
             ReviewTable(state, opts.field, opts.empty)
             for state in opts.states or translators]
-        self.errors = {}
-        for table in self.tables:
-            try:
-                table.validate()
-            except ValueError as err:
-                self.errors[table.state] = f'{table.state}: {err}'
 
     def run(self):
         import tabulate
         for table in self.tables:
-            if table.state in self.errors:
-                print(f'ERROR: {self.errors[table.state]}')
-            else:
-                print(tabulate.tabulate(table.rows(), table.headers()))
-        if len(self.errors) == len(self.tables):
-            raise Exception(f'No valid tables to print')
+            print(tabulate.tabulate(table.rows(), table.headers()))
 
 if __name__ == '__main__':
     try:
