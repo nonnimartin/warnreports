@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from html import unescape as html_unescape
 from typing import Any
 
 from . import utils
@@ -9,6 +10,14 @@ from .models import HttpUrl, ValidationError
 
 PAT_SPACES = re.compile(r'\s+')
 PAT_NONDIGITS = re.compile(r'[^\d]+')
+ASCII_TRANS = {
+    0x0009: ' ',
+    0x0080: ' ',
+    0x0093: '',
+    0x0095: ' ',
+    0x2013: '-',
+    0x2019: "'",
+}
 logger = utils.get_logger('translators')
 translators: dict[str, type[Translator]] = {}
 
@@ -62,12 +71,12 @@ class Translator:
         return max(filter(None, it), default=None)
 
     def value_company(self, value: str) -> str:
-        value = value.split('\n')[0].strip()
         value = PAT_SPACES.sub(' ', value)
+        value = value.strip()
         return value
 
     def value_action(self, value: str) -> str:
-        return value.strip('*').strip()
+        return value
 
     def value_url(self, value: str) -> str|None:
         try:
@@ -89,7 +98,7 @@ class Translator:
         return sorted(values)
 
     def sanitize(self, value: str) -> str:
-        return value.strip()
+        return value.translate(ASCII_TRANS).strip()
 
     def rewrite(self, field: str, value: str) -> str:
         if field in self.rewrites:
@@ -100,7 +109,7 @@ class Translator:
                     value = srch.sub(repl, value)
         return value
 
-    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
         if not entry.get('url') and self.default_url:
             entry['url'] = self.default_url
 
@@ -132,6 +141,22 @@ REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')
 # // -> /
 REWRITE_DOUBLE_SLASH = (_r('//'), '/')
 
+REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
+
+class ReportedYearToUrl(Translator):
+
+    reported_year_url_format: str = ''
+
+    def is_valid_url_year(self, year: int) -> bool:
+        return True
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        if not entry.get('url') and self.reported_year_url_format:
+            reported = entry.get('reported')
+            if isinstance(reported, datetime) and self.is_valid_url_year(reported.year):
+                entry['url'] = self.reported_year_url_format.format(year=reported.year)
+        super().finish(entry, row)
+
 class AK(Translator, state='AK'):
     headermap = {
         'Company': 'company',
@@ -158,8 +183,14 @@ class AL(Translator, state='AL'):
         'City': 'location',
         'Planned # Affected Employees': 'employees',
         'Closing or Layoff': 'action',
-        'Planned Starting Date': 'starting'
+        'Planned Starting Date': 'starting',
+        'record_number': 'report_id',
     }
+    rewrites = dict(
+        action=[
+            (_r(r'\s*\*$'), ''),
+        ]
+    )
 
 class AZ(Translator, state='AZ'):
     headermap = {
@@ -184,6 +215,13 @@ class CA(Translator, state='CA'):
         'source_file': 'url',
     }
     rewrites = dict(
+        company=[
+            REWRITE_UNESCAPE_HTML,
+            (_r(r'\*'), ''),
+            (_r(r'\n'), ' '),
+            (_r(r',$'), ''),
+            (_r(r'Bar- B-Que\.?'), 'Bar-B-Que'),
+        ],
         starting=[
             ('03/30/3030', '2020-03-30'),
             ('03/09/2121', '2021-03-09'),
@@ -211,9 +249,10 @@ class CO(Translator, state='CO'):
         ],
     )
 
-class CT(Translator, state='CT'):
+class CT(ReportedYearToUrl, state='CT'):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
     default_url = f'{base_url}/warnreports.htm'
+    reported_year_url_format = f'{base_url}/warn''{year}.htm'
     headermap = {
         'affected_company': 'company',
         'warn_date': 'reported',
@@ -241,15 +280,13 @@ class CT(Translator, state='CT'):
         ],
     )
 
-    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
-        reported = entry.get('reported')
-        if isinstance(reported, datetime) and reported.year >= 2015:
-            entry['url'] = f'{self.base_url}/warn{reported.year}.htm'
-        super().finish(entry, row)
+    def is_valid_url_year(self, year: int) -> bool:
+        return year >= 2015
 
-class DC(Translator, state='DC'):
+class DC(ReportedYearToUrl, state='DC'):
     base_url = 'https://does.dc.gov'
     default_url = f'{base_url}/page/rapid-response'
+    reported_year_url_format = f'{base_url}/page/industry-closings-and-layoffs-warn-notifications-''{year}'
     headermap = {
         'Organization Name': 'company',
         'Notice Date': 'reported',
@@ -279,11 +316,8 @@ class DC(Translator, state='DC'):
         ],
     )
 
-    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
-        reported = entry.get('reported')
-        if isinstance(reported, datetime) and reported.year >= 2012 and reported.year != 2014:
-            entry['url'] = f'{self.base_url}/page/industry-closings-and-layoffs-warn-notifications-{reported.year}'
-        super().finish(entry, row)
+    def is_valid_url_year(self, year: int) -> bool:
+        return year >= 2012 and year != 2014
 
 class DE(Translator, state='DE'):
     headermap = {
@@ -294,9 +328,9 @@ class DE(Translator, state='DE'):
         'warn_type': 'action',
         'detail_page_url': 'url'
     }
-
-class FL(Translator, state='FL'):
+class FL(ReportedYearToUrl, state='FL'):
     default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
+    reported_year_url_format = 'https://reactwarn.floridajobs.org/WarnList/viewPreviousYearsPDF?year={year}'
     headermap = {
         'Company Name': 'company',
         'State Notification Date': 'reported',
@@ -305,12 +339,14 @@ class FL(Translator, state='FL'):
         'Notice Type': 'action',
         'Layoff Date': 'starting'
     }
+    rewrites = dict(
+        company=[
+            (_r(r'\n.*'), ''),
+        ],
+    )
 
-    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
-        reported = entry.get('reported')
-        if isinstance(reported, datetime) and reported.year >= 2017:
-            entry['url'] = f'https://reactwarn.floridajobs.org/WarnList/viewPreviousYearsPDF?year={reported.year}'
-        super().finish(entry, row)
+    def is_valid_url_year(self, year: int) -> bool:
+        return year >= 2017
 
 class GA(Translator, state='GA'):
     # TODO: reported
@@ -389,6 +425,11 @@ class IL(Translator, state='IL'):
         'Layoff Type': 'action',
         'NAICS Codes': 'naics'
     }
+    rewrites = dict(
+        company=[
+            (_r(r'\*'), ''),
+        ],
+    )
 
 class IN(Translator, state='IN'):
     default_url = 'https://www.in.gov/dwd/warn-notices/current-warn-notices/'
@@ -402,6 +443,16 @@ class IN(Translator, state='IN'):
         'NAICS': 'naics'
     }
     rewrites = dict(
+        company=[
+            (_r(r'\n.*'), ''),
+            (_r(r'\s*-\s*Revised.*'), ''),
+            (_r(r'Revised \(.*\)$'), ''),
+            (_r(r'Additional Documents \(.*\)$'), ''),
+            (_r(r'\(Furlough Count by Position\)'), ''),
+            (_r(r'\(Doc \d.*\)$'), ''),
+            (_r(r'\(additional information and notice\)$'), ''),
+            (_r(r'Attachment \d+$'), ''),
+        ],
         starting=[
             REWRITE_COMPACT_DATERANGE,
             ('December 2020', '2020-12-01'),
@@ -437,6 +488,13 @@ class KS(Translator, state='KS'):
         'LO/CL Date': 'starting',
         'detail_page_url': 'url',
     }
+    rewrites = dict(
+        company=[
+            (_r(r'[,\']$'), ''),
+            (_r(r'^wal-mart$', re.I), 'Walmart'),
+            ("Walgreen's", 'Walgreens'),
+        ],
+    )
 
 class KY(Translator, state='KY'):
     default_url = 'https://kcc.ky.gov/Pages/News.aspx'
@@ -451,6 +509,9 @@ class KY(Translator, state='KY'):
         'NAICS Code': 'naics'
     }
     rewrites = dict(
+        company=[
+            (_r(r'\(EXTENSION OF CONDITIONAL WARN\)'), ''),
+        ],
         starting=[
             ('Mid-January 2009', '2009-01-15'),
             ('November and December 2008', '2008-11-01'),
@@ -474,8 +535,10 @@ class KY(Translator, state='KY'):
         ],
     )
 
-class LA(Translator, state='LA'):
-    default_url = 'https://www.laworks.net'
+class LA(ReportedYearToUrl, state='LA'):
+    base_url = 'https://www.laworks.net'
+    default_url = base_url
+    reported_year_url_format = f'{base_url}/Downloads/WFD/WarnNotices''{year}.pdf'
     headermap = {
         'Company Name': 'company',
         'Notice Date': 'reported',
@@ -492,11 +555,8 @@ class LA(Translator, state='LA'):
         ],
     )
 
-    def finish(self, entry: dict[str, str], row: dict[str, str]) -> None:
-        reported = entry.get('reported')
-        if isinstance(reported, datetime) and reported.year >= 2007:
-            entry['url'] = f'https://www.laworks.net/Downloads/WFD/WarnNotices{reported.year}.pdf'
-        super().finish(entry, row)
+    def is_valid_url_year(self, year: int) -> bool:
+        return year >= 2007
 
 class MD(Translator, state='MD'):
     default_url = 'https://www.dllr.state.md.us/employment/warn.shtml'
@@ -527,7 +587,12 @@ class MD(Translator, state='MD'):
         employees=[
             *Translator.rewrites['employees'],
             (_r(r'December 2013$'), ''),
-        ]
+        ],
+        action=[
+            (_r(r'^1(\s.*)?$'), 'Plant Closure'),
+            (_r(r'^2(\s.*)?$'), 'Mass Layoff'),
+            ('N/A', ''),
+        ],
     )
 
 class ME(Translator, state='ME'):
@@ -606,6 +671,17 @@ class OK(Translator, state='OK'):
         'warn_type': 'action',
         'detail_page_url': 'url'
     }
+    rewrites = dict(
+        company=[
+            (_r(r'^K[\s-]?mar?t$', re.I), 'Kmart'),
+            (_r(r'Hopitality'), 'Hospitality'),
+            ('Haliburton Coorperation', 'Halliburton'),
+            ('Haliburton', 'Halliburton'),
+            ('Siemans Health Services', 'Siemens Health Services'),
+            ('Weyerhauser', 'Weyerhaeuser'),
+            ('Weyerhouser', 'Weyerhaeuser'),
+        ],
+    )
 
 class OR(Translator, state='OR'):
     base_url = 'https://ccwd.hecc.oregon.gov/Layoff/WARN'
@@ -618,8 +694,14 @@ class OR(Translator, state='OR'):
         'Layoff Type': 'action',
         'Layoff Date': 'starting',
         'WARN#': 'url',
+        'WARN#': 'report_id',
     }
     rewrites = dict(
+        company=[
+            (_r(r'^K[\s-]?mart', re.I), 'Kmart'),
+            (_r(r'^Kmart-', re.I), 'Kmart - '),
+            (_r(r'[,]$'), ''),
+        ],
         url=[
             (_r(r'^(\d+)$'), f'{base_url}/UploadIndex/\\1'),
         ]
@@ -640,6 +722,10 @@ class SC(Translator, state='SC'):
         'Layoff Type': 'action'
     }
     rewrites = dict(
+        company=[
+            (_r('Servces'), 'Services'),
+            # TODO: Snake-cased names - bug in scraper?
+        ],
         starting=[
             REWRITE_DOUBLE_SLASH,
             ('4/8/20/20', '2020-04-08'),
@@ -662,9 +748,13 @@ class TX(Translator, state='TX'):
         'CITY_NAME': 'location',
         'TOTAL_LAYOFF_NUMBER': 'employees',
         'Layoff Type': 'action',
-        'LayOff_Date': 'starting'
+        'LayOff_Date': 'starting',
     }
     rewrites = dict(
+        company=[
+            (_r('_x000D_'), ''),
+            # TODO: Dallas4 Plano2 etc.
+        ],
         starting=[
             ('1930-03-30 00:00:00', '2020-03-30'),
             ('1930-03-31 00:00:00', '2020-03-31'),
@@ -682,6 +772,12 @@ class UT(Translator, state='UT'):
         'Layoff Date': 'starting'
     }
     rewrites = dict(
+        company=[
+            (_r(r'â'), ''),
+            (_r(r'navbar-headers'), ''),
+            (_r(r'\s*\(Amended\)$'), ''),
+            (_r(r'PremiumWindows'), 'Premium Windows'),
+        ],
         reported=[
             REWRITE_DOUBLE_SLASH,
             ('09/31/10', '2010-09-30'),
@@ -731,6 +827,11 @@ class WI(Translator, state='WI'):
         'Original Notice Type / Update Type': 'action',
         'Layoff Begin Date': 'starting'
     }
+    rewrites = dict(
+        company=[
+            (_r(r'\s*\(CORRECTED\)$'), ''),
+        ],
+    )
 
 
 class ReviewTable:
@@ -782,6 +883,10 @@ class Command(utils.BaseCommand):
             '--empty', '-e',
             action='store_true',
             help='Include empty values')
+        parser.add_argument(
+            '--sort', '-o',
+            action='store_true',
+            help='Sort')
 
     def setup(self, opts):
         self.tables = [
@@ -791,7 +896,10 @@ class Command(utils.BaseCommand):
     def run(self):
         import tabulate
         for table in self.tables:
-            print(tabulate.tabulate(table.rows(), table.headers()))
+            rows = table.rows()
+            if self.opts.sort:
+                rows = sorted(rows)
+            print(tabulate.tabulate(rows, table.headers()))
 
 if __name__ == '__main__':
     try:
