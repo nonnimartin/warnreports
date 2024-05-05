@@ -278,6 +278,10 @@ class CT(ReportedYearToUrl, state='CT'):
             ('3/16 - 12/13/2020', '2020-03-16'),
             ('February - March 2023', '2023-02-01'),
         ],
+        location=[
+            ('Not Indicated', ''),
+            ('CT', ''),
+        ]
     )
 
     def is_valid_url_year(self, year: int) -> bool:
@@ -361,6 +365,11 @@ class GA(Translator, state='GA'):
         'County': 'location',
         'NAICS': 'naics'
     }
+    rewrites = dict(
+        location=[
+            ('Sm\\', ''),
+        ]
+    )
 
 class HI(Translator, state='HI'):
     # TODO: starting
@@ -694,7 +703,7 @@ class OR(Translator, state='OR'):
         'Layoff Type': 'action',
         'Layoff Date': 'starting',
         'WARN#': 'url',
-        'WARN#': 'report_id',
+        # 'WARN#': 'report_id',
     }
     rewrites = dict(
         company=[
@@ -706,6 +715,11 @@ class OR(Translator, state='OR'):
             (_r(r'^(\d+)$'), f'{base_url}/UploadIndex/\\1'),
         ]
     )
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        if row.get('WARN#'):
+            entry['report_id'] = row['WARN#']
+        super().finish(entry, row)
 
 class RI(Translator, state='RI'):
     # TODO
