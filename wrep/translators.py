@@ -39,12 +39,17 @@ class Translator:
     def entry(self, row: dict[str, Any]) -> dict[str, Any]:
         'Translate a source row to an entry'
         entry = {}
-        for header, field in self.headermap.items():
-            if header not in row or field in entry:
+        for header, fields in self.headermap.items():
+            if header not in row:
                 continue
-            value = self.value(field, row[header])
-            if value:
-                entry[field] = value
+            if isinstance(fields, str):
+                fields = [fields]
+            for field in fields:
+                if field in entry:
+                    continue
+                value = self.value(field, row[header])
+                if value is not None and value != '':
+                    entry[field] = value
         self.finish(entry, row)
         return entry
 
@@ -702,8 +707,7 @@ class OR(Translator, state='OR'):
         'Laid Off': 'employees',
         'Layoff Type': 'action',
         'Layoff Date': 'starting',
-        'WARN#': 'url',
-        # 'WARN#': 'report_id',
+        'WARN#': ['url', 'report_id'],
     }
     rewrites = dict(
         company=[
@@ -715,11 +719,6 @@ class OR(Translator, state='OR'):
             (_r(r'^(\d+)$'), f'{base_url}/UploadIndex/\\1'),
         ]
     )
-
-    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
-        if row.get('WARN#'):
-            entry['report_id'] = row['WARN#']
-        super().finish(entry, row)
 
 class RI(Translator, state='RI'):
     # TODO
@@ -857,9 +856,12 @@ class ReviewTable:
         self.translator = translators[self.state]()
         self.headermap = self.translator.headermap
         self.columns = []
-        for header, field in self.headermap.items():
-            if field == self.field:
-                self.columns.append(header)
+        for header, fields in self.headermap.items():
+            if isinstance(fields, str):
+                fields = [fields]
+            for field in fields:
+                if field == self.field:
+                    self.columns.append(header)
 
     def rows(self):
         file = utils.Stage.Extract.file(self.state)
