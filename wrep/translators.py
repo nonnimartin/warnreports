@@ -153,16 +153,19 @@ REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
 
 class ReportedYearToUrl(Translator):
 
-    reported_year_url_format: str = ''
-
     def is_valid_url_year(self, year: int) -> bool:
         return True
 
+    def get_reported_year_url(self, year: int) -> str|None:
+        pass
+
     def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
-        if not entry.get('url') and self.reported_year_url_format:
+        if not entry.get('url'):
             reported = entry.get('reported')
             if isinstance(reported, datetime) and self.is_valid_url_year(reported.year):
-                entry['url'] = self.reported_year_url_format.format(year=reported.year)
+                url = self.get_reported_year_url(reported.year)
+                if url:
+                    entry['url'] = url
         super().finish(entry, row)
 
 class AK(Translator, state='AK'):
@@ -265,7 +268,6 @@ class CO(Translator, state='CO'):
 class CT(ReportedYearToUrl, state='CT'):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
     default_url = f'{base_url}/warnreports.htm'
-    reported_year_url_format = f'{base_url}/warn''{year}.htm'
     headermap = {
         'affected_company': 'company',
         'warn_date': 'reported',
@@ -297,13 +299,15 @@ class CT(ReportedYearToUrl, state='CT'):
         ]
     )
 
+    def get_reported_year_url(self, year: int) -> str | None:
+        return f'{self.base_url}/warn{year}.htm'
+
     def is_valid_url_year(self, year: int) -> bool:
         return year >= 2015
 
 class DC(ReportedYearToUrl, state='DC'):
     base_url = 'https://does.dc.gov'
     default_url = f'{base_url}/page/rapid-response'
-    reported_year_url_format = f'{base_url}/page/industry-closings-and-layoffs-warn-notifications-''{year}'
     headermap = {
         'Organization Name': 'company',
         'Notice Date': 'reported',
@@ -333,6 +337,9 @@ class DC(ReportedYearToUrl, state='DC'):
         ],
     )
 
+    def get_reported_year_url(self, year: int) -> str:
+        return f'{self.base_url}/page/industry-closings-and-layoffs-warn-notifications-{year}'
+
     def is_valid_url_year(self, year: int) -> bool:
         return year >= 2012 and year != 2014
 
@@ -347,21 +354,29 @@ class DE(Translator, state='DE'):
     }
 
 class FL(ReportedYearToUrl, state='FL'):
-    default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
-    reported_year_url_format = 'https://reactwarn.floridajobs.org/WarnList/viewPreviousYearsPDF?year={year}'
+    base_url = 'https://floridajobs.org'
+    default_url = f'{base_url}/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
     headermap = {
         'Company Name': 'company',
         'State Notification Date': 'reported',
         'City': 'location',
         'Employees Affected': 'employees',
         'Notice Type': 'action',
-        'Layoff Date': 'starting'
+        'Layoff Date': 'starting',
+        'download': 'url',
     }
     rewrites = dict(
         company=[
             (_r(r'\n.*'), ''),
         ],
+        url=[
+            (_r(r'^(.+)$'), r'https://reactwarn.floridajobs.org/WarnList/DownloadAzureFile?file=\1')
+        ]
     )
+
+    def get_reported_year_url(self, year: int) -> str:
+        action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
+        return f'https://reactwarn.floridajobs.org/WarnList/{action}?year={year}'
 
     def is_valid_url_year(self, year: int) -> bool:
         return year >= 2017
@@ -467,8 +482,9 @@ class IL(Translator, state='IL'):
         'Last Report Date': 'reported',
         'Initial Date Reported': 'reported',
         'Impact Date': 'starting',
-        'Layoff Type': 'action',
-        'NAICS Codes': 'naics'
+        'Reason': 'action',
+        'NAICS Codes': 'naics',
+        'IEBS Id': 'report_id',
     }
     rewrites = dict(
         company=[
@@ -594,7 +610,6 @@ class KY(Translator, state='KY'):
 class LA(ReportedYearToUrl, state='LA'):
     base_url = 'https://www.laworks.net'
     default_url = base_url
-    reported_year_url_format = f'{base_url}/Downloads/WFD/WarnNotices''{year}.pdf'
     headermap = {
         'Company Name': 'company',
         'Notice Date': 'reported',
@@ -610,6 +625,9 @@ class LA(ReportedYearToUrl, state='LA'):
             ('5/1820', '2018-05-18'),
         ],
     )
+
+    def get_reported_year_url(self, year: int) -> str:
+        return f'{self.base_url}/Downloads/WFD/WarnNotices{year}.pdf'
 
     def is_valid_url_year(self, year: int) -> bool:
         return year >= 2007
@@ -948,6 +966,10 @@ class Command(utils.BaseCommand):
             action='store_true',
             help='Sort')
         parser.add_argument(
+            '--reverse', '-r',
+            action='store_true',
+            help='Reverse')
+        parser.add_argument(
             '--limit', '-l',
             type=int,
             default=None,
@@ -968,18 +990,20 @@ class Command(utils.BaseCommand):
             table = ReviewTable(state, self.opts.field, self.opts.empty)
             it = table.rows(limit=self.opts.limit)
             if self.opts.sort:
-                it = sorted(it, key=tuple)
+                it = sorted(it, key=tuple, reverse=self.opts.reverse)
             print(tabulate.tabulate(it, table.headers()))
 
     def run_entries(self):
         for state in self.states:
             translator = translators[state]()
             file = utils.Stage.Extract.file(state)
-            with utils.csvdicts(file) as reader:
-                entries = [
+            with utils.csvdicts(file) as it:
+                if self.opts.reverse:
+                    it = reversed(list(it))
+                it = [
                     dict(state=state) | translator.entry(row) | dict(row=row)
-                    for row in itertools.islice(reader, self.opts.limit)]
-            print(json.dumps(entries, indent=2, default=utils.json_default))
+                    for row in itertools.islice(it, self.opts.limit)]
+            print(json.dumps(it, indent=2, default=utils.json_default))
 
 if __name__ == '__main__':
     try:

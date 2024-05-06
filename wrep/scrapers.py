@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import csv
+import glob
 import itertools
 import json
 import re
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import requests
 from bs4 import BeautifulSoup
@@ -193,6 +194,42 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
+class FL(Scraper, state='FL'):
+
+    def scrape(self) -> None:
+        super().scrape()
+        self.augment()
+
+    def augment(self):
+        lookup = dict(self.fetch_lookup())
+        newfile = Path(f'{self.file}.new')
+        with newfile.open('w') as file:
+            writer = csv.writer(file)
+            with self.file.open() as file:
+                reader = csv.reader(file)
+                writer.writerow(next(reader) + ['download'])
+                for values in reader:
+                    key = self.row_key(values)
+                    values.append(lookup.get(key, ''))
+                    writer.writerow(values)
+        newfile.rename(self.file)
+
+    def fetch_lookup(self):
+        for file in glob.glob(f'{self.cache.path}/*_page_*.html'):
+            with open(file) as f:
+                tbody = BeautifulSoup(f, 'html5lib').find('table').find('tbody')
+            for tr in tbody.find_all('tr'):
+                tds = tr.find_all('td')
+                last = tds.pop()
+                if last.find('input', id='download'):
+                    el = last.find('input', type='hidden')
+                    if el:
+                        key = self.row_key(td.text for td in tds)
+                        yield key, el['value']
+
+    def row_key(self, values: Iterable[str]) -> str:
+        return ''.join(re.sub(r'\s', '', value) for value in values)
+            
 def create_scraper(state: str):
     class DefaultScraper(Scraper):
         pass
