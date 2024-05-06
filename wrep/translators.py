@@ -337,6 +337,7 @@ class DE(Translator, state='DE'):
         'warn_type': 'action',
         'detail_page_url': 'url'
     }
+
 class FL(ReportedYearToUrl, state='FL'):
     default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
     reported_year_url_format = 'https://reactwarn.floridajobs.org/WarnList/viewPreviousYearsPDF?year={year}'
@@ -358,23 +359,45 @@ class FL(ReportedYearToUrl, state='FL'):
         return year >= 2017
 
 class GA(Translator, state='GA'):
-    # TODO: reported
+    """
+    Best effort to populated reported date:
+
+    1. Custom scraper collects 'submitted_date'. If this exists, use it. This should
+       be valid for new reports.
+
+    2. For historical reports, extract the year from 'GA WARN ID' and use Dec. 31
+       of that year. However, if the starting date ('First Date of Separation')
+       is earlier, use that.
+    """
     default_url = 'https://www.tcsg.edu/warn-public-view/'
     headermap = {
         'Company Name': 'company',
+        'submitted_date': 'reported',
+        'GA WARN ID': ['report_id', 'reported'],
         'Type of Layoff or Closure': 'action',
-        'First Date of Separation': 'starting',
+        'First Date of Separation': ['starting', 'reported'],
         'Number of Employees Affected': 'employees',
         'Total Number of Affected Employees': 'employees',
         'First Location Address': 'location',
         'County': 'location',
-        'NAICS': 'naics'
+        'NAICS': 'naics',
+        'entry_url': 'url',
     }
     rewrites = dict(
+        reported=[
+            (_r(r'^(\d{4})(\d{2})\d[A-Z]$'), r'\1-12-31'),
+            (_r(r'^(GA|FL|LA)(\d{4})\d{5,}[A-Z]?$'), r'\2-12-31'),
+        ],
         location=[
             ('Sm\\', ''),
         ]
     )
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        if not row.get('submitted_date'):
+            it = map(entry.get, ['reported', 'starting'])
+            entry['reported'] = min(filter(None, it), default=None)
+        super().finish(entry, row)
 
 class HI(Translator, state='HI'):
     # TODO: starting
