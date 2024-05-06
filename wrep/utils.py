@@ -40,14 +40,7 @@ def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|Non
 
 def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
     with open(path) as file:
-        reader = csv.reader(file, **kw)
-        try:
-            keys = next(reader)
-        except StopIteration:
-            logger.warning(f'Empty CSV: {path}')
-            return
-        for values in reader:
-            yield dict(zip(keys, values))
+        yield from csv.DictReader(file, **kw)
 
 def logdicts(path: Path) -> Iterator[dict[str, str]]:
     with open(path) as file:
