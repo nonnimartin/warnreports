@@ -8,7 +8,7 @@ from typing import Any
 
 from . import utils
 from .models import Naics, NaicsReport, Report, db
-from .scrapers import Scraper, scrapers
+from .scrapers import scrapers
 from .translators import translators
 from .utils import Stage
 
@@ -34,7 +34,7 @@ class Pipeline:
 
     def __init__(self, state: str) -> None:
         self.state = state.upper()
-        self.scraper = scrapers.get(self.state, Scraper)(self.state)
+        self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
         self.summary = {}
@@ -57,7 +57,7 @@ class Pipeline:
 
     def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
-        file = self.file(stage)
+        file = self.scraper.file
         hashes = dict(prev=utils.hashfile(file, missing_ok=True))
         if clean:
             self.clean(stage)
@@ -156,9 +156,9 @@ class Pipeline:
 
     @contextmanager
     def ctx_translate(self):
-        src, dest = map(self.file, (Stage.Extract, Stage.Translate))
+        dest = self.file(Stage.Translate)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with utils.csvdicts(src) as reader:
+        with utils.csvdicts(self.scraper.file) as reader:
             with dest.open('w') as writer:
                 yield reader, writer
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import itertools
+import json
 import re
 from datetime import datetime
 from html import unescape as html_unescape
@@ -15,6 +17,7 @@ ASCII_TRANS = {
     0x0080: ' ',
     0x0093: '',
     0x0095: ' ',
+    0x00a0: ' ',
     0x2013: '-',
     0x2019: "'",
 }
@@ -92,7 +95,7 @@ class Translator:
 
     def value_naics(self, value: str) -> list[int]:
         values = set()
-        for value in re.split(r'[\s,]+', value):
+        for value in re.split(r'[\s,:/]+', value):
             if value in ('31-33', '44-45', '48-49'):
                 minmax = list(map(int, value.split('-')))
                 values.update(range(minmax[0], minmax[1] + 1))
@@ -240,11 +243,13 @@ class CO(Translator, state='CO'):
     default_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'
     headermap = {
         'company': 'company',
+        'received_date': 'reported',
         'notice_date': 'reported',
         'city': 'location',
         'jobs': 'employees',
-        'occupations': 'action',
-        'begin_date': 'starting'
+        'reason': 'action',
+        'begin_date': 'starting',
+        'naics': 'naics',
     }
     rewrites = dict(
         starting=[
@@ -252,6 +257,9 @@ class CO(Translator, state='CO'):
             ('4/3020', '2020-04-30'),
             ('4/6', ''),
         ],
+        naics=[
+            (_r(r'-[-\s]'), r' '),
+        ]
     )
 
 class CT(ReportedYearToUrl, state='CT'):
@@ -469,7 +477,8 @@ class IL(Translator, state='IL'):
     )
 
 class IN(Translator, state='IN'):
-    default_url = 'https://www.in.gov/dwd/warn-notices/current-warn-notices/'
+    base_url = 'https://www.in.gov'
+    default_url = f'{base_url}/dwd/warn-notices/current-warn-notices/'
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
@@ -477,7 +486,8 @@ class IN(Translator, state='IN'):
         'Affected Workers': 'employees',
         'Notice Type': 'action',
         'LO/CL Date': 'starting',
-        'NAICS': 'naics'
+        'NAICS': 'naics',
+        'url': 'url',
     }
     rewrites = dict(
         company=[
@@ -512,6 +522,18 @@ class IN(Translator, state='IN'):
             ('01/23/2009-2010', '2009-01-23'),
             ('08/23/2008-2010', '2008-08-23'),
         ],
+        action=[
+            (_r(r'LO'), 'Layoff'),
+            (_r(r'CL'), 'Closure'),
+            (_r(r'TR'), 'Transfer'),
+            (_r(r'RH'), 'Reduction in Hours'),
+            (_r(r'Cond.'), 'Conditional'),
+            ('W', 'WARN Notice'),
+            ('N/A', ''),
+        ],
+        naics=[
+            (_r(r'^(\d{6})0+$'), r'\1'),
+        ]
     )
 
 class KS(Translator, state='KS'):
@@ -566,9 +588,6 @@ class KY(Translator, state='KY'):
             ('Q4, 2014 and are expected to end in Q2, 2015', '2014-10-01'),
             ('21 jobs beginning December 31, 2014,  See WARN', '2014-12-31'),
             ('September 19, 2014/See WARN', '2014-09-19'),
-        ],
-        naics=[
-            (_r(r'/'), ', '),
         ],
     )
 
@@ -886,13 +905,14 @@ class ReviewTable:
                 if field == self.field:
                     self.columns.append(header)
 
-    def rows(self):
+    def rows(self, limit: int|None = None):
         file = utils.Stage.Extract.file(self.state)
-        it = map(self.values, utils.csvdicts(file))
-        if not self.empty:
-            it = filter(any, map(list, it))
-        for values in it:
-            yield [self.state, *values]
+        with utils.csvdicts(file) as reader:
+            it = map(list, map(self.values, reader))
+            it = itertools.islice(it, limit)
+            if not self.empty:
+                it = filter(lambda x: any(x[1:]), it)
+            yield from it
 
     def headers(self):
         yield 'state'
@@ -900,6 +920,7 @@ class ReviewTable:
         yield from self.columns
 
     def values(self, row: dict):
+        yield self.state
         yield self.translator.entry(row).get(self.field)
         yield from map(row.get, self.columns)
 
@@ -926,19 +947,39 @@ class Command(utils.BaseCommand):
             '--sort', '-o',
             action='store_true',
             help='Sort')
+        parser.add_argument(
+            '--limit', '-l',
+            type=int,
+            default=None,
+            help='Limit')
 
     def setup(self, opts):
-        self.tables = [
-            ReviewTable(state, opts.field, opts.empty)
-            for state in opts.states or translators]
+        self.states = list(opts.states or translators)
 
     def run(self):
+        if self.opts.field == 'entries':
+            self.run_entries()
+        else:
+            self.run_tables()
+
+    def run_tables(self):
         import tabulate
-        for table in self.tables:
-            rows = table.rows()
+        for state in self.states:
+            table = ReviewTable(state, self.opts.field, self.opts.empty)
+            it = table.rows(limit=self.opts.limit)
             if self.opts.sort:
-                rows = sorted(rows)
-            print(tabulate.tabulate(rows, table.headers()))
+                it = sorted(it, key=tuple)
+            print(tabulate.tabulate(it, table.headers()))
+
+    def run_entries(self):
+        for state in self.states:
+            translator = translators[state]()
+            file = utils.Stage.Extract.file(state)
+            with utils.csvdicts(file) as reader:
+                entries = [
+                    dict(state=state) | translator.entry(row) | dict(row=row)
+                    for row in itertools.islice(reader, self.opts.limit)]
+            print(json.dumps(entries, indent=2, default=utils.json_default))
 
 if __name__ == '__main__':
     try:
