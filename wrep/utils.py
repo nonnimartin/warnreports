@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 import enum
 import hashlib
+import io
 import json
 import logging
 from argparse import ArgumentParser
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -15,6 +17,7 @@ from uuid import UUID
 import dateutil.parser
 
 from . import settings
+
 
 def get_logger(name: str|None = None) -> logging.Logger:
     if name:
@@ -38,17 +41,22 @@ def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|Non
         if not missing_ok:
             raise
 
-def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
+@contextmanager
+def csvdicts(path: Path, **kw):
     with open(path) as file:
-        yield from csv.DictReader(file, **kw)
+        yield csv.DictReader(file, **kw)
 
-def logdicts(path: Path) -> Iterator[dict[str, str]]:
+@contextmanager
+def logdicts(path: Path):
     with open(path) as file:
-        while True:
-            line = file.readline()
-            if not line:
-                break
-            yield json.loads(line)
+        yield logdict_reader(file)
+
+def logdict_reader(file: io.TextIOWrapper) -> Iterator[dict[str, str]]:
+    while True:
+        line = file.readline()
+        if not line:
+            break
+        yield json.loads(line)
 
 def parse_date(value: str) -> datetime|None:
     value = value or ''
@@ -68,7 +76,7 @@ def parse_int(value: str) -> int|None:
 
 def render(template: str, *args, **kw) -> str:
     return jinja_env().get_template(template).render(*args, **kw)
-    
+
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from . import utils
 from .models import Naics, NaicsReport, Report, db
-from .scrapers import scrapers, Scraper
+from .scrapers import Scraper, scrapers
 from .translators import translators
 from .utils import Stage
 
@@ -72,13 +73,11 @@ class Pipeline:
         hashes = dict(prev=utils.hashfile(file, missing_ok=True))
         if clean:
             self.clean(stage)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        with file.open('w') as writer:
+        with self.ctx_translate() as (reader, writer):
             count = 0
-            it = utils.csvdicts(self.file(stage.Extract))
-            for count, row in enumerate(it, start=1):
-                entry = dict(id=self.row_uuid(row), row=row)
-                entry = self.translator.entry(row) | entry
+            for count, row in enumerate(reader, start=1):
+                entry = self.translator.entry(row)
+                entry.update(id=self.entry_uuid(entry, row), row=row)
                 json.dump(entry, writer, default=utils.json_default)
                 writer.write('\n')
         hashes.update(cur=utils.hashfile(file))
@@ -89,11 +88,10 @@ class Pipeline:
     def load(self, clean: bool = False) -> dict:
         stage = Stage.Load
         counts = dict.fromkeys(map(str, SaveType), 0)
-        it = utils.logdicts(self.file(stage.Translate))
-        with db.atomic():
+        with self.ctx_load() as reader:
             if clean:
                 self.clean(stage)
-            for entry in it:
+            for entry in reader:
                 counts[self.save(entry)] += 1
         return counts | dict(total=sum(counts.values()))
 
@@ -147,13 +145,28 @@ class Pipeline:
     def file(self, stage: Stage) -> Path|None:
         return Stage(stage).file(self.state)
 
-    def row_uuid(self, row: dict[str, str]) -> uuid.UUID:
-        return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
+    def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
+        src = entry.get('report_id') or json.dumps(list(row.values()))
+        return uuid.uuid5(self.namespace, src)
 
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:
             value = self.json_types[field](value)
         return value
+
+    @contextmanager
+    def ctx_translate(self):
+        src, dest = map(self.file, (Stage.Extract, Stage.Translate))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with utils.csvdicts(src) as reader:
+            with dest.open('w') as writer:
+                yield reader, writer
+
+    @contextmanager
+    def ctx_load(self):
+        with utils.logdicts(self.file(Stage.Translate)) as reader:
+            with db.atomic():
+                yield reader
 
 class SaveType(utils.StrEnum):
     Create = 'create'
