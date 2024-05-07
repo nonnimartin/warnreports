@@ -3,6 +3,7 @@ boto3
 fastapi
 feedgen
 jinja2
+motor
 peewee
 pydantic[email]
 python_dotenv

@@ -7,8 +7,10 @@ from datetime import datetime
 from html import unescape as html_unescape
 from typing import Any
 
+from pydantic import HttpUrl
+
 from . import utils
-from .models import HttpUrl, ValidationError
+from .models import ValidationError
 
 PAT_SPACES = re.compile(r'\s+')
 PAT_NONDIGITS = re.compile(r'[^\d]+')
@@ -176,7 +178,7 @@ class AK(Translator, state='AK'):
         'Employees Affected': 'employees',
         'Layoff Date': 'starting',
         'Notes': 'action',
-        'url': 'url',
+        'url': ['url', 'report_id'],
     }
     rewrites = dict(
         starting=[
@@ -184,6 +186,9 @@ class AK(Translator, state='AK'):
             ('August-November 2021', '2021-08-01'),
             ('March to May 2016', '2016-03-01'),
         ],
+        report_id=[
+            (_r(r'^https://.*/notices/([^/]+)$'), r'\1'),
+        ]
     )
 
 class AL(Translator, state='AL'):
@@ -206,13 +211,17 @@ class AL(Translator, state='AL'):
 class AZ(Translator, state='AZ'):
     headermap = {
         'employer': 'company',
-        'notice_date': 'reported',
+        'notice_date': ['reported', 'starting'],
         'city': 'location',
         'number_of_employees_affected': 'employees',
-        'Planned Starting Date': 'starting',
         'warn_type': 'action',
-        'detail_page_url': 'url',
+        'detail_page_url': ['url', 'report_id'],
     }
+    rewrites = dict(
+        report_id=[
+            (_r(r'^https://.+/(\d+)$'), r'\1'),
+        ]
+    )
 
 class CA(Translator, state='CA'):
     default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
@@ -354,8 +363,8 @@ class DE(Translator, state='DE'):
     }
 
 class FL(ReportedYearToUrl, state='FL'):
-    base_url = 'https://floridajobs.org'
-    default_url = f'{base_url}/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
+    base_url = 'https://reactwarn.floridajobs.org'
+    default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
     headermap = {
         'Company Name': 'company',
         'State Notification Date': 'reported',
@@ -370,13 +379,13 @@ class FL(ReportedYearToUrl, state='FL'):
             (_r(r'\n.*'), ''),
         ],
         url=[
-            (_r(r'^(.+)$'), r'https://reactwarn.floridajobs.org/WarnList/DownloadAzureFile?file=\1')
+            (_r(r'^(.+)$'), f'{base_url}/WarnList/DownloadAzureFile?file=\\1'),
         ]
     )
 
     def get_reported_year_url(self, year: int) -> str:
         action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
-        return f'https://reactwarn.floridajobs.org/WarnList/{action}?year={year}'
+        return f'{self.base_url}/WarnList/{action}?year={year}'
 
     def is_valid_url_year(self, year: int) -> bool:
         return year >= 2017
@@ -977,6 +986,11 @@ class Command(utils.BaseCommand):
 
     def setup(self, opts):
         self.states = list(opts.states or translators)
+        if self.opts.field == 'entries':
+            if self.opts.limit is None:
+                self.opts.limit = 10
+        if self.opts.limit and self.opts.limit < 0 :
+            self.opts.limit = None
 
     def run(self):
         if self.opts.field == 'entries':

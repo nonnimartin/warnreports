@@ -127,15 +127,14 @@ class GA(Scraper, state='GA'):
     def get_api_payload(self):
         rep = self.get_url(self.public_url)
         rep.raise_for_status()
-        soup = BeautifulSoup(rep.text, 'html5lib')
-        return dict(self.payload, nonce=self.extract_nonce(soup))
+        doc = BeautifulSoup(rep.text, 'html5lib')
+        return dict(self.payload, nonce=self.extract_nonce(doc))
 
-    def extract_nonce(self, soup: BeautifulSoup) -> str|None:
-        script = str(
-            soup.find(
-                'script',
-                text=lambda text: text and 'window.gvDTglobals.push' in text))
-        match = re.search(r'"nonce":"([^"]+)"', script)
+    def extract_nonce(self, doc: BeautifulSoup) -> str|None:
+        script = doc.find(
+            'script',
+            text=lambda text: text and 'window.gvDTglobals.push' in text)
+        match = re.search(r'"nonce":"([^"]+)"', str(script))
         if match:
             return match.group(1)
 
@@ -217,7 +216,9 @@ class FL(Scraper, state='FL'):
     def fetch_lookup(self):
         for file in glob.glob(f'{self.cache.path}/*_page_*.html'):
             with open(file) as f:
-                tbody = BeautifulSoup(f, 'html5lib').find('table').find('tbody')
+                doc = BeautifulSoup(f, 'html5lib')
+            table = doc.find('table')
+            tbody = table.find('tbody')
             for tr in tbody.find_all('tr'):
                 tds = tr.find_all('td')
                 last = tds.pop()
@@ -254,9 +255,8 @@ class Command(utils.BaseCommand):
             with utils.csvdicts(scraper.file) as reader:
                 it = itertools.islice(reader, self.opts.limit)
                 fixed = dict(state=state)
-                for row in it:
-                    row = fixed | row
-                    print(json.dumps(row, indent=2, default=utils.json_default))
+                rows = [fixed | row for row in it]
+                print(json.dumps(rows, indent=2, default=utils.json_default))
 
 if __name__ == '__main__':
     try:

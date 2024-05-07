@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from . import utils
-from .models import Naics, NaicsReport, Report, db
+from .models import *
+from .models import db
 from .scrapers import scrapers
 from .translators import translators
 from .utils import Stage
@@ -29,8 +31,8 @@ class Pipeline:
     required_fields = {'company', 'reported'}
     json_types = {
         'id': uuid.UUID,
-        'reported': utils.parse_date,
-        'starting': utils.parse_date}
+        'reported': datetime.fromisoformat,
+        'starting': datetime.fromisoformat}
 
     def __init__(self, state: str) -> None:
         self.state = state.upper()
@@ -39,40 +41,42 @@ class Pipeline:
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
         self.summary = {}
 
-    def run(self, stage: Stage, clean: bool = False) -> None:
+    async def run(self, stage: Stage, clean: bool = False) -> None:
         stage = Stage(stage)
         logger.info(f'run {stage} {self.state}')
-        self.summary[stage] = getattr(self, stage)(clean=clean)
+        self.summary[stage] = await getattr(self, stage)(clean=clean)
         logger.info(f'run {stage} {self.state} {self.summary[stage]}')
 
-    def clean(self, stage: Stage) -> None:
+    async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'clean {stage} {self.state}')
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
+        elif stage is stage.Index:
+            await reports_coll.delete_many(dict(state=self.state))
         elif stage is stage.Extract:
             self.scraper.clean()
         else:
             self.file(stage).unlink(missing_ok=True)
 
-    def extract(self, clean: bool = False) -> dict:
+    async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
         file = self.scraper.file
         hashes = dict(prev=utils.hashfile(file, missing_ok=True))
         if clean:
-            self.clean(stage)
+            await self.clean(stage)
         self.scraper.scrape()
         hashes.update(cur=utils.hashfile(file))
         change = len(set(hashes.values())) > 1
         size = file.stat().st_size
         return dict(change=change, size=size, hashes=hashes)
 
-    def translate(self, clean: bool = False) -> dict:
+    async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
         file = self.file(stage)
         hashes = dict(prev=utils.hashfile(file, missing_ok=True))
         if clean:
-            self.clean(stage)
+            await self.clean(stage)
         with self.ctx_translate() as (reader, writer):
             count = 0
             for count, row in enumerate(reader, start=1):
@@ -85,15 +89,36 @@ class Pipeline:
         size = file.stat().st_size
         return dict(change=change, count=count, size=size, hashes=hashes)
 
-    def load(self, clean: bool = False) -> dict:
+    async def load(self, clean: bool = False) -> dict:
         stage = Stage.Load
         counts = dict.fromkeys(map(str, SaveType), 0)
         with self.ctx_load() as reader:
             if clean:
-                self.clean(stage)
+                await self.clean(stage)
             for entry in reader:
                 counts[self.save(entry)] += 1
-        return counts | dict(total=sum(counts.values()))
+        counts['total'] = sum(counts.values())
+        return counts
+
+    async def index(self, clean: bool = False) -> dict:
+        stage = Stage.Index
+        if clean:
+            await self.clean(stage)
+        q = Report.select_for_reduce()
+        q = q.where(Report.state == self.state)
+        docs = map(ReportData.as_doc, ReportData.map_reduce(q))
+        count = q.count()
+        counts = dict(created=0, updated=0)
+        if clean:
+            if count:
+                await reports_coll.insert_many(docs, ordered=False)
+                counts['created'] += count
+        else:
+            for doc in docs:
+                filt = dict(_id=doc['_id'])
+                res = await reports_coll.replace_one(filt, doc, True)
+                counts['updated'] += res.modified_count
+        return counts
 
     def save(self, entry: dict) -> SaveType:
         save = SaveType.Nochange
@@ -184,14 +209,14 @@ class Command(utils.BaseCommand):
         parser.add_argument('--clean', '-c', action='store_true')
         parser.add_argument('--clean-only', '-x', action='store_true')
 
-    def run(self):
+    async def run(self):
         opts = self.opts
         for state in opts.states or translators:
             pipeline = Pipeline(state)
             if opts.clean_only:
-                pipeline.clean(opts.stage)
+                await pipeline.clean(opts.stage)
             else:
-                pipeline.run(opts.stage, clean=opts.clean)
+                await pipeline.run(opts.stage, clean=opts.clean)
 
 if __name__ == '__main__':
     Command.main()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import enum
 import hashlib
@@ -88,6 +89,11 @@ def init_logging() -> None:
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level)
 
+def sync(ret):
+    if asyncio.iscoroutine(ret):
+        ret = asyncio.get_event_loop().run_until_complete(ret)
+    return ret
+
 def send_email(recipient: str, subject: str, body: str) -> bool:
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_ACCOUNT
@@ -154,7 +160,7 @@ class BaseCommand:
 
     @classmethod
     def main(cls, args=None):
-        cls(cls.parse(args)).run()
+        sync(cls(cls.parse(args)).run())
 
     @classmethod
     def parse(cls, args=None):
@@ -167,13 +173,14 @@ class BaseCommand:
     def setup(self, opts):
         pass
 
-    def run(self):
+    async def run(self):
         pass
 
 class Stage(StrEnum):
     Extract = 'extract'
     Translate = 'translate'
     Load = 'load'
+    Index = 'index'
 
     @property
     def dir(self) -> Path:

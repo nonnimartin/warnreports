@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Any, Iterable, Iterator, Literal, Self, TypeAlias
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
 
+import motor.motor_asyncio
 import peewee as orm
 from annotated_types import Le
 from peewee import IntegrityError as IntegrityError
 from playhouse import db_url
 from pydantic import BaseModel as DataModel
-from pydantic import EmailStr, HttpUrl, NonNegativeInt, StringConstraints
+from pydantic import (ConfigDict, EmailStr, Field, NonNegativeInt,
+                      StringConstraints)
 from pydantic_core import ValidationError as ValidationError
+from pymongo.operations import IndexModel
 
 from . import settings, utils
 
@@ -35,6 +39,14 @@ class Report(OrmModel):
     employees = orm.IntegerField(null=True)
     action = orm.CharField(max_length=64, null=True, index=True)
     url = orm.CharField(max_length=2083, null=True)
+
+    @classmethod
+    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+        q = cls.select(NaicsReport, Naics, cls)
+        q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
+        q = q.join_from(NaicsReport, Naics, orm.JOIN['LEFT_OUTER'])
+        q = q.order_by(cls.id, Naics.code)
+        return q
 
 class Naics(OrmModel):
     id = orm.IntegerField(primary_key=True)
@@ -108,10 +120,13 @@ class DataModel(DataModel):
 
     @classmethod
     def orm_fields(cls, model: type[OrmModel]) -> list[orm.Field]:
-        return [model._meta.fields[field] for field in cls.model_fields]
+        meta = model._meta
+        return [
+            meta.fields[field] for field in cls.model_fields
+            if field in meta.fields]
 
 class ReportData(DataModel):
-    id: UUID
+    id: UUID = Field(alias='_id')
     company: str
     state: State
     location: str|None
@@ -119,7 +134,12 @@ class ReportData(DataModel):
     starting: datetime|None
     employees: int|None
     action: str|None
-    url: HttpUrl|None
+    url: str|None
+    naics: list[NaicsData] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        from_attributes=True)
 
     @staticmethod
     def orm_filters(
@@ -127,6 +147,7 @@ class ReportData(DataModel):
         company: str|None = None,
         state: State|None = None,
         location: str|None = None,
+        naics: int|None = None,
     ):
         return (
             not state or Report.state == state,
@@ -135,6 +156,56 @@ class ReportData(DataModel):
             not search or (
                 Report.company.ilike(f'%{search}%') |
                 Report.location.ilike(f'%{search}%')))
+
+    @staticmethod
+    def doc_filters(
+        search: str|None = None,
+        company: str|None = None,
+        state: State|None = None,
+        location: str|None = None,
+        naics: int|None = None,
+    ):
+        if state:
+            yield 'state', state.upper()
+        if company:
+            yield 'company', {'$regex': wc_contains(company)}
+        if location:
+            yield 'location', {'$regex': wc_contains(location)}
+        if naics:
+            yield '$or', [
+                {'naics.code': {'$regex': wc_startswith(str(naics))}},
+                {'naics.id': naics}]
+        if search:
+            yield '$text', {'$search': search}
+
+    @classmethod
+    def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
+        if it is None:
+            it = Report.select_for_reduce()
+        inst: Self|None = None
+        for report in it:
+            if inst is None or inst.id != report.id:
+                if inst:
+                    yield inst
+                inst = cls.model_validate(report)
+            inst.orm_reduce_obj(report)
+        if inst:
+            yield inst
+
+    def orm_reduce_obj(self, report: Report) -> None:
+        nr = getattr(report, 'naicsreport', None)
+        if isinstance(nr, NaicsReport):
+            naics = NaicsData.model_validate(nr.naics)
+            self.naics.append(naics)
+
+    def as_doc(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=True)
+
+class NaicsData(DataModel):
+    id: int
+    code: str
+    title: str
+    model_config = ConfigDict(from_attributes=True)
 
 class CompanyData(DataModel):
     company: str
@@ -153,8 +224,43 @@ class SuccessData(DataModel):
 
 # ----------------------------
 
-def migrate() -> None:
+__all__ += ['reports_coll']
+
+mongo = motor.motor_asyncio.AsyncIOMotorClient(
+    settings.MONGODB_URL,
+    uuidRepresentation='standard')
+
+reports_coll = mongo.active.reports
+
+def wc_contains(search: str, flags: re.RegexFlag = re.I) -> re.Pattern:
+    return re.compile(f'.*{re.escape(search)}.*', flags)
+
+def wc_startswith(search: str, flags: re.RegexFlag = re.I) -> re.Pattern:
+    return re.compile(f'^{re.escape(search)}.*', flags)
+
+async def init_collection(coll: motor.motor_asyncio.AsyncIOMotorCollection):
+    indexes = [
+        IndexModel({'company': 'text', 'location': 'text'}),
+        IndexModel({'reported': -1}),
+        IndexModel({'state': 'hashed'}),
+    ]
+    await coll.create_indexes(indexes)
+
+async def build_index(coll=reports_coll) -> None:
+    await coll.drop()
+    await init_collection(coll)
+    docs = map(ReportData.as_doc, ReportData.map_reduce())
+    await coll.insert_many(docs)
+
+# ----------------------------
+
+async def migrate() -> None:
+    logger = utils.get_logger('migrate')
     db.create_tables([Report, Naics, NaicsReport, Follow])
+    if settings.MONGODB_ENABLED:
+        await init_collection(reports_coll)
+    else:
+        logger.warning('Mongo not enabled (MONGODB_ENABLED)')
 
 def load_naics() -> None:
     import requests
@@ -169,7 +275,10 @@ def load_naics() -> None:
     with db.atomic():
         Naics.replace_many(records).execute()
 
-actions = dict(migrate=migrate, load_naics=load_naics)
+actions = dict(
+    migrate=migrate,
+    load_naics=load_naics,
+    build_index=build_index)
 
 class Command(utils.BaseCommand):
 
@@ -177,8 +286,8 @@ class Command(utils.BaseCommand):
     def add_arguments(cls, parser) -> None:
         parser.add_argument('action', choices=actions)
 
-    def run(self):
-        actions[self.opts.action]()
+    async def run(self):
+        await actions[self.opts.action]()
 
 if __name__ == '__main__':
     Command.main()
