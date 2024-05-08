@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import io
 import json
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import utils, search
+from motor.motor_asyncio import AsyncIOMotorCollection
+from pymongo.operations import IndexModel
+
+from . import search, settings, utils
 from .models import *
 from .models import db
 from .scrapers import scrapers
@@ -33,13 +37,14 @@ class Pipeline:
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
         'starting': datetime.fromisoformat}
-    reports_coll = search.mongo.reports
+
 
     def __init__(self, state: str) -> None:
         self.state = state.upper()
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
+        self.mongo = search.mongo if settings.MONGODB_ENABLED else None
         self.summary = {}
 
     async def run(self, stage: Stage, clean: bool = False) -> None:
@@ -54,11 +59,16 @@ class Pipeline:
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
         elif stage is stage.Index:
-            await self.reports_coll.delete_many(dict(state=self.state))
+            if self.mongo is None:
+                raise Exception(f'mongo not enabled')
+            await self.mongo.reports.delete_many(dict(state=self.state))
         elif stage is stage.Extract:
             self.scraper.clean()
         else:
-            self.file(stage).unlink(missing_ok=True)
+            if self.mongo is None:
+                self.file(stage).unlink(missing_ok=True)
+            else:
+                await self.mongo.translations.delete_many(dict(state=self.state))
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
@@ -74,35 +84,32 @@ class Pipeline:
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
-        file = self.file(stage)
-        hashes = dict(prev=utils.hashfile(file, missing_ok=True))
         if clean:
             await self.clean(stage)
-        with self.ctx_translate() as (reader, writer):
+        async with self.ctx_translate() as (reader, writer):
             count = 0
-            for count, row in enumerate(reader, start=1):
+            async for row in reader:
+                count += 1
                 entry = self.translator.entry(row)
-                entry.update(id=self.entry_uuid(entry, row), row=row)
-                json.dump(entry, writer, default=utils.json_default)
-                writer.write('\n')
-        hashes.update(cur=utils.hashfile(file))
-        change = len(set(hashes.values())) > 1
-        size = file.stat().st_size
-        return dict(change=change, count=count, size=size, hashes=hashes)
+                entry.update(id=self.entry_uuid(entry, row), state=self.state, row=row)
+                await writer.write(entry)
+        return dict(count=count)
 
     async def load(self, clean: bool = False) -> dict:
         stage = Stage.Load
         counts = dict.fromkeys(map(str, SaveType), 0)
-        with self.ctx_load() as reader:
+        async with self.ctx_load() as reader:
             if clean:
                 await self.clean(stage)
-            for entry in reader:
+            async for entry in reader:
                 counts[self.save(entry)] += 1
         counts['total'] = sum(counts.values())
         return counts
 
     async def index(self, clean: bool = False) -> dict:
         stage = Stage.Index
+        if self.mongo is None:
+            raise Exception(f'mongo not enabled')
         if clean:
             await self.clean(stage)
         q = Report.select_for_reduce()
@@ -112,12 +119,12 @@ class Pipeline:
         counts = dict(created=0, updated=0)
         if clean:
             if count:
-                await self.reports_coll.insert_many(docs, ordered=False)
+                await self.mongo.reports.insert_many(docs, ordered=False)
                 counts['created'] += count
         else:
             for doc in docs:
                 filt = dict(_id=doc['_id'])
-                res = await self.reports_coll.replace_one(filt, doc, True)
+                res = await self.mongo.reports.replace_one(filt, doc, True)
                 counts['updated'] += res.modified_count
         return counts
 
@@ -177,22 +184,54 @@ class Pipeline:
 
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:
-            value = self.json_types[field](value)
+            if isinstance(value, str):
+                value = self.json_types[field](value)
         return value
 
-    @contextmanager
-    def ctx_translate(self):
-        dest = self.file(Stage.Translate)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with utils.csvdicts(self.scraper.file) as reader:
-            with dest.open('w') as writer:
-                yield reader, writer
+    @asynccontextmanager
+    async def ctx_translate(self):
+        with utils.csvdicts(self.scraper.file, restkey='__') as reader:
+            reader = utils.as_aiter(reader)
+            if self.mongo is None:
+                dest = self.file(Stage.Translate)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with dest.open('w') as file:
+                    yield reader, LogdictWriter(file)
+            else:
+                yield reader, MongoWriter(self.mongo.translations)
+                await self.mongo.translations.create_indexes([
+                    IndexModel({'id': 'hashed'})])
 
-    @contextmanager
-    def ctx_load(self):
-        with utils.logdicts(self.file(Stage.Translate)) as reader:
+    @asynccontextmanager
+    async def ctx_load(self):
+        if self.mongo is None:
+            with utils.logdicts(self.file(Stage.Translate)) as reader:
+                with db.atomic():
+                    yield utils.as_aiter(reader)
+        else:
             with db.atomic():
-                yield reader
+                yield self.mongo.translations.find(dict(state=self.state))
+
+class EntryWriter:
+    async def write(self, entry: dict[str, Any]):
+        raise NotImplementedError
+
+class LogdictWriter(EntryWriter):
+
+    def __init__(self, file: io.TextIOWrapper):
+        self.file = file
+
+    async def write(self, entry: dict[str, Any]):
+        json.dump(entry, self.file, default=utils.json_default)
+        self.file.write('\n')
+
+class MongoWriter(EntryWriter):
+
+    def __init__(self, coll: AsyncIOMotorCollection):
+        self.coll = coll
+
+    async def write(self, entry: dict[str, Any]):
+        await self.coll.replace_one(dict(id=entry['id']), entry, True)
 
 class SaveType(utils.StrEnum):
     Create = 'create'

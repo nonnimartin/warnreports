@@ -11,7 +11,7 @@ from pymongo.operations import IndexModel
 from . import settings, utils
 from .models import *
 
-__all__ = ['filters', 'mongo', 'search']
+__all__ = ['filters', 'mongo', 'retrieve', 'search', 'NotFoundError']
 
 QS = TypeVar('QS')
 ST = TypeVar('ST', bound='BaseSearch')
@@ -28,8 +28,8 @@ class BaseSearch(FilterModel, Generic[QS, DM]):
         qs = self.paginate_queryset(qs, limit, offset)
         return await self.queryset_to_list(qs)
 
-    @abstractmethod
-    def get_filters(self) -> Iterable[Any]: ...
+    def get_filters(self) -> Iterable[Any]:
+        yield from ()
 
     @abstractmethod
     def get_queryset(self) -> QS: ...
@@ -76,10 +76,7 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
 
 class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
 
-    order_fieldmap: ClassVar[dict[str, orm.Field]] = {
-        'reported': Report.reported,
-        'state': Report.state.collate('NOCASE'),
-        'company': Report.company.collate('NOCASE')}
+    order_fieldmap: ClassVar[dict[str, orm.Field]] = {}
 
     def get_ordering(self):
         for field, dir_ in super().get_ordering():
@@ -95,7 +92,6 @@ class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
 
     def order_queryset(self, qs):
         orders = list(self.get_ordering())
-        
         return qs.order_by(*orders) if orders else qs
 
     def paginate_queryset(self, qs, limit, offset):
@@ -125,6 +121,8 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
             yield {'state': self.state.upper()}
         if self.company:
             yield {'company': {'$regex': self.wc_contains(self.company)}}
+        if self.action:
+            yield {'action': {'$regex': self.wc_contains(self.action)}}
         if self.location:
             yield {'location': {'$regex': self.wc_contains(self.location)}}
         if self.naics:
@@ -138,8 +136,24 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
             yield {'reported': {'$lt': self.reported_before}}
         if self.reported_after:
             yield {'reported': {'$gt': self.reported_after}}
+        if self.starting_before:
+            yield {'starting': {'$lt': self.starting_before}}
+        if self.starting_after:
+            yield {'starting': {'$gt': self.starting_after}}
+        if self.employees_lt is not None:
+            yield {'employees': {'$lt': self.employees_lt}}
+        if self.employees_gt is not None:
+            yield {'employees': {'$gt': self.employees_gt}}
 
 class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
+
+    order_fieldmap: ClassVar = {
+        'reported': Report.reported,
+        'starting': Report.starting,
+        'employees': Report.employees,
+        'state': Report.state.collate('NOCASE'),
+        'company': Report.company.collate('NOCASE'),
+        'action': Report.action.collate('NOCASE')}
 
     def get_queryset(self):
         return Report.select()
@@ -151,6 +165,8 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
             yield Report.state == self.state
         if self.company:
             yield Report.company.ilike(self.wc_contains(self.company))
+        if self.action:
+            yield Report.action.ilike(self.wc_contains(self.action))
         if self.location:
             yield Report.location.ilike(self.wc_contains(self.location))
         if self.text:
@@ -160,8 +176,17 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
             yield Report.reported < self.reported_before
         if self.reported_after:
             yield Report.reported > self.reported_after
+        if self.starting_before:
+            yield Report.starting < self.starting_before
+        if self.starting_after:
+            yield Report.starting > self.starting_after
+        if self.employees_lt is not None:
+            yield Report.employees < self.employees_lt
+        if self.employees_gt is not None:
+            yield Report.employees > self.employees_gt
 
 class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyData]):
+    order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
 
     def get_queryset(self):
         group_by = [Report.company, Report.state]
@@ -171,6 +196,7 @@ class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyData]):
         yield from SqlReportsFilter(**self.model_dump()).get_filters()
 
 class SqlStatesFilter(StatesFilter, SqlSearch[StateData]):
+    order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
 
     def get_queryset(self):
         return Report.select(Report.state).distinct()
@@ -178,13 +204,43 @@ class SqlStatesFilter(StatesFilter, SqlSearch[StateData]):
     def get_filters(self):
         yield from SqlReportsFilter(**self.model_dump()).get_filters()
 
-filters: dict[type[DataModel], type[BaseSearch]] = {}
+class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsData]):
+    order_fieldmap: ClassVar = {
+        'id': Naics.id,
+        'code': Naics.code,
+        'title': Naics.title.collate('NOCASE')}
+
+    def get_queryset(self):
+        return Naics.select()
+
+    def get_filters(self):
+        if self.id is not None:
+            yield Naics.id == self.id
+        if self.code is not None:
+            yield Naics.id == self.code
+        if self.prefix:
+            wc = self.wc_startswith(str(self.prefix))
+            logger.info(f'{wc=}')
+            yield (Naics.id == self.prefix) | Naics.code.ilike(wc)
+        if self.title:
+            wc = self.wc_contains(self.title)
+            yield Naics.title.ilike(wc)
+        if self.text:
+            wc1 = self.wc_startswith(str(self.text))
+            wc2 = self.wc_contains(self.text)
+            yield Naics.title.ilike(wc2) | Naics.code.ilike(wc1)
+
+class NotFoundError(Exception):
+    pass
+
+filters: dict[type[DataModel], type[BaseSearch]] = {
+    ReportData: SqlReportsFilter,
+    CompanyData: SqlCompaniesFilter,
+    StateData: SqlStatesFilter,
+    NaicsData: SqlNaicsFilter}
+
 if settings.SEARCH_BACKEND == 'mongo':
     filters[ReportData] = MongoReportsFilter
-else:
-    filters[ReportData] = SqlReportsFilter
-filters[CompanyData] = SqlCompaniesFilter
-filters[StateData] = SqlStatesFilter
 
 async def search(
     model: type[DM],
@@ -194,6 +250,12 @@ async def search(
 ) -> list[DM]:
     return await filters[model](**params or {}).search(limit, offset)
 
+async def retrieve(model: type[DM], **params) -> DM|None:
+    results = await search(model, params, 1)
+    if results:
+        return results[0]
+    raise NotFoundError
+
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
 mongo = mongo_client.active
 
@@ -202,6 +264,8 @@ async def mongo_init(mongo: AsyncIOMotorDatabase = mongo) -> None:
         IndexModel({'company': 'text', 'location': 'text'}),
         IndexModel({'reported': 1}),
         IndexModel({'reported': -1}),
+        IndexModel({'employees': 1}),
+        IndexModel({'employees': -1}),
         IndexModel({'naics.code': 1}),
         IndexModel({'naics.id': 1}),
         IndexModel({'state': 'hashed'}),
@@ -224,23 +288,12 @@ actions = dict(
 
 class Command(utils.BaseCommand):
 
-    methods = {
-        # 'search': 'search',
-    }
-
     @classmethod
     def add_arguments(cls, parser) -> None:
-        parser.add_argument('action', choices=actions|cls.methods)
+        parser.add_argument('action', choices=actions)
 
     async def run(self):
-        if self.opts.action in self.methods:
-            func = getattr(self, self.methods[self.opts.action])
-        else:
-            func = actions[self.opts.action]
-        await func()
-
-    async def search(self):
-        ...
+        await actions[self.opts.action]()
 
 if __name__ == '__main__':
     Command.main()

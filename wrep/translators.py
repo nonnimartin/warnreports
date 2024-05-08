@@ -240,7 +240,8 @@ class CA(Translator, state='CA'):
             (_r(r'\*'), ''),
             (_r(r'\n'), ' '),
             (_r(r',$'), ''),
-            (_r(r'Bar- B-Que\.?'), 'Bar-B-Que'),
+            (_r(r'Bar- ?B- ?Que\.?'), 'Bar-B-Que'),
+            (_r(r'^Abercrombe'), 'Abercrombie'),
         ],
         starting=[
             ('03/30/3030', '2020-03-30'),

@@ -30,6 +30,7 @@ services:
     environment:
       UVICORN_RELOAD: 'true'
       SEARCH_BACKEND: ${SEARCH_BACKEND:-mongo}
+      MONGODB_ENABLED: ${MONGODB_ENABLED:-true}
       MONGODB_URL: mongodb://root:wrep@mongo:27017/
     depends_on: [mongo]
 

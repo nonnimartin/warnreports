@@ -102,6 +102,7 @@ __all__ += [
     'EmailStr',
     'FollowData',
     'Limit',
+    'NaicsData',
     'Offset',
     'PageNumber',
     'ReportData',
@@ -165,7 +166,6 @@ class NaicsData(DataModel):
 class CompanyData(DataModel):
     company: str
     state: State
-    # last_reported: datetime
     model_config = ConfigDict(from_attributes=True)
 
 class FollowData(DataModel):
@@ -178,7 +178,7 @@ class StateData(DataModel):
 
 # ----------------------------
 
-__all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'StatesFilter']
+__all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'NaicsFilter', 'StatesFilter']
 
 class FilterModel(DataModel):
     order: str|None = None
@@ -208,10 +208,15 @@ class ReportsFilter(FilterModel):
     company: str|None = None
     state: State|None = None
     location: str|None = None
+    action: str|None = None
     naics: int|None = None
     reported_after: datetime|None = None
     reported_before: datetime|None = None
-    order_fields: ClassVar = {'reported', 'company', 'state'}
+    starting_after: datetime|None = None
+    starting_before: datetime|None = None
+    employees_gt: int|None = None
+    employees_lt: int|None = None
+    order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
 
 class CompaniesFilter(FilterModel):
@@ -221,6 +226,15 @@ class CompaniesFilter(FilterModel):
     order_fields: ClassVar = {'company', 'state'}
     default_ordering: ClassVar = [('company', 1), ('state', 1)]
 
+class NaicsFilter(FilterModel):
+    id: int|None = None
+    code: int|None = None
+    prefix: int|None = None
+    title: str|None = None
+    text: str|None = None
+    order_fields: ClassVar = {'id', 'code', 'title'}
+    default_ordering: ClassVar = [('code', 1), ('id', 1)]
+
 class StatesFilter(FilterModel):
     state: State|None = None
     order_fields: ClassVar = {'state'}
@@ -228,7 +242,7 @@ class StatesFilter(FilterModel):
 
 # ----------------------------
 
-async def migrate() -> None:
+def migrate() -> None:
     db.create_tables([Report, Naics, NaicsReport, Follow])
 
 def load_naics() -> None:
@@ -254,8 +268,8 @@ class Command(utils.BaseCommand):
     def add_arguments(cls, parser) -> None:
         parser.add_argument('action', choices=actions)
 
-    async def run(self):
-        await actions[self.opts.action]()
+    def run(self):
+        actions[self.opts.action]()
 
 if __name__ == '__main__':
     Command.main()

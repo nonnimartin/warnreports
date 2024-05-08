@@ -59,6 +59,10 @@ def logdict_reader(file: io.TextIOWrapper) -> Iterator[dict[str, str]]:
             break
         yield json.loads(line)
 
+async def as_aiter(it):
+    for x in it:
+        yield x
+
 def parse_date(value: str) -> datetime|None:
     value = value or ''
     try:
