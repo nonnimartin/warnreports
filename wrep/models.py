@@ -18,15 +18,11 @@ from pydantic_core import ValidationError as ValidationError
 
 from . import settings, utils
 
-__all__ = ['Follow', 'IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
+__all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
-class OrmModel(orm.Model):
-    class Meta:
-        database = db
-
-class Report(OrmModel):
+class Report(orm.Model):
     NAMESPACE = uuid5(settings.NAMESPACE, 'Report')
     id = orm.UUIDField(primary_key=True)
     company = orm.CharField(max_length=512, index=True, collation='NOCASE')
@@ -39,6 +35,9 @@ class Report(OrmModel):
     action = orm.CharField(max_length=64, null=True, index=True)
     url = orm.CharField(max_length=2083, null=True)
 
+    class Meta:
+        database = db
+
     @classmethod
     def select_for_reduce(cls) -> orm.ModelSelect[Self]:
         q = cls.select(NaicsReport, Naics, cls)
@@ -47,71 +46,39 @@ class Report(OrmModel):
         q = q.order_by(cls.id, Naics.code)
         return q
 
-class Naics(OrmModel):
+class Naics(orm.Model):
     id = orm.IntegerField(primary_key=True)
     code = orm.CharField(max_length=32, index=True)
     title = orm.CharField(max_length=255, index=True, collation='NOCASE')
 
-class NaicsReport(OrmModel):
+    class Meta:
+        database = db
+
+class NaicsReport(orm.Model):
     naics = orm.ForeignKeyField(Naics, on_delete='CASCADE')
     report = orm.ForeignKeyField(Report, on_delete='CASCADE')
 
     class Meta:
-        indexes = [
-            (('naics', 'report'), True)
-        ]
-
-class Follow(OrmModel):
-    id = orm.UUIDField(primary_key=True, default=uuid4)
-    email = orm.CharField(index=True, collation='NOCASE')
-    company = orm.CharField(max_length=512, index=True, collation='NOCASE')
-    state = orm.CharField(max_length=2, index=True, default='*', collation='NOCASE')
-    created = orm.DateTimeField(index=True, default=utils.now)
-    notified = orm.DateTimeField(null=True, index=True)
-    confirmed = orm.DateTimeField(null=True, index=True)
-    token = orm.UUIDField(unique=True, default=uuid4)
-
-    class Meta:
-        indexes = [
-            (('email', 'company', 'state'), True),
-        ]
-
-    @property
-    def confirm_url(self) -> str:
-        return self._auth_url('/follow/confirm')
-
-    @property
-    def cancel_url(self) -> str:
-        return self._auth_url('/follow/cancel')
-
-    def send_confirm_email(self) -> bool:
-        return utils.send_email(
-            recipient=self.email,
-            subject='WARN Notices - Confirm Your Account',
-            body=utils.render('email/confirm.jinja', follow=self))
-
-    def _auth_url(self, path: str) -> str:
-        query = urlencode(dict(token=self.token, email=self.email))
-        return f'{settings.SITE_URL}{path}?{query}'
+        database = db
+        indexes = [(('naics', 'report'), True)]
 
 # ----------------------------
 
 __all__ += [
     'CompanyData',
+    'CompanyDetail',
     'DataModel',
-    'EmailStr',
-    'FollowData',
     'Limit',
     'NaicsData',
+    'NaicsDetail',
     'Offset',
     'PageNumber',
     'ReportData',
     'State',
     'StateData',
-    'Token',
+    'StateDetail',
     'ValidationError']
 
-Token: TypeAlias = UUID
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
@@ -163,18 +130,24 @@ class NaicsData(DataModel):
     title: str
     model_config = ConfigDict(from_attributes=True)
 
+class NaicsDetail(NaicsData):
+    reports_count: int
+
 class CompanyData(DataModel):
     company: str
     state: State
     model_config = ConfigDict(from_attributes=True)
 
-class FollowData(DataModel):
-    email: EmailStr
-    company: NonemptyStr
-    state: State|Literal['*'] = '*'
+class CompanyDetail(CompanyData):
+    last_reported: datetime|None
+    reports_count: int
 
 class StateData(DataModel):
     state: State
+
+class StateDetail(StateData):
+    last_reported: datetime|None
+    reports_count: int
 
 # ----------------------------
 
@@ -223,8 +196,21 @@ class CompaniesFilter(FilterModel):
     text: str|None = None
     company: str|None = None
     state: State|None = None
-    order_fields: ClassVar = {'company', 'state'}
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    last_reported_after: datetime|None = None
+    last_reported_before: datetime|None = None
+    order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('company', 1), ('state', 1)]
+
+class StatesFilter(FilterModel):
+    state: State|None = None
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    last_reported_after: datetime|None = None
+    last_reported_before: datetime|None = None
+    order_fields: ClassVar = {'state', 'reports_count', 'last_reported'}
+    default_ordering: ClassVar = [('state', 1)]
 
 class NaicsFilter(FilterModel):
     id: int|None = None
@@ -232,18 +218,62 @@ class NaicsFilter(FilterModel):
     prefix: int|None = None
     title: str|None = None
     text: str|None = None
-    order_fields: ClassVar = {'id', 'code', 'title'}
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
-class StatesFilter(FilterModel):
-    state: State|None = None
-    order_fields: ClassVar = {'state'}
-    default_ordering: ClassVar = [('state', 1)]
+# ----------------------------
+
+__all__ += ['Follow', 'FollowData', 'Token', 'EmailStr']
+
+userdb: orm.Database = db_url.connect(settings.USERS_DB_URL)
+
+Token: TypeAlias = UUID
+
+class Follow(orm.Model):
+    id = orm.UUIDField(primary_key=True, default=uuid4)
+    email = orm.CharField(index=True, collation='NOCASE')
+    company = orm.CharField(max_length=512, index=True, collation='NOCASE')
+    state = orm.CharField(max_length=2, index=True, default='*', collation='NOCASE')
+    created = orm.DateTimeField(index=True, default=utils.now)
+    notified = orm.DateTimeField(null=True, index=True)
+    confirmed = orm.DateTimeField(null=True, index=True)
+    token = orm.UUIDField(unique=True, default=uuid4)
+
+    class Meta:
+        database = userdb
+        indexes = [(('email', 'company', 'state'), True)]
+
+    @property
+    def confirm_url(self) -> str:
+        return self._auth_url('/follow/confirm')
+
+    @property
+    def cancel_url(self) -> str:
+        return self._auth_url('/follow/cancel')
+
+    def send_confirm_email(self) -> bool:
+        return utils.send_email(
+            recipient=self.email,
+            subject='WARN Notices - Confirm Your Account',
+            body=utils.render('email/confirm.jinja', follow=self))
+
+    def _auth_url(self, path: str) -> str:
+        query = urlencode(dict(token=self.token, email=self.email))
+        return f'{settings.SITE_URL}{path}?{query}'
+
+class FollowData(DataModel):
+    email: EmailStr
+    company: NonemptyStr
+    state: State|Literal['*'] = '*'
+
 
 # ----------------------------
 
 def migrate() -> None:
-    db.create_tables([Report, Naics, NaicsReport, Follow])
+    db.create_tables([Report, Naics, NaicsReport])
+    userdb.create_tables([Follow])
 
 def load_naics() -> None:
     import requests

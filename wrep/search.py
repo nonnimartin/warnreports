@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
-from typing import Any, ClassVar, Generic, Iterable, TypeVar
+from collections import ChainMap
+from typing import Any, ClassVar, Generic, Iterable, Sequence, TypeVar
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorCursor, AsyncIOMotorDatabase)
@@ -75,16 +76,30 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
         return re.compile(f'^{re.escape(text)}.*', flags)
 
 class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
-
+    sql_model_class: ClassVar[orm.Model]
+    sql_joins: ClassVar[Sequence[tuple]] = ()
+    sql_group_by: ClassVar[Sequence] = ()
+    alias_fieldmap: ClassVar[dict[str, orm.Alias]] = {}
     order_fieldmap: ClassVar[dict[str, orm.Field]] = {}
 
-    def get_ordering(self):
-        for field, dir_ in super().get_ordering():
-            if field in self.order_fieldmap:
-                ormfield = self.order_fieldmap[field]
-                if dir_ == -1:
-                    ormfield = ormfield.desc()
-                yield ormfield
+    def get_queryset(self):
+        qs = self.sql_model_class.select(*self.get_selects())
+        for join in self.get_joins():
+            qs = qs.join_from(*join)
+        group_by = list(self.get_group_by())
+        if group_by:
+            qs = qs.group_by(*group_by)
+        return qs
+
+    def get_selects(self):
+        yield self.sql_model_class
+        yield from self.alias_fieldmap.values()
+
+    def get_group_by(self):
+        yield from self.sql_group_by
+
+    def get_joins(self):
+        yield from self.sql_joins
 
     def filter_queryset(self, qs):
         filters = list(self.get_filters())
@@ -100,6 +115,15 @@ class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
         if offset:
             qs = qs.offset(offset)
         return qs
+
+    def get_ordering(self):
+        fieldmap = ChainMap(self.order_fieldmap, self.alias_fieldmap)
+        for field, dir_ in super().get_ordering():
+            if field in fieldmap:
+                ormfield = fieldmap[field]
+                if dir_ == -1:
+                    ormfield = ormfield.desc()
+                yield ormfield
 
     @staticmethod
     def wc_contains(text: str) -> str:
@@ -146,17 +170,15 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
             yield {'employees': {'$gt': self.employees_gt}}
 
 class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
-
+    sql_model_class: ClassVar = Report
     order_fieldmap: ClassVar = {
         'reported': Report.reported,
         'starting': Report.starting,
         'employees': Report.employees,
         'state': Report.state.collate('NOCASE'),
         'company': Report.company.collate('NOCASE'),
-        'action': Report.action.collate('NOCASE')}
-
-    def get_queryset(self):
-        return Report.select()
+        'action': Report.action.collate('NOCASE'),
+    }
 
     def get_filters(self):
         if self.id:
@@ -185,33 +207,49 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
         if self.employees_gt is not None:
             yield Report.employees > self.employees_gt
 
-class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyData]):
+class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
+    sql_model_class: ClassVar = Report
+    sql_group_by: ClassVar = [Report.company, Report.state]
+    alias_fieldmap: ClassVar = {
+        'reports_count': orm.fn.Count(Report.id).alias('reports_count'),
+        'last_reported': orm.fn.Max(Report.reported).alias('last_reported'),
+    }
     order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
-
-    def get_queryset(self):
-        group_by = [Report.company, Report.state]
-        return Report.select().group_by(*group_by)
 
     def get_filters(self):
         yield from SqlReportsFilter(**self.model_dump()).get_filters()
+        if self.reports_count_lt:
+            alias = self.alias_fieldmap['reports_count']
+            yield alias < self.reports_count_lt
+        if self.reports_count_gt:
+            alias = self.alias_fieldmap['reports_count']
+            yield alias > self.reports_count_gt
+        if self.last_reported_before:
+            alias = self.alias_fieldmap['last_reported']
+            yield alias < self.last_reported_before
+        if self.last_reported_after:
+            alias = self.alias_fieldmap['last_reported']
+            yield alias > self.last_reported_after
 
-class SqlStatesFilter(StatesFilter, SqlSearch[StateData]):
-    order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
+class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
+    sql_model_class: ClassVar = Report
+    sql_group_by: ClassVar = [Report.state]
+    alias_fieldmap: ClassVar = SqlCompaniesFilter.alias_fieldmap
+    order_fieldmap: ClassVar = SqlCompaniesFilter.order_fieldmap
+    get_filters = SqlCompaniesFilter.get_filters
 
-    def get_queryset(self):
-        return Report.select(Report.state).distinct()
-
-    def get_filters(self):
-        yield from SqlReportsFilter(**self.model_dump()).get_filters()
-
-class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsData]):
+class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsDetail]):
+    sql_model_class: ClassVar = Naics
+    sql_group_by: ClassVar = [Naics]
+    sql_joins: ClassVar = [(Naics, NaicsReport, orm.JOIN['LEFT_OUTER'])]
+    alias_fieldmap: ClassVar[dict[str, orm.Alias]] = {
+        'reports_count': orm.fn.Count(NaicsReport.id).alias('reports_count'),
+    }
     order_fieldmap: ClassVar = {
         'id': Naics.id,
         'code': Naics.code,
-        'title': Naics.title.collate('NOCASE')}
-
-    def get_queryset(self):
-        return Naics.select()
+        'title': Naics.title.collate('NOCASE'),
+    }
 
     def get_filters(self):
         if self.id is not None:
@@ -229,15 +267,21 @@ class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsData]):
             wc1 = self.wc_startswith(str(self.text))
             wc2 = self.wc_contains(self.text)
             yield Naics.title.ilike(wc2) | Naics.code.ilike(wc1)
+        if self.reports_count_lt is not None:
+            alias = self.alias_fieldmap['reports_count']
+            yield alias < self.reports_count_lt
+        if self.reports_count_gt is not None:
+            alias = self.alias_fieldmap['reports_count']
+            yield alias > self.reports_count_gt
 
 class NotFoundError(Exception):
     pass
 
 filters: dict[type[DataModel], type[BaseSearch]] = {
     ReportData: SqlReportsFilter,
-    CompanyData: SqlCompaniesFilter,
-    StateData: SqlStatesFilter,
-    NaicsData: SqlNaicsFilter}
+    CompanyDetail: SqlCompaniesFilter,
+    StateDetail: SqlStatesFilter,
+    NaicsDetail: SqlNaicsFilter}
 
 if settings.SEARCH_BACKEND == 'mongo':
     filters[ReportData] = MongoReportsFilter

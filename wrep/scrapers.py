@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import csv
+import functools
 import glob
 import itertools
 import json
 import re
+from importlib import import_module
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable, Iterator, Mapping
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,6 +26,7 @@ logger = utils.get_logger('scrapers')
 class Scraper:
 
     state: str
+    public_url: str|None = None
 
     def __init__(self):
         stage = Stage.Extract
@@ -31,6 +34,11 @@ class Scraper:
         self.runner = warn.runner.Runner(stage.dir, stage.dir/'cache')
         self.cache = warn.cache.Cache(self.runner.cache_dir/self.state.lower())
         self.session = requests.session()
+        self._scraper = get_scraper_module(self.state)
+        if self._scraper and not self.public_url:
+            src = getattr(self._scraper, '__source__', None)
+            if isinstance(src, Mapping) and 'url' in src:
+                self.public_url = src['url']
 
     def clean(self) -> None:
         self.file.unlink(missing_ok=True)
@@ -54,6 +62,7 @@ class AK(Scraper, state='AK'):
 
     base_url = 'https://jobs.alaska.gov'
     scrape_url = f'{base_url}/RR/WARN_notices.htm'
+    public_url = scrape_url
 
     def scrape(self):
         key = 'latest.html'
@@ -158,6 +167,7 @@ class GA(Scraper, state='GA'):
 class IN(Scraper, state='IN'):
     base_url = 'https://www.in.gov'
     scrape_url = f'{base_url}/dwd/warn-notices/current-warn-notices/'
+    public_url = scrape_url
 
     def scrape(self) -> None:
         key = 'latest.html'
@@ -225,19 +235,28 @@ class FL(Scraper, state='FL'):
 
     def row_key(self, values: Iterable[str]) -> str:
         return ''.join(re.sub(r'\s', '', value) for value in values)
-            
+
+warn_scraper_names = warn.utils.get_all_scrapers()
+
+@functools.cache
+def get_scraper_module(state: str):
+    state = state.lower()
+    if state in warn_scraper_names:
+        return import_module(f'warn.scrapers.{state}')
+
 def create_scraper(state: str):
     class DefaultScraper(Scraper):
         pass
     DefaultScraper.state = state
     return DefaultScraper
 
-for state in map(str.upper, warn.utils.get_all_scrapers()):
+for state in map(str.upper, warn_scraper_names):
     if state not in scrapers:
         scrapers[state] = create_scraper(state)
 del(state)
 
 class Command(utils.BaseCommand):
+
     @classmethod
     def add_arguments(cls, parser: utils.ArgumentParser) -> None:
         parser.add_argument('states', nargs='*', choices=scrapers)

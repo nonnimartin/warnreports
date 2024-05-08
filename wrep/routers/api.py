@@ -59,22 +59,26 @@ async def naics_list(
     prefix: int|None = None,
     title: str|None = None,
     text: str|None = None,
+    reports_count_gt: int|None = None,
+    reports_count_lt: int|None = None,
     order: str|None = None,
     limit: Limit = 50,
     page: PageNumber = 1
-) -> list[NaicsData]:
+) -> list[NaicsDetail]:
     params = dict(
         code=code,
         prefix=prefix,
         title=title,
         text=text,
+        reports_count_gt=reports_count_gt,
+        reports_count_lt=reports_count_lt,
         order=order)
-    return await search(NaicsData, params, limit, (page - 1) * limit)
+    return await search(NaicsDetail, params, limit, (page - 1) * limit)
 
 @router.get('/naics/{id}')
-async def naics_get(id: int) -> NaicsData:
+async def naics_get(id: int) -> NaicsDetail:
     try:
-        return await retrieve(NaicsData, id=id)
+        return await retrieve(NaicsDetail, id=id)
     except NotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
@@ -83,17 +87,46 @@ async def companies_list(
     text: str|None = None,
     company: str|None = None,
     state: State|None = None,
+    reports_count_gt: int|None = None,
+    reports_count_lt: int|None = None,
+    last_reported_after: datetime|None = None,
+    last_reported_before: datetime|None = None,
     order: str|None = None,
     limit: Limit = 50,
     page: PageNumber = 1
-) -> list[CompanyData]:
+) -> list[CompanyDetail]:
     params = dict(
         text=text,
         company=company,
         state=state,
+        reports_count_gt=reports_count_gt,
+        reports_count_lt=reports_count_lt,
+        last_reported_after=last_reported_after,
+        last_reported_before=last_reported_before,
         order=order)
-    return await search(CompanyData, params, limit, (page - 1) * limit)
+    return await search(CompanyDetail, params, limit, (page - 1) * limit)
 
 @router.get('/states')
-async def states_list() -> list[StateData]:
-    return await search(StateData)
+async def states_list(
+    state: State|None = None,
+    reports_count_gt: int|None = None,
+    reports_count_lt: int|None = None,
+    last_reported_after: datetime|None = None,
+    last_reported_before: datetime|None = None,
+    order: str|None = None
+) -> list[StateDetail]:
+    params = dict(
+        state=state,
+        reports_count_gt=reports_count_gt,
+        reports_count_lt=reports_count_lt,
+        last_reported_after=last_reported_after,
+        last_reported_before=last_reported_before,
+        order=order)
+    return await search(StateDetail, params)
+
+@router.get('/states/{state}')
+async def state_get(state: State) -> StateDetail:
+    try:
+        return await retrieve(StateDetail, state=state)
+    except NotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)

@@ -12,6 +12,7 @@ LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
 SEED = getenv('SEED', 'insecure_2x^3ubxMqN6Tj3BVe4KP!XfTKpW$asYP')
 NAMESPACE = UUID(getenv('NAMESPACE', 'b98ba54b-c67b-4bce-b609-b2a236e33b14'))
 DB_URL = getenv('DB_URL', f'sqlite:///{REPODIR}/db.sqlite')
+USERS_DB_URL = getenv('USERS_DB_URL', f'sqlite:///{REPODIR}/db.users.sqlite')
 MONGODB_ENABLED = getenv('MONGODB_ENABLED', '').lower() == 'true'
 MONGODB_URL = getenv('MONGODB_URL', 'mongodb://localhost:27017/')
 SEARCH_BACKEND = getenv('SEARCH_BACKEND', 'sql')
