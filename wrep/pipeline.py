@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from . import utils
+from . import utils, search
 from .models import *
 from .models import db
 from .scrapers import scrapers
@@ -33,6 +33,7 @@ class Pipeline:
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
         'starting': datetime.fromisoformat}
+    reports_coll = search.mongo.reports
 
     def __init__(self, state: str) -> None:
         self.state = state.upper()
@@ -53,7 +54,7 @@ class Pipeline:
         if stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
         elif stage is stage.Index:
-            await reports_coll.delete_many(dict(state=self.state))
+            await self.reports_coll.delete_many(dict(state=self.state))
         elif stage is stage.Extract:
             self.scraper.clean()
         else:
@@ -111,12 +112,12 @@ class Pipeline:
         counts = dict(created=0, updated=0)
         if clean:
             if count:
-                await reports_coll.insert_many(docs, ordered=False)
+                await self.reports_coll.insert_many(docs, ordered=False)
                 counts['created'] += count
         else:
             for doc in docs:
                 filt = dict(_id=doc['_id'])
-                res = await reports_coll.replace_one(filt, doc, True)
+                res = await self.reports_coll.replace_one(filt, doc, True)
                 counts['updated'] += res.modified_count
         return counts
 

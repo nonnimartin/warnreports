@@ -28,14 +28,14 @@ Example commands:
 # Create schema
 python -m wrep.models migrate
 
-# Run server
-python -m wrep.main
+# Load NAICS data
+python -m wrep.models load_naics
 
 # Pipeline
 python -m wrep.pipeline -h
 
-# Notifications
-python -m wrep.notify
+# Run server
+python -m wrep.main
 ```
 
 ### Using docker compose
@@ -54,7 +54,7 @@ Example commands:
 docker compose exec app python -m wrep.models migrate
 
 # Clean and build index
-docker compose exec app python -m wrep.models build_index
+docker compose exec app python -m wrep.search build
 
 # Run index pipeline stage
 docker compose exec app python -m wrep.pipeline index

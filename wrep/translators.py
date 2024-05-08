@@ -596,6 +596,9 @@ class KY(Translator, state='KY'):
         company=[
             (_r(r'\(EXTENSION OF CONDITIONAL WARN\)'), ''),
         ],
+        reported=[
+            ('November', ''),
+        ],
         starting=[
             ('Mid-January 2009', '2009-01-15'),
             ('November and December 2008', '2008-11-01'),

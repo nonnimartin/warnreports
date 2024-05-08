@@ -29,7 +29,7 @@ services:
     ports: [127.0.0.1:8000:8000]
     environment:
       UVICORN_RELOAD: 'true'
-      MONGODB_ENABLED: 'true'
+      SEARCH_BACKEND: ${SEARCH_BACKEND:-mongo}
       MONGODB_URL: mongodb://root:wrep@mongo:27017/
     depends_on: [mongo]
 

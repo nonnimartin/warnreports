@@ -139,16 +139,11 @@ class GA(Scraper, state='GA'):
             return match.group(1)
 
     payload = dict(
-        draw=1,
         columns=[
-            dict(
-                data=i,
-                name=name,
-                searchable=True,
-                orderable=True,
-                search={})
+            dict(data=i, name=name, searchable=True, orderable=True, search={})
             for i, name in enumerate(['gv_96', 'gv_4', 'gv_date_created', 'gv_97'])],
         order=[dict(column=0, dir='asc')],
+        draw=1,
         start=0,
         length=-1,
         search={},

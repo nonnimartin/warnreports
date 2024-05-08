@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
-from typing import Annotated, Any, Iterable, Iterator, Literal, Self, TypeAlias
+from typing import (Annotated, Any, Iterable, Iterator, Literal, Self,
+                    Sequence, TypeAlias)
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
 
-import motor.motor_asyncio
 import peewee as orm
 from annotated_types import Le
 from peewee import IntegrityError as IntegrityError
@@ -15,11 +14,10 @@ from pydantic import BaseModel as DataModel
 from pydantic import (ConfigDict, EmailStr, Field, NonNegativeInt,
                       StringConstraints)
 from pydantic_core import ValidationError as ValidationError
-from pymongo.operations import IndexModel
 
 from . import settings, utils
 
-__all__ = ['Follow', 'IntegrityError', 'Naics', 'NaicsReport', 'Report']
+__all__ = ['Follow', 'IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
@@ -99,6 +97,7 @@ class Follow(OrmModel):
 
 __all__ += [
     'CompanyData',
+    'DataModel',
     'EmailStr',
     'FollowData',
     'Limit',
@@ -116,15 +115,6 @@ Limit = Annotated[NonNegativeInt, Le(1000)]
 NonemptyStr = Annotated[str, StringConstraints(min_length=1)]
 State = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
 
-class DataModel(DataModel):
-
-    @classmethod
-    def orm_fields(cls, model: type[OrmModel]) -> list[orm.Field]:
-        meta = model._meta
-        return [
-            meta.fields[field] for field in cls.model_fields
-            if field in meta.fields]
-
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
     company: str
@@ -141,43 +131,6 @@ class ReportData(DataModel):
         populate_by_name=True,
         from_attributes=True)
 
-    @staticmethod
-    def orm_filters(
-        search: str|None = None,
-        company: str|None = None,
-        state: State|None = None,
-        location: str|None = None,
-        naics: int|None = None,
-    ):
-        return (
-            not state or Report.state == state,
-            not company or Report.company.ilike(f'%{company}%'),
-            not location or Report.location.ilike(f'%{location}%'),
-            not search or (
-                Report.company.ilike(f'%{search}%') |
-                Report.location.ilike(f'%{search}%')))
-
-    @staticmethod
-    def doc_filters(
-        search: str|None = None,
-        company: str|None = None,
-        state: State|None = None,
-        location: str|None = None,
-        naics: int|None = None,
-    ):
-        if state:
-            yield 'state', state.upper()
-        if company:
-            yield 'company', {'$regex': wc_contains(company)}
-        if location:
-            yield 'location', {'$regex': wc_contains(location)}
-        if naics:
-            yield '$or', [
-                {'naics.code': {'$regex': wc_startswith(str(naics))}},
-                {'naics.id': naics}]
-        if search:
-            yield '$text', {'$search': search}
-
     @classmethod
     def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
         if it is None:
@@ -188,11 +141,11 @@ class ReportData(DataModel):
                 if inst:
                     yield inst
                 inst = cls.model_validate(report)
-            inst.orm_reduce_obj(report)
+            inst.reduce_obj(report)
         if inst:
             yield inst
 
-    def orm_reduce_obj(self, report: Report) -> None:
+    def reduce_obj(self, report: Report) -> None:
         nr = getattr(report, 'naicsreport', None)
         if isinstance(nr, NaicsReport):
             naics = NaicsData.model_validate(nr.naics)
@@ -224,43 +177,32 @@ class SuccessData(DataModel):
 
 # ----------------------------
 
-__all__ += ['reports_coll']
+__all__ += ['ReportsFilter', 'CompaniesFilter', 'StatesFilter']
 
-mongo = motor.motor_asyncio.AsyncIOMotorClient(
-    settings.MONGODB_URL,
-    uuidRepresentation='standard')
+class ReportsFilter(DataModel):
+    text: str|None = None
+    company: str|None = None
+    state: State|None = None
+    location: str|None = None
+    naics: int|None = None
+    reported_after: datetime|None = None
+    reported_before: datetime|None = None
+    ordering: Sequence[Any] = ()
 
-reports_coll = mongo.active.reports
+class CompaniesFilter(DataModel):
+    text: str|None = None
+    company: str|None = None
+    state: State|None = None
+    ordering: Sequence[Any] = ()
 
-def wc_contains(search: str, flags: re.RegexFlag = re.I) -> re.Pattern:
-    return re.compile(f'.*{re.escape(search)}.*', flags)
-
-def wc_startswith(search: str, flags: re.RegexFlag = re.I) -> re.Pattern:
-    return re.compile(f'^{re.escape(search)}.*', flags)
-
-async def init_collection(coll: motor.motor_asyncio.AsyncIOMotorCollection):
-    indexes = [
-        IndexModel({'company': 'text', 'location': 'text'}),
-        IndexModel({'reported': -1}),
-        IndexModel({'state': 'hashed'}),
-    ]
-    await coll.create_indexes(indexes)
-
-async def build_index(coll=reports_coll) -> None:
-    await coll.drop()
-    await init_collection(coll)
-    docs = map(ReportData.as_doc, ReportData.map_reduce())
-    await coll.insert_many(docs)
+class StatesFilter(DataModel):
+    state: State|None = None
+    ordering: Sequence[Any] = ()
 
 # ----------------------------
 
 async def migrate() -> None:
-    logger = utils.get_logger('migrate')
     db.create_tables([Report, Naics, NaicsReport, Follow])
-    if settings.MONGODB_ENABLED:
-        await init_collection(reports_coll)
-    else:
-        logger.warning('Mongo not enabled (MONGODB_ENABLED)')
 
 def load_naics() -> None:
     import requests
@@ -277,8 +219,7 @@ def load_naics() -> None:
 
 actions = dict(
     migrate=migrate,
-    load_naics=load_naics,
-    build_index=build_index)
+    load_naics=load_naics)
 
 class Command(utils.BaseCommand):
 

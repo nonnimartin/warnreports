@@ -1,88 +1,49 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter
 
-from .. import utils, settings
+from .. import utils
 from ..models import *
+from ..search import search
 
 logger = utils.get_logger('api')
 router = APIRouter()
 
 @router.get('/reports', response_model_by_alias=False)
 async def reports_list(
-    search: str|None = None,
+    text: str|None = None,
     company: str|None = None,
     state: State|None = None,
     location: str|None = None,
     naics: int|None = None,
+    reported_after: datetime|None = None,
+    reported_before: datetime|None = None,
     limit: Limit = 50,
     offset: Offset = 0
 ) -> list[ReportData]:
-    args = (search, company, state, location, naics, limit, offset)
-    if settings.MONGODB_ENABLED:
-        return await search_mongo(*args)
-    else:
-        return await search_sql(*args)
+    params = dict(
+        text=text,
+        company=company,
+        state=state,
+        location=location,
+        naics=naics,
+        reported_after=reported_after,
+        reported_before=reported_before)
+    return await search(ReportData, params, limit, offset)
 
 @router.get('/companies')
 async def companies_list(
-    search: str|None = None,
+    text: str|None = None,
     company: str|None = None,
     state: State|None = None,
     limit: Limit = 50,
     offset: Offset = 0
 ) -> list[CompanyData]:
-    fields = CompanyData.orm_fields(Report)
-    filters = ReportData.orm_filters(search, company, state)
-    q = Report.select(*fields).distinct()
-    q = q.where(*filters)
-    q = q.order_by(Report.company.collate('NOCASE'))
-    q = q.limit(limit).offset(offset)
-    return q
+    params = dict(text=text, company=company, state=state)
+    return await search(CompanyData, params, limit, offset)
 
 @router.get('/states')
 async def states_list() -> list[StateData]:
-    fields = StateData.orm_fields(Report)
-    q = Report.select(*fields).distinct()
-    q = q.order_by(Report.state)
-    return q
-
-async def search_mongo(
-    search: str|None = None,
-    company: str|None = None,
-    state: State|None = None,
-    location: str|None = None,
-    naics: int|None = None,
-    limit: Limit = 50,
-    offset: Offset = 0
-):
-    args = (search, company, state, location, naics)
-    filters = dict(ReportData.doc_filters(*args))
-    cur = reports_coll.find(filters)
-    cur = cur.sort([
-        ('reported', -1),
-        'state',
-        'company'])
-    cur = cur.skip(offset)
-    return await cur.to_list(limit)
-
-async def search_sql(
-    search: str|None,
-    company: str|None,
-    state: State|None,
-    location: str|None,
-    naics: int|None,
-    limit: Limit,
-    offset: Offset
-):
-    args = (search, company, state, location, naics)
-    filters = ReportData.orm_filters(*args)
-    fields = ReportData.orm_fields(Report)
-    q = Report.select(*fields)
-    q = q.where(*filters)
-    q = q.order_by(
-        Report.reported.desc(),
-        Report.state.collate('NOCASE'),
-        Report.company.collate('NOCASE'))
-    q = q.limit(limit).offset(offset)
-    return q
+    return await search(StateData)
