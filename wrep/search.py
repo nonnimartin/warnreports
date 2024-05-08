@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
-from typing import Any, Generic, Iterable, TypeVar
+from typing import Any, ClassVar, Generic, Iterable, TypeVar
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorCursor, AsyncIOMotorDatabase)
@@ -11,13 +11,15 @@ from pymongo.operations import IndexModel
 from . import settings, utils
 from .models import *
 
+__all__ = ['filters', 'mongo', 'search']
+
 QS = TypeVar('QS')
 ST = TypeVar('ST', bound='BaseSearch')
 DM = TypeVar('DM', bound=DataModel)
 logger = utils.get_logger('search')
 
 
-class BaseSearch(Generic[QS, DM]):
+class BaseSearch(FilterModel, Generic[QS, DM]):
 
     async def search(self, limit: Limit|None = None, offset: Offset = 0):
         qs = self.get_queryset()
@@ -33,9 +35,6 @@ class BaseSearch(Generic[QS, DM]):
     def get_queryset(self) -> QS: ...
 
     @abstractmethod
-    def get_ordering(self) -> Iterable[Any]: ...
-
-    @abstractmethod
     def filter_queryset(self, qs: QS) -> QS: ...
 
     @abstractmethod
@@ -44,14 +43,13 @@ class BaseSearch(Generic[QS, DM]):
     @abstractmethod
     def paginate_queryset(self, qs: QS, limit: Limit|None, offset: Offset) -> QS: ...
 
-    @abstractmethod
-    async def queryset_to_list(self, qs: QS) -> list[DM]: ...
+    async def queryset_to_list(self, qs: QS) -> list[DM]:
+        return list(qs)
 
 class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
 
     def filter_queryset(self, qs: AsyncIOMotorCollection):
         filters = list(self.get_filters())
-        logger.info(f'{filters=}')
         return qs.find({'$and': filters} if filters else {})
 
     def order_queryset(self, qs):
@@ -78,12 +76,26 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
 
 class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
 
+    order_fieldmap: ClassVar[dict[str, orm.Field]] = {
+        'reported': Report.reported,
+        'state': Report.state.collate('NOCASE'),
+        'company': Report.company.collate('NOCASE')}
+
+    def get_ordering(self):
+        for field, dir_ in super().get_ordering():
+            if field in self.order_fieldmap:
+                ormfield = self.order_fieldmap[field]
+                if dir_ == -1:
+                    ormfield = ormfield.desc()
+                yield ormfield
+
     def filter_queryset(self, qs):
         filters = list(self.get_filters())
         return qs.where(*filters) if filters else qs
 
     def order_queryset(self, qs):
         orders = list(self.get_ordering())
+        
         return qs.order_by(*orders) if orders else qs
 
     def paginate_queryset(self, qs, limit, offset):
@@ -92,9 +104,6 @@ class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
         if offset:
             qs = qs.offset(offset)
         return qs
-
-    async def queryset_to_list(self, qs):
-        return list(qs)
 
     @staticmethod
     def wc_contains(text: str) -> str:
@@ -109,12 +118,9 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
     def get_queryset(self):
         return mongo.reports
 
-    def get_ordering(self):
-        yield ('reported', -1)
-        yield ('state', 1)
-        yield ('company', 1)
-
     def get_filters(self):
+        if self.id:
+            yield {'_id': self.id}
         if self.state:
             yield {'state': self.state.upper()}
         if self.company:
@@ -138,12 +144,9 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
     def get_queryset(self):
         return Report.select()
 
-    def get_ordering(self):
-        yield Report.reported.desc()
-        yield Report.state.collate('NOCASE')
-        yield Report.company.collate('NOCASE')
-
     def get_filters(self):
+        if self.id:
+            yield Report.id == self.id
         if self.state:
             yield Report.state == self.state
         if self.company:
@@ -161,10 +164,8 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
 class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyData]):
 
     def get_queryset(self):
-        return Report.select(Report.company, Report.state).distinct()
-
-    def get_ordering(self):
-        yield Report.company.collate('NOCASE')
+        group_by = [Report.company, Report.state]
+        return Report.select().group_by(*group_by)
 
     def get_filters(self):
         yield from SqlReportsFilter(**self.model_dump()).get_filters()
@@ -174,20 +175,16 @@ class SqlStatesFilter(StatesFilter, SqlSearch[StateData]):
     def get_queryset(self):
         return Report.select(Report.state).distinct()
 
-    def get_ordering(self):
-        yield Report.state
-
     def get_filters(self):
         yield from SqlReportsFilter(**self.model_dump()).get_filters()
 
-filter_classes: dict[type[DataModel], type[BaseSearch]] = {}
-
+filters: dict[type[DataModel], type[BaseSearch]] = {}
 if settings.SEARCH_BACKEND == 'mongo':
-    filter_classes[ReportData] = MongoReportsFilter
+    filters[ReportData] = MongoReportsFilter
 else:
-    filter_classes[ReportData] = SqlReportsFilter
-filter_classes[CompanyData] = SqlCompaniesFilter
-filter_classes[StateData] = SqlStatesFilter
+    filters[ReportData] = SqlReportsFilter
+filters[CompanyData] = SqlCompaniesFilter
+filters[StateData] = SqlStatesFilter
 
 async def search(
     model: type[DM],
@@ -195,7 +192,7 @@ async def search(
     limit: Limit|None = None,
     offset: Offset = 0
 ) -> list[DM]:
-    return await filter_classes[model](**params or {}).search(limit, offset)
+    return await filters[model](**params or {}).search(limit, offset)
 
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
 mongo = mongo_client.active

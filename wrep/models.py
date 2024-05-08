@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import (Annotated, Any, Iterable, Iterator, Literal, Self,
-                    Sequence, TypeAlias)
+from typing import (Annotated, Any, ClassVar, Iterable, Iterator, Literal,
+                    Self, TypeAlias)
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
 
@@ -11,7 +12,7 @@ from annotated_types import Le
 from peewee import IntegrityError as IntegrityError
 from playhouse import db_url
 from pydantic import BaseModel as DataModel
-from pydantic import (ConfigDict, EmailStr, Field, NonNegativeInt,
+from pydantic import (ConfigDict, EmailStr, Field, NonNegativeInt, PositiveInt,
                       StringConstraints)
 from pydantic_core import ValidationError as ValidationError
 
@@ -102,16 +103,17 @@ __all__ += [
     'FollowData',
     'Limit',
     'Offset',
+    'PageNumber',
     'ReportData',
     'State',
     'StateData',
-    'SuccessData',
     'Token',
     'ValidationError']
 
 Token: TypeAlias = UUID
-Offset: TypeAlias = NonNegativeInt
 Limit = Annotated[NonNegativeInt, Le(1000)]
+Offset: TypeAlias = NonNegativeInt
+PageNumber: TypeAlias = PositiveInt
 NonemptyStr = Annotated[str, StringConstraints(min_length=1)]
 State = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
 
@@ -163,6 +165,8 @@ class NaicsData(DataModel):
 class CompanyData(DataModel):
     company: str
     state: State
+    # last_reported: datetime
+    model_config = ConfigDict(from_attributes=True)
 
 class FollowData(DataModel):
     email: EmailStr
@@ -172,14 +176,34 @@ class FollowData(DataModel):
 class StateData(DataModel):
     state: State
 
-class SuccessData(DataModel):
-    success: Literal[True] = True
-
 # ----------------------------
 
-__all__ += ['ReportsFilter', 'CompaniesFilter', 'StatesFilter']
+__all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'StatesFilter']
 
-class ReportsFilter(DataModel):
+class FilterModel(DataModel):
+    order: str|None = None
+
+    order_fields: ClassVar[set[str]] = set()
+    default_ordering: ClassVar[list[tuple[str, Literal[1, -1]]]] = []
+
+    def get_ordering(self):
+        if self.order:
+            yield from self.parse_ordering(self.order, self.order_fields)
+        else:
+            yield from self.default_ordering
+
+    def parse_ordering(self, order: str, allowed: set[str]|None = None):
+        for field in filter(None, re.split(r',\s*', order)):
+            if field.startswith('-'):
+                field = field[1:]
+                dir_ = -1
+            else:
+                dir_ = 1
+            if allowed is None or field in allowed:
+                yield field, dir_
+
+class ReportsFilter(FilterModel):
+    id: UUID|None = None
     text: str|None = None
     company: str|None = None
     state: State|None = None
@@ -187,17 +211,20 @@ class ReportsFilter(DataModel):
     naics: int|None = None
     reported_after: datetime|None = None
     reported_before: datetime|None = None
-    ordering: Sequence[Any] = ()
+    order_fields: ClassVar = {'reported', 'company', 'state'}
+    default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
 
-class CompaniesFilter(DataModel):
+class CompaniesFilter(FilterModel):
     text: str|None = None
     company: str|None = None
     state: State|None = None
-    ordering: Sequence[Any] = ()
+    order_fields: ClassVar = {'company', 'state'}
+    default_ordering: ClassVar = [('company', 1), ('state', 1)]
 
-class StatesFilter(DataModel):
+class StatesFilter(FilterModel):
     state: State|None = None
-    ordering: Sequence[Any] = ()
+    order_fields: ClassVar = {'state'}
+    default_ordering: ClassVar = [('state', 1)]
 
 # ----------------------------
 
