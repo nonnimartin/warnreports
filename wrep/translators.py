@@ -265,6 +265,9 @@ class CO(Translator, state='CO'):
         'naics': 'naics',
     }
     rewrites = dict(
+        reported=[
+            REWRITE_COMPACT_DATERANGE,
+        ],
         starting=[
             REWRITE_COMPACT_DATERANGE,
             ('4/3020', '2020-04-30'),
@@ -354,14 +357,27 @@ class DC(ReportedYearToUrl, state='DC'):
         return year >= 2012 and year != 2014
 
 class DE(Translator, state='DE'):
+    base_url = 'https://joblink.delaware.gov'
+    default_url = base_url
     headermap = {
-        'employer': 'company',
-        'notice_date': 'reported',
-        'city': 'location',
-        'number_of_employees_affected': 'employees',
-        'warn_type': 'action',
-        'detail_page_url': 'url'
+        'Company Name': 'company',
+        'Employer': 'company',
+        'Notice Date': 'reported',
+        'City': 'location',
+        'Address': 'location',
+        'ZIP': 'location',
+        'Number of Employees Affected': 'employees',
+        'WARN Type': 'action',
+        'URL': ['url', 'report_id'],
     }
+    rewrites = dict(
+        url=[
+            (_r(r'^(/.+)$'), f'{base_url}\\1')
+        ],
+        report_id=[
+            (_r(r'/(\d+)$'), r'\1')
+        ]
+    )
 
 class FL(ReportedYearToUrl, state='FL'):
     base_url = 'https://reactwarn.floridajobs.org'
@@ -374,6 +390,7 @@ class FL(ReportedYearToUrl, state='FL'):
         'Notice Type': 'action',
         'Layoff Date': 'starting',
         'download': 'url',
+        'Industry': 'industry',
     }
     rewrites = dict(
         company=[
@@ -392,16 +409,6 @@ class FL(ReportedYearToUrl, state='FL'):
         return year >= 2017
 
 class GA(Translator, state='GA'):
-    """
-    Best effort to populated reported date:
-
-    1. Custom scraper collects 'submitted_date'. If this exists, use it. This should
-       be valid for new reports.
-
-    2. For historical reports, extract the year from 'GA WARN ID' and use Dec. 31
-       of that year. However, if the starting date ('First Date of Separation')
-       is earlier, use that.
-    """
     default_url = 'https://www.tcsg.edu/warn-public-view/'
     headermap = {
         'Company Name': 'company',
@@ -427,6 +434,16 @@ class GA(Translator, state='GA'):
     )
 
     def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        """
+        Best effort to populated reported date:
+
+        1. Custom scraper collects 'submitted_date'. If this exists, use it. This should
+        be valid for new reports.
+
+        2. For historical reports, extract the year from 'GA WARN ID' and use Dec. 31
+        of that year. However, if the starting date ('First Date of Separation')
+        is earlier, use that.
+        """
         if not row.get('submitted_date'):
             it = map(entry.get, ['reported', 'starting'])
             entry['reported'] = min(filter(None, it), default=None)
@@ -629,14 +646,19 @@ class LA(ReportedYearToUrl, state='LA'):
         'Location': 'location',
         'Employees Affected': 'employees',
         'Layoff Date': 'starting',
-        # 'Industry': ...
+        'Industry': 'industry',
+        # TODO: action
     }
     rewrites = dict(
         starting=[
             REWRITE_COMPACT_DATERANGE,
             ('6/31/09', '2009-06-30'),
-            ('5/1820', '2018-05-18'),
+            ('5/1820', '2020-05-18'),
         ],
+        industry=[
+            ('Department Store', 'Department Stores'),
+            ('Pre-fabricated Buildings', '332311'),
+        ]
     )
 
     def get_reported_year_url(self, year: int) -> str:
@@ -794,8 +816,29 @@ class OR(Translator, state='OR'):
     )
 
 class RI(Translator, state='RI'):
-    # TODO
-    headermap = {}
+    default_url = 'https://dlt.ri.gov/employers/worker-adjustment-and-retraining-notification-warn'
+    headermap = {
+        'Date Received': 'reported',
+        'WARN Date': 'reported',
+        'Company Name': 'company',
+        'Location of Layoffs': 'location',
+        'Number Affected': 'employees',
+        'Effective Date': 'starting',
+        'Closing Yes/No': 'action',
+    }
+    rewrites = dict(
+        company=[
+            (_r(r'\s+\(updated .*$', re.I), ''),
+            (_r(r'\s*\*\s*$'), ''),
+        ],
+        action=[
+            (_r(r'^yes$', re.I), 'Closing'),
+            (_r(r'^no$', re.I), ''),
+        ],
+        starting=[
+            REWRITE_COMPACT_DATERANGE,
+        ]
+    )
 
 class SC(Translator, state='SC'):
     # TODO: reported

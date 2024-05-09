@@ -31,7 +31,8 @@ class Pipeline:
         'employees',
         'action',
         'url',
-        'naics']
+        'naics',
+        'industry']
     required_fields = {'company', 'reported'}
     json_types = {
         'id': uuid.UUID,
@@ -142,6 +143,7 @@ class Pipeline:
             report = Report(id=uid, state=self.state)
             save = save.Create
         naics = set(record.pop('naics', ()))
+        industry = record.pop('industry', None)
         for field, value in record.items():
             if save is save.Create or getattr(report, field) != value:
                 setattr(report, field, value)
@@ -149,13 +151,17 @@ class Pipeline:
             save = save.Update
         if save is not save.Nochange:
             report.save(force_insert=save is save.Create)
-        naics_save = self.save_naics(report, naics)
+        naics_save = self.save_naics(report, naics, industry)
         if save is save.Nochange:
             save = naics_save
         return save
 
-    def save_naics(self, report: Report, codes: set[int]) -> SaveType:
+    def save_naics(self, report: Report, codes: set[int], industry: str|None) -> SaveType:
         save = SaveType.Nochange
+        if industry:
+            q = Naics.select(Naics.id)
+            q = q.where(Naics.title.like(industry) | Naics.code.like(industry))
+            codes.update(n.id for n in q)
         q = NaicsReport.delete()
         q = q.where(
             NaicsReport.report == report,

@@ -16,7 +16,7 @@ router = APIRouter()
 async def reports_list(
     text: str|None = None,
     company: str|None = None,
-    state: State|None = None,
+    state: StateCode|None = None,
     location: str|None = None,
     action: str|None = None,
     naics: int|None = None,
@@ -86,7 +86,7 @@ async def naics_get(id: int) -> NaicsDetail:
 async def companies_list(
     text: str|None = None,
     company: str|None = None,
-    state: State|None = None,
+    state: StateCode|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
     last_reported_after: datetime|None = None,
@@ -108,7 +108,7 @@ async def companies_list(
 
 @router.get('/states')
 async def states_list(
-    state: State|None = None,
+    state: StateCode|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
     last_reported_after: datetime|None = None,
@@ -125,7 +125,7 @@ async def states_list(
     return await search(StateDetail, params)
 
 @router.get('/states/{state}')
-async def state_get(state: State) -> StateDetail:
+async def state_get(state: StateCode) -> StateDetail:
     try:
         return await retrieve(StateDetail, state=state)
     except NotFoundError:

@@ -67,6 +67,7 @@ class NaicsReport(orm.Model):
 __all__ += [
     'CompanyData',
     'CompanyDetail',
+    'CompanyName',
     'DataModel',
     'Limit',
     'NaicsData',
@@ -74,7 +75,7 @@ __all__ += [
     'Offset',
     'PageNumber',
     'ReportData',
-    'State',
+    'StateCode',
     'StateData',
     'StateDetail',
     'ValidationError']
@@ -82,13 +83,13 @@ __all__ += [
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
-NonemptyStr = Annotated[str, StringConstraints(min_length=1)]
-State = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
+CompanyName = Annotated[str, StringConstraints(min_length=1)]
+StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
 
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
-    company: str
-    state: State
+    company: CompanyName
+    state: StateCode
     location: str|None
     reported: datetime
     starting: datetime|None
@@ -134,8 +135,8 @@ class NaicsDetail(NaicsData):
     reports_count: int
 
 class CompanyData(DataModel):
-    company: str
-    state: State
+    company: CompanyName
+    state: StateCode
     model_config = ConfigDict(from_attributes=True)
 
 class CompanyDetail(CompanyData):
@@ -143,7 +144,7 @@ class CompanyDetail(CompanyData):
     reports_count: int
 
 class StateData(DataModel):
-    state: State
+    state: StateCode
 
 class StateDetail(StateData):
     last_reported: datetime|None
@@ -178,8 +179,8 @@ class FilterModel(DataModel):
 class ReportsFilter(FilterModel):
     id: UUID|None = None
     text: str|None = None
-    company: str|None = None
-    state: State|None = None
+    company: CompanyName|None = None
+    state: StateCode|None = None
     location: str|None = None
     action: str|None = None
     naics: int|None = None
@@ -194,8 +195,8 @@ class ReportsFilter(FilterModel):
 
 class CompaniesFilter(FilterModel):
     text: str|None = None
-    company: str|None = None
-    state: State|None = None
+    company: CompanyName|None = None
+    state: StateCode|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
     last_reported_after: datetime|None = None
@@ -204,7 +205,7 @@ class CompaniesFilter(FilterModel):
     default_ordering: ClassVar = [('company', 1), ('state', 1)]
 
 class StatesFilter(FilterModel):
-    state: State|None = None
+    state: StateCode|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
     last_reported_after: datetime|None = None
@@ -265,8 +266,8 @@ class Follow(orm.Model):
 
 class FollowData(DataModel):
     email: EmailStr
-    company: NonemptyStr
-    state: State|Literal['*'] = '*'
+    company: CompanyName
+    state: StateCode|Literal['*'] = '*'
 
 
 # ----------------------------
