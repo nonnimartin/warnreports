@@ -48,6 +48,13 @@ def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
             return True
     return False
 
+def unique(it):
+    done = set()
+    for value in it:
+        if value not in done:
+            yield value
+        done.add(value)
+
 @contextmanager
 def csvdicts(path: Path, **kw):
     with open(path) as file:

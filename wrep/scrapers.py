@@ -5,10 +5,13 @@ import functools
 import json
 import re
 import time
+from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from datetime import timezone
 from importlib import import_module
+from itertools import chain
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping
+from typing import Iterable, Iterator, Mapping, Sequence
 
 import pdfplumber
 import requests
@@ -24,7 +27,7 @@ from .utils import Stage
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
 
-class Scraper:
+class Scraper(ABC):
 
     state: str
     base_url: str|None = None
@@ -50,7 +53,7 @@ class Scraper:
     def scrape(self) -> None:
         self.runner.scrape(self.state)
 
-    def get_url(self, url: str, **kw):
+    def get_url(self, url: str, **kw) -> requests.Response:
         if not url.startswith('http://') and not url.startswith('https://') and self.base_url:
             url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
         if self.request_delay and self.request_count:
@@ -78,22 +81,41 @@ class Scraper:
             cls.state = state.upper()
             scrapers[cls.state] = cls
 
+class CommonScraper(Scraper):
+    headers: Sequence[str] = ()
+    index_url: str
 
-class AK(Scraper, state='AK'):
+    def get_headers(self) -> Sequence[str]:
+        return self.headers
 
-    base_url = 'https://jobs.alaska.gov'
-    scrape_url = f'{base_url}/RR/WARN_notices.htm'
-    public_url = scrape_url
+    @abstractmethod
+    def read_records(self) -> Iterable[dict[str, str]]: ...
 
-    def scrape(self):
-        key = 'latest.html'
-        content = self.get_url(self.scrape_url).content.decode()
-        self.cache.write(key, content)
-        doc = BeautifulSoup(content, 'html.parser')
-        table = doc.find('table')
+    def write_csv(self) -> None:
         with self.file.open('w') as file:
-            writer = csv.writer(file)
-            writer.writerows(self.read_table(table))
+            writer = csv.DictWriter(file, fieldnames=self.get_headers())
+            writer.writeheader()
+            writer.writerows(self.read_records())
+
+    def scrape_index(self) -> None:
+        self.cache.write('latest.html', self.fetch(self.index_url))
+
+class AK(CommonScraper, state='AK'):
+    base_url = 'https://jobs.alaska.gov'
+    index_url = f'{base_url}/RR/WARN_notices.htm'
+    public_url = index_url
+    headers = ['Company', 'Location', 'Notice Date', 'Layoff Date', 'Employees Affected', 'Notes', 'url']
+
+    def scrape(self) -> None:
+        self.scrape_index()
+        self.write_csv()
+
+    def read_records(self) -> Iterator[dict[str, str]]:
+        doc = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
+        it = self.read_table(doc.find('table'))
+        headers = next(it)
+        for values in it:
+            yield dict(zip(headers, values))
 
     def read_table(self, table: BeautifulSoup) -> Iterator[list[str]]:
         tags = ['td']
@@ -116,19 +138,20 @@ class AK(Scraper, state='AK'):
             return self.base_url + a['href']
         return ''
 
-class DE(Scraper, state='DE'):
+class DE(CommonScraper, state='DE'):
     base_url = 'https://joblink.delaware.gov'
     index_url_template = '/search/warn_lookups?commit=Search&page={page}&q%5Bs%5D=notice_on+desc'
     request_delay = 1
     index_headers = ['Employer', 'City', 'ZIP', 'LWIB Area', 'Notice Date', 'WARN Type', 'URL']
     record_headers = ['Company Name', 'Address', 'Notice Date', 'Number of Employees Affected']
+    headers = list(utils.unique(chain(record_headers, index_headers)))
 
-    def scrape(self):
+    def scrape(self) -> None:
         self.scrape_index()
         self.download_pages()
         self.write_csv()
 
-    def scrape_index(self):
+    def scrape_index(self) -> None:
         index: list[dict[str, str]] = []
         for table in self.fetch_index_tables():
             tbody = table.find('tbody')
@@ -140,7 +163,7 @@ class DE(Scraper, state='DE'):
                 index.append(row)
         self.cache.write('index.json', json.dumps(index, indent=2))
 
-    def download_pages(self):
+    def download_pages(self) -> None:
         for row in self.load_index():
             url = row['URL']
             record_num = self.parse_record_number_from_path(url)
@@ -165,13 +188,6 @@ class DE(Scraper, state='DE'):
                 if not record.get(key):
                     record[key] = value
             yield record
-
-    def write_csv(self):
-        headers = list(self.get_headers())
-        with self.file.open('w') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(self.read_records())
 
     def fetch_index_tables(self) -> Iterator[BeautifulSoup]:
         page = 1
@@ -198,14 +214,6 @@ class DE(Scraper, state='DE'):
 
     def parse_record_number_from_path(self, href: str) -> int:
         return int(href.rsplit('/')[-1].removesuffix('.html'))
-
-    @classmethod
-    def get_headers(cls):
-        done = set()
-        for value in (cls.record_headers + cls.index_headers):
-            if value not in done:
-                yield value
-            done.add(value)
 
 
 class GA(Scraper, state='GA'):
@@ -272,24 +280,24 @@ class GA(Scraper, state='GA'):
         setUrlOnSearch=True,
         shortcode_atts=dict(id=77460))
 
-class IN(Scraper, state='IN'):
+class IN(CommonScraper, state='IN'):
     base_url = 'https://www.in.gov'
-    scrape_url = f'{base_url}/dwd/warn-notices/current-warn-notices/'
-    public_url = scrape_url
+    index_url = f'{base_url}/dwd/warn-notices/current-warn-notices/'
+    public_url = index_url
+    headers = [
+        'Company',
+        'City',
+        'Affected Workers',
+        'Notice Date',
+        'LO/CL Date',
+        'NAICS',
+        'Description of Work/Industry',
+        'Notice Type',
+        'url']
 
     def scrape(self) -> None:
         self.scrape_index()
         self.write_csv()
-
-    def scrape_index(self):
-        self.cache.write('latest.html', self.fetch(self.scrape_url))
-
-    def write_csv(self):
-        headers = list(self.get_headers())
-        with self.file.open('w') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(self.read_records())
 
     def read_records(self):
         doc = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
@@ -319,18 +327,6 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
-    @classmethod
-    def get_headers(cls):
-        return [
-            'Company',
-            'City',
-            'Affected Workers',
-            'Notice Date',
-            'LO/CL Date',
-            'NAICS',
-            'Description of Work/Industry',
-            'Notice Type',
-            'url']
 
 class FL(Scraper, state='FL'):
 
@@ -338,7 +334,7 @@ class FL(Scraper, state='FL'):
         super().scrape()
         self.augment()
 
-    def augment(self):
+    def augment(self) -> None:
         lookup = dict(self.fetch_lookup())
         with self.ctx_rewrite() as (reader, writer):
             writer.writerow(next(reader) + ['download'])
@@ -347,7 +343,7 @@ class FL(Scraper, state='FL'):
                 values.append(lookup.get(key, ''))
                 writer.writerow(values)
 
-    def fetch_lookup(self):
+    def fetch_lookup(self) -> Iterator[tuple[str, str]]:
         for file in self.cache.files('.', '*_page_*.html'):
             with open(file) as f:
                 doc = BeautifulSoup(f, 'html5lib')
@@ -366,9 +362,10 @@ class FL(Scraper, state='FL'):
         return ''.join(re.sub(r'\s', '', value) for value in values)
 
 
-class SC(Scraper, state='SC'):
+class SC(CommonScraper, state='SC'):
     base_url = 'https://scworks.org'
     public_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
+    index_url = public_url
     headers_map = {
         **{
             r: ['Company', 'Location', 'Layoff/Closure Date', 'Positions', 'Closure or Layoff', 'NAICS Code']
@@ -378,6 +375,7 @@ class SC(Scraper, state='SC'):
         None: ['Company', 'County', 'Notice Date', 'Layoff/Closure Date', 'Impacted', 'Layoff/Closure', 'Address']
     }
     extra_headers = ['year', 'url']
+    headers = list(utils.unique(chain(*reversed(headers_map.values()), extra_headers)))
     realign_most = 0.9
 
     def scrape(self) -> None:
@@ -385,31 +383,23 @@ class SC(Scraper, state='SC'):
         self.download_pdfs()
         self.write_csv()
 
-    def scrape_index(self):
+    def scrape_index(self) -> None:
+        super().scrape_index()
         index: list[tuple[int, str]] = []
-        text = self.fetch(self.public_url)
-        self.cache.write('source.html', text)
-        page = BeautifulSoup(text, 'html.parser')
+        page = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
         for a in page.find_all('a'):
-            href = a.get('href', '')
+            href = str(a.get('href', ''))
             if href.endswith('.pdf'):
                 year = int(href.split('/')[-1][:4])
                 index.append((year, href))
         index.sort()
         self.cache.write('index.json', json.dumps(index, indent=2))
 
-    def download_pdfs(self):
+    def download_pdfs(self) -> None:
         for year, url in self.load_index():
             key = f'{year}.pdf'
             if not self.cache.exists(key) or year >= utils.now().year - 1:
                 self.cache.download(key, self.base_url + url)
-
-    def write_csv(self):
-        headers = list(self.get_headers())
-        with self.file.open('w') as file:
-            writer = csv.DictWriter(file, fieldnames=headers)
-            writer.writeheader()
-            writer.writerows(self.read_records())
 
     def read_records(self) -> Iterator[dict[str, str]]:
         for year, url in self.load_index():
@@ -419,6 +409,12 @@ class SC(Scraper, state='SC'):
             next(it)
             for row in it:
                 yield dict(zip(headers, row + extra))
+
+    def get_year_headers(self, year: int) -> list[str]:
+        for key, headers in self.headers_map.items():
+            if key and year in key:
+                return headers
+        return self.headers_map[None]
 
     def read_table(self, path: Path) -> Iterator[list[str]]:
         with pdfplumber.open(path) as pdf:
@@ -452,7 +448,7 @@ class SC(Scraper, state='SC'):
             if i == 0:
                 width, head = w, h
             elif width != w:
-                raise Exception(f'Mismatched table widths {width}, {w}')
+                raise ValueError(f'Mismatched table widths {width}, {w}')
             elif head == h:
                 table = iter(table)
                 next(table)
@@ -507,32 +503,16 @@ class SC(Scraper, state='SC'):
         c = 0
         while c <= len(table[0]) - 2:
             d = c + 1
-            if (
+            realign = (
                 most(row[c] or row[d] for row in table) and
-                not any(row[c] and row[d] for row in table)
-            ):
+                not any(row[c] and row[d] for row in table))
+            if realign:
                 for row in table:
                     if not row[c]:
                         del row[c]
                     else:
                         del row[d]
             c += 1
-
-    @classmethod
-    def get_headers(cls) -> Iterator[str]:
-        done = set()
-        for headers in (*reversed(cls.headers_map.values()), cls.extra_headers):
-            for value in headers:
-                if value not in done:
-                    yield value
-                done.add(value)
-
-    @classmethod
-    def get_year_headers(cls, year: int) -> list[str]:
-        for key, headers in cls.headers_map.items():
-            if key and year in key:
-                return headers
-        return cls.headers_map[None]
 
     rewrites = {
         'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
@@ -550,6 +530,54 @@ class SC(Scraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
+
+class MO(CommonScraper, state='MO'):
+    start_year = 2019
+    base_url = 'https://jobs.mo.gov/warn'
+    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/MO'
+    headers_map = {
+        10: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'Notes', 'url'],
+        9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
+        8: ['Received', 'Title', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
+    }
+    headers = list(utils.unique(chain(*headers_map.values())))
+
+    def scrape(self) -> None:
+        self.download_pages()
+        self.write_csv()
+
+    def download_pages(self):
+        now = utils.now()
+        for year in range(self.start_year, now.year + 1):
+            key = f'pages/{year}.html'
+            if self.cache.exists(key) and year < now.year - 1:
+                continue
+            url = f'{self.archive_url}/{key}'
+            rep = self.get_url(url)
+            if year == now.year:
+                dt = utils.parse_date(rep.headers.get('Last-Modified'))
+                if not dt:
+                    logger.warning(f'Cannot parse last-modified header')
+                elif dt < utils.now(days=-7, tz=timezone.utc):
+                    logger.warning(f'Current year page more than 7 days old {url=}')
+            self.cache.write(key, rep.content.decode())
+
+    def read_records(self) -> Iterable[dict[str, str]]:
+        for path in map(Path, self.cache.files('pages', '*.html')):
+            year = int(path.name.removesuffix('.html'))
+            logger.info(f'{year=}')
+            url = f'{self.base_url}/{year}'
+            page = BeautifulSoup(path.read_text(), 'html.parser')
+            table = page.find('table')
+            head, *trs = table.find_all('tr')
+            headers = self.headers_map[len(head.find_all(['td', 'th']))]
+            for tr in trs:
+                tds = tr.find_all('td')
+                values = [td.text.strip() for td in tds]
+                if utils.morethan(1, values):
+                    values.append(url)
+                    yield dict(zip(headers, values))
+
 warn_scraper_names = warn.utils.get_all_scrapers()
 
 @functools.cache
@@ -558,7 +586,7 @@ def get_scraper_module(state: str):
     if state in warn_scraper_names:
         return import_module(f'warn.scrapers.{state}')
 
-def create_scraper(state: str):
+def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
         pass
     DefaultScraper.state = state

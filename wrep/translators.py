@@ -723,11 +723,14 @@ class MO(Translator, state='MO'):
     default_url = 'https://jobs.mo.gov/warn/'
     headermap = {
         'Title': 'company',
+        'Received': 'reported',
         'Received Sort descending': 'reported',
         'Location(s)': 'location',
         '# affected': 'employees',
         'Type': 'action',
         'Layoff date(s)': 'starting',
+        'Industry': 'industry',
+        'url': 'url',
     }
 
 class MT(Translator, state='MT'):
@@ -908,7 +911,8 @@ class TX(Translator, state='TX'):
     }
     rewrites = dict(
         company=[
-            (_r('_x000D_'), ''),
+            (_r(r'_x000D_'), ''),
+            (_r(r"'$"), ''),
             # TODO: Dallas4 Plano2 etc.
         ],
         starting=[
