@@ -1,10 +1,12 @@
 beautifulsoup4
 boto3
+click
 fastapi
 feedgen
 jinja2
 motor
 peewee
+pdfplumber
 pydantic[email]
 python_dotenv
 python-dateutil
@@ -15,9 +17,7 @@ uvicorn[standard]
 # https://github.com/biglocalnews/warn-scraper
 html5lib
 openpyxl
-pdfplumber
 tenacity
-click
 xlrd
 retry
 

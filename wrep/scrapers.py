@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import csv
 import functools
-import glob
-import itertools
 import json
 import re
 import time
+from contextlib import contextmanager
 from importlib import import_module
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping
 
+import pdfplumber
 import requests
 from bs4 import BeautifulSoup
 
@@ -65,6 +65,14 @@ class Scraper:
     def fetch(self, url: str, **kw) -> str:
         return self.get_url(url, **kw).content.decode()
 
+    @contextmanager
+    def ctx_rewrite(self):
+        newfile = Path(f'{self.file}.rewrite')
+        with self.file.open() as reader:
+            with newfile.open('w') as writer:
+                yield csv.reader(reader), csv.writer(writer)
+        newfile.rename(self.file)
+
     def __init_subclass__(cls, state: str|None = None) -> None:
         if state:
             cls.state = state.upper()
@@ -117,7 +125,7 @@ class DE(Scraper, state='DE'):
 
     def scrape(self):
         self.scrape_index()
-        self.download_record_pages()
+        self.download_pages()
         self.write_csv()
 
     def scrape_index(self):
@@ -132,7 +140,7 @@ class DE(Scraper, state='DE'):
                 index.append(row)
         self.cache.write('index.json', json.dumps(index, indent=2))
 
-    def download_record_pages(self):
+    def download_pages(self):
         for row in self.load_index():
             url = row['URL']
             record_num = self.parse_record_number_from_path(url)
@@ -208,7 +216,7 @@ class GA(Scraper, state='GA'):
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36')
 
-    extra_columns = ['entry_url', 'submitted_date']
+    extra_headers = ['entry_url', 'submitted_date']
 
     def scrape(self):
         super().scrape()
@@ -217,17 +225,12 @@ class GA(Scraper, state='GA'):
     def augment(self):
         logger.info('Augmenting scraped data')
         entries = dict(self.fetch_entries())
-        fillrow = [''] * len(self.extra_columns)
-        newfile = Path(f'{self.file}.new')
-        with newfile.open('w') as file:
-            writer = csv.writer(file)
-            with self.file.open() as file:
-                reader = csv.reader(file)
-                writer.writerow(next(reader) + self.extra_columns)
-                for values in reader:
-                    extra = entries.get(values[0]) or fillrow
-                    writer.writerow(values + extra)
-        newfile.rename(self.file)
+        fillrow = [''] * len(self.extra_headers)
+        with self.ctx_rewrite() as (reader, writer):
+            writer.writerow(next(reader) + self.extra_headers)
+            for values in reader:
+                extra = entries.get(values[0]) or fillrow
+                writer.writerow(values + extra)
 
     def fetch_entries(self) -> Iterator[tuple[str, list[str]]]:
         logger.info('Fetching entries')
@@ -275,14 +278,27 @@ class IN(Scraper, state='IN'):
     public_url = scrape_url
 
     def scrape(self) -> None:
-        key = 'latest.html'
-        content = self.get_url(self.scrape_url).content.decode()
-        self.cache.write(key, content)
-        doc = BeautifulSoup(content, 'html.parser')
+        self.scrape_index()
+        self.write_csv()
+
+    def scrape_index(self):
+        self.cache.write('latest.html', self.fetch(self.scrape_url))
+
+    def write_csv(self):
+        headers = list(self.get_headers())
         with self.file.open('w') as file:
-            writer = csv.writer(file)
-            for table in doc.find_all('table'):
-                writer.writerows(self.read_table(table))
+            writer = csv.DictWriter(file, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(self.read_records())
+
+    def read_records(self):
+        doc = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
+        for i, table in enumerate(doc.find_all('table')):
+            it = self.read_table(table)
+            if i == 0:
+                headers = next(it)
+            for values in it:
+                yield dict(zip(headers, values))
 
     def read_table(self, table: BeautifulSoup) -> Iterator[list[str]]:
         tags = ['td', 'th']
@@ -303,6 +319,19 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
+    @classmethod
+    def get_headers(cls):
+        return [
+            'Company',
+            'City',
+            'Affected Workers',
+            'Notice Date',
+            'LO/CL Date',
+            'NAICS',
+            'Description of Work/Industry',
+            'Notice Type',
+            'url']
+
 class FL(Scraper, state='FL'):
 
     def scrape(self) -> None:
@@ -311,20 +340,15 @@ class FL(Scraper, state='FL'):
 
     def augment(self):
         lookup = dict(self.fetch_lookup())
-        newfile = Path(f'{self.file}.new')
-        with newfile.open('w') as file:
-            writer = csv.writer(file)
-            with self.file.open() as file:
-                reader = csv.reader(file)
-                writer.writerow(next(reader) + ['download'])
-                for values in reader:
-                    key = self.row_key(values)
-                    values.append(lookup.get(key, ''))
-                    writer.writerow(values)
-        newfile.rename(self.file)
+        with self.ctx_rewrite() as (reader, writer):
+            writer.writerow(next(reader) + ['download'])
+            for values in reader:
+                key = self.row_key(values)
+                values.append(lookup.get(key, ''))
+                writer.writerow(values)
 
     def fetch_lookup(self):
-        for file in glob.glob(f'{self.cache.path}/*_page_*.html'):
+        for file in self.cache.files('.', '*_page_*.html'):
             with open(file) as f:
                 doc = BeautifulSoup(f, 'html5lib')
             table = doc.find('table')
@@ -340,6 +364,191 @@ class FL(Scraper, state='FL'):
 
     def row_key(self, values: Iterable[str]) -> str:
         return ''.join(re.sub(r'\s', '', value) for value in values)
+
+
+class SC(Scraper, state='SC'):
+    base_url = 'https://scworks.org'
+    public_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
+    headers_map = {
+        **{
+            r: ['Company', 'Location', 'Layoff/Closure Date', 'Positions', 'Closure or Layoff', 'NAICS Code']
+            for r in [range(2020), range(2021, 2022)]
+        },
+        range(2020, 2021): ['Company', 'Location', 'Closure or Layoff', 'Positions', 'Layoff/Closure Date', 'NAICS Code'],
+        None: ['Company', 'County', 'Notice Date', 'Layoff/Closure Date', 'Impacted', 'Layoff/Closure', 'Address']
+    }
+    extra_headers = ['year', 'url']
+    realign_most = 0.9
+
+    def scrape(self) -> None:
+        self.scrape_index()
+        self.download_pdfs()
+        self.write_csv()
+
+    def scrape_index(self):
+        index: list[tuple[int, str]] = []
+        text = self.fetch(self.public_url)
+        self.cache.write('source.html', text)
+        page = BeautifulSoup(text, 'html.parser')
+        for a in page.find_all('a'):
+            href = a.get('href', '')
+            if href.endswith('.pdf'):
+                year = int(href.split('/')[-1][:4])
+                index.append((year, href))
+        index.sort()
+        self.cache.write('index.json', json.dumps(index, indent=2))
+
+    def download_pdfs(self):
+        for year, url in self.load_index():
+            key = f'{year}.pdf'
+            if not self.cache.exists(key) or year >= utils.now().year - 1:
+                self.cache.download(key, self.base_url + url)
+
+    def write_csv(self):
+        headers = list(self.get_headers())
+        with self.file.open('w') as file:
+            writer = csv.DictWriter(file, fieldnames=headers)
+            writer.writeheader()
+            writer.writerows(self.read_records())
+
+    def read_records(self) -> Iterator[dict[str, str]]:
+        for year, url in self.load_index():
+            headers = self.get_year_headers(year) + self.extra_headers
+            extra = [str(year), url]
+            it = self.read_table(Path(self.cache.path, f'{year}.pdf'))
+            next(it)
+            for row in it:
+                yield dict(zip(headers, row + extra))
+
+    def read_table(self, path: Path) -> Iterator[list[str]]:
+        with pdfplumber.open(path) as pdf:
+            it = (page.extract_tables() for page in pdf.pages)
+            it = (table for tables in it for table in tables)
+            it = map(self.process_table, it)
+            it = filter(None, it)
+            it = self.merge_tables(it)
+            it = (list(map(self.clean_cell, row)) for row in it)
+            it = list(it)
+            yield from it
+
+    def process_table(self, table: list[list[str|None]]) -> list[list[str|None]]|None:
+        table = self.skip_extra_header(table)
+        if self.table_is_sparse(table):
+            logger.debug(f'skip sparse {table=}')
+            return
+        if self.table_is_summary(table):
+            logger.debug(f'skip summary {table=}')
+            return
+        table = self.filter_sparse_rows(table)
+        table = self.filter_empty_columns(table)
+        self.realign_columns(table)
+        return table
+
+    def merge_tables(self, tables: Iterable[list[list]]) -> Iterator[list]:
+        width, head = None, None
+        for i, table in enumerate(tables):
+            h = table[0]
+            w = len(h)
+            if i == 0:
+                width, head = w, h
+            elif width != w:
+                raise Exception(f'Mismatched table widths {width}, {w}')
+            elif head == h:
+                table = iter(table)
+                next(table)
+            yield from table
+
+    def clean_cell(self, text: str|None) -> str:
+        text = text or ''
+        text = text.replace('\n', ' ').strip()
+        text = self.rewrites.get(text, text)
+        return text
+
+    def load_index(self) -> list[tuple[int, str]]:
+        return list(map(tuple, json.loads(self.cache.read('index.json'))))
+
+    def skip_extra_header(self, table: list[list]) -> list[list]:
+        header = table[0]
+        if not utils.morethan(1, header):
+            logger.debug(f'shift {header=}')
+            table = table[1:]
+        return table
+
+    def table_is_sparse(self, table: list[list]) -> bool:
+        return not any(utils.morethan(1, row) for row in table)
+
+    def table_is_summary(self, table: list[list]) -> bool:
+        return bool(table) and table[0][:2] == ['County', 'Impacted']
+
+    def filter_sparse_rows(self, table: list[list]) -> list[list]:
+        return [row for row in table if utils.morethan(2, row)]
+
+    def filter_empty_columns(self, table: list[list]) -> list[list]:
+        if not table:
+            return table
+        cols = [
+            c for c in range(len(table[0]))
+            if any(row[c] for row in table)]
+        return [[row[c] for c in cols] for row in table]
+
+    def realign_columns(self, table: list[list]) -> None:
+        """
+        +---+---+      +---+
+        | x |   |      | x |
+        +---+---+  =>  +---+
+        |   | x |      | x |
+        +---+---+      +---+
+        """
+        L = len(table)
+        if L < 2:
+            return table
+        def most(it):
+            return utils.morethan(self.realign_most * L, it)
+        c = 0
+        while c <= len(table[0]) - 2:
+            d = c + 1
+            if (
+                most(row[c] or row[d] for row in table) and
+                not any(row[c] and row[d] for row in table)
+            ):
+                for row in table:
+                    if not row[c]:
+                        del row[c]
+                    else:
+                        del row[d]
+            c += 1
+
+    @classmethod
+    def get_headers(cls) -> Iterator[str]:
+        done = set()
+        for headers in (*reversed(cls.headers_map.values()), cls.extra_headers):
+            for value in headers:
+                if value not in done:
+                    yield value
+                done.add(value)
+
+    @classmethod
+    def get_year_headers(cls, year: int) -> list[str]:
+        for key, headers in cls.headers_map.items():
+            if key and year in key:
+                return headers
+        return cls.headers_map[None]
+
+    rewrites = {
+        'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
+        'roup7,/ 5In/2c0.23': '7/5/2023',
+        'CYoonrskumer Products G': 'York',
+        'PBS Radiology Busine': 'PBS Radiology Business Experts',
+        'sSs uEmxpteerrts': 'Sumter',
+        'iGcsr,e eInncv i(l"leRyder")': 'Greenville',
+        'eCrvhiacrele IsIt o("nLegacy")': 'Charleston',
+        'LCLhCar,l eds/bto/an Yelloh': 'Charleston',
+        'LLLexCi,n dg/tbo/na Yelloh': 'Lexington',
+        'tSivtaet eSwerivdiec e- sM, LuLltiCple': 'Statewide - Multiple Counties',
+        'Co9u/n1t5ie/s2023': '9/15/2023',
+        'Statewide - Multiple': 'Statewide - Multiple Counties',
+        'Co9u/n2t9ie/s2023': '9/29/2023',
+    }
 
 warn_scraper_names = warn.utils.get_all_scrapers()
 
@@ -359,26 +568,3 @@ for state in map(str.upper, warn_scraper_names):
     if state not in scrapers:
         scrapers[state] = create_scraper(state)
 del(state)
-
-class Command(utils.BaseCommand):
-
-    @classmethod
-    def add_arguments(cls, parser: utils.ArgumentParser) -> None:
-        parser.add_argument('states', nargs='*', choices=scrapers)
-        parser.add_argument('--limit', '-l', type=int, default=10)
-    
-    def run(self):
-        states = self.opts.states or scrapers
-        for state in states:
-            scraper = scrapers[state]()
-            with utils.csvdicts(scraper.file) as reader:
-                it = itertools.islice(reader, self.opts.limit)
-                fixed = dict(state=state)
-                rows = [fixed | row for row in it]
-                print(json.dumps(rows, indent=2, default=utils.json_default))
-
-if __name__ == '__main__':
-    try:
-        Command.main()
-    except BrokenPipeError:
-        pass

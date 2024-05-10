@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterable, Iterator
 from uuid import UUID
 
 import dateutil.parser
@@ -41,6 +41,12 @@ def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|Non
     except FileNotFoundError:
         if not missing_ok:
             raise
+
+def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
+    for i, _ in enumerate(filter(pred, it), start=1):
+        if i > n:
+            return True
+    return False
 
 @contextmanager
 def csvdicts(path: Path, **kw):

@@ -841,25 +841,52 @@ class RI(Translator, state='RI'):
     )
 
 class SC(Translator, state='SC'):
-    # TODO: reported
-    default_url = 'https://scworks.org/employer/employer-programs/risk-closing/layoff-notification-reports'
+    base_url = 'https://scworks.org'
+    default_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
     headermap = {
-        'company': 'company',
-        'date': 'starting',
-        'location': 'location',
-        'jobs': 'employees',
-        'Layoff Type': 'action'
+        'Company': 'company',
+        'Notice Date': 'reported',
+        'Layoff/Closure Date': 'reported',
+        'Layoff/Closure Date': 'starting',
+        'Location': 'location',
+        'Address': 'location',
+        'County': 'location',
+        'Positions': 'employees',
+        'Impacted': 'employees',
+        'Closure or Layoff': 'action',
+        'Layoff/Closure': 'action',
+        'NAICS Code': 'naics',
+        'url': 'url',
     }
     rewrites = dict(
         company=[
             (_r('Servces'), 'Services'),
-            # TODO: Snake-cased names - bug in scraper?
+        ],
+        reported=[
+            (_r(r'^(\d{4})$'), r'\1-12-31'),
         ],
         starting=[
             REWRITE_DOUBLE_SLASH,
             ('4/8/20/20', '2020-04-08'),
         ],
+        url=[
+            (_r(r'^(/.*)$'), f'{base_url}\\1')
+        ]
     )
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        """
+        Best effort to populated reported date:
+
+        1. New reports have 'Notice Date'
+
+        2. For historical reports, use Dec. 31 of the year. However, if the
+        starting date is earlier, use that.
+        """
+        if not row.get('Notice Date'):
+            it = map(entry.get, ['reported', 'starting'])
+            entry['reported'] = min(filter(None, it), default=None)
+        super().finish(entry, row)
 
 class SD(Translator, state='SD'):
     # TODO
