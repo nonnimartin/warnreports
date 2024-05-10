@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import enum
 import hashlib
 import io
 import json
 import logging
 from argparse import ArgumentParser
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -54,16 +52,6 @@ def unique(it):
         if value not in done:
             yield value
         done.add(value)
-
-@contextmanager
-def csvdicts(path: Path, **kw):
-    with open(path) as file:
-        yield csv.DictReader(file, **kw)
-
-@contextmanager
-def logdicts(path: Path):
-    with open(path) as file:
-        yield logdict_reader(file)
 
 def logdict_reader(file: io.TextIOWrapper) -> Iterator[dict[str, str]]:
     while True:
@@ -199,17 +187,8 @@ class Stage(StrEnum):
     Load = 'load'
     Index = 'index'
 
-    @property
-    def dir(self) -> Path:
-        return settings.BUILD_DIR/self
-
-    @property
-    def ext(self) -> str|None:
-        if self is self.Extract:
-            return 'csv'
-        if self is self.Translate:
-            return 'log'
-
-    def file(self, state: str) -> Path|None:
-        if self.ext:
-            return Path(self.dir, f'{state.lower()}.{self.ext}')
+class SaveType(StrEnum):
+    Create = 'create'
+    Update = 'update'
+    Nochange = 'nochange'
+    Skip = 'skip'

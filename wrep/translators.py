@@ -997,9 +997,11 @@ class WI(Translator, state='WI'):
 class ReviewTable:
 
     def __init__(self, state: str, field: str, empty: bool = False):
+        from .scrapers import scrapers
         self.state = state.upper()
         self.field = field
         self.empty = empty
+        self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
         self.headermap = self.translator.headermap
         self.columns = []
@@ -1011,8 +1013,7 @@ class ReviewTable:
                     self.columns.append(header)
 
     def rows(self, limit: int|None = None):
-        file = utils.Stage.Extract.file(self.state)
-        with utils.csvdicts(file) as reader:
+        with self.scraper.reader() as reader:
             it = map(list, map(self.values, reader))
             it = itertools.islice(it, limit)
             if not self.empty:
@@ -1086,10 +1087,11 @@ class Command(utils.BaseCommand):
             print(tabulate.tabulate(it, table.headers()))
 
     def run_entries(self):
+        from .scrapers import scrapers
         for state in self.states:
+            scraper = scrapers[state]()
             translator = translators[state]()
-            file = utils.Stage.Extract.file(state)
-            with utils.csvdicts(file) as it:
+            with scraper.reader() as it:
                 if self.opts.reverse:
                     it = reversed(list(it))
                 it = [

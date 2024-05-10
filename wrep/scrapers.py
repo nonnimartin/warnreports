@@ -11,17 +11,17 @@ from datetime import timezone
 from importlib import import_module
 from itertools import chain
 from pathlib import Path
-from typing import Iterable, Iterator, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 import pdfplumber
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup as Soup
 
 import warn.cache
 import warn.runner
 import warn.utils
 
-from . import utils
+from . import settings, utils
 from .utils import Stage
 
 scrapers: dict[str, type[Scraper]] = {}
@@ -36,8 +36,9 @@ class Scraper(ABC):
 
     def __init__(self):
         stage = Stage.Extract
-        self.file = stage.file(self.state)
-        self.runner = warn.runner.Runner(stage.dir, stage.dir/'cache')
+        stage_dir = settings.BUILD_DIR/stage
+        self.file = stage_dir/f'{self.state.lower()}.csv'
+        self.runner = warn.runner.Runner(stage_dir, stage_dir/'cache')
         self.cache = warn.cache.Cache(self.runner.cache_dir/self.state.lower())
         self.session = requests.session()
         self.request_count = 0
@@ -53,6 +54,9 @@ class Scraper(ABC):
     def scrape(self) -> None:
         self.runner.scrape(self.state)
 
+    def fetch(self, url: str, **kw) -> str:
+        return self.get_url(url, **kw).content.decode()
+
     def get_url(self, url: str, **kw) -> requests.Response:
         if not url.startswith('http://') and not url.startswith('https://') and self.base_url:
             url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
@@ -65,8 +69,15 @@ class Scraper(ABC):
         rep.raise_for_status()
         return rep
 
-    def fetch(self, url: str, **kw) -> str:
-        return self.get_url(url, **kw).content.decode()
+    def stats(self) -> dict[str, Any]:
+        return dict(
+            hash=utils.hashfile(self.file),
+            size=self.file.stat().st_size)
+
+    @contextmanager
+    def reader(self):
+        with self.file.open() as file:
+            yield csv.DictReader(file, restkey='__')
 
     @contextmanager
     def ctx_rewrite(self):
@@ -105,32 +116,31 @@ class AK(CommonScraper, state='AK'):
     index_url = f'{base_url}/RR/WARN_notices.htm'
     public_url = index_url
     headers = ['Company', 'Location', 'Notice Date', 'Layoff Date', 'Employees Affected', 'Notes', 'url']
+    space_pat = re.compile(r'[\s\n]+')
 
     def scrape(self) -> None:
         self.scrape_index()
         self.write_csv()
 
     def read_records(self) -> Iterator[dict[str, str]]:
-        doc = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
+        doc = bs(self.cache.read('latest.html'))
         it = self.read_table(doc.find('table'))
         headers = next(it)
         for values in it:
             yield dict(zip(headers, values))
 
-    def read_table(self, table: BeautifulSoup) -> Iterator[list[str]]:
-        tags = ['td']
-        pat = re.compile(r'[\s\n]+')
+    def read_table(self, table: Soup) -> Iterator[list[str]]:
         for tr in table.find_all('tr'):
-            tds = tr.find_all(tags)
-            if len(tds) < 2:
-                continue
-            values = [pat.sub(' ', td.text).strip() for td in tds]
-            if not values[0]:
-                continue
-            values.append(self.parse_url(tds[0]))
-            yield values
+            values = [*self.read_tr(tr), self.parse_url(tr)]
+            if len(values) > 2 and values[0]:
+                yield values
 
-    def parse_url(self, td: BeautifulSoup) -> str:
+    def read_tr(self, tr: Soup) -> Iterator[str]:
+        for td in tr.find_all('td'):
+            yield self.space_pat.sub(' ', td.text).strip()
+
+    def parse_url(self, tr: Soup) -> str:
+        td = tr.find('td')
         if td.text.strip() == 'Company':
             return 'url'
         a = td.find('a')
@@ -159,26 +169,24 @@ class DE(CommonScraper, state='DE'):
                 row = dict.fromkeys(self.index_headers, '')
                 for key, td in zip(self.index_headers[:-1], tr.find_all('td')):
                     row[key] = td.text.strip()
-                row['URL'] = tr.find('td').find('a')['href']
+                href = tr.find('td').find('a')['href']
+                row['URL'] = href
+                row['record_num'] = str(int(href.rsplit('/')[-1].removesuffix('.html')))
                 index.append(row)
         self.cache.write('index.json', json.dumps(index, indent=2))
 
     def download_pages(self) -> None:
         for row in self.load_index():
-            url = row['URL']
-            record_num = self.parse_record_number_from_path(url)
-            key = self.get_record_number_cache_key(record_num)
-            if self.cache.exists(key):
-                logger.debug(f'Using cache {key}')
-                continue
-            self.cache.write(key, self.fetch(url))
+            record_num = row.pop('record_num')
+            key = f'records/{record_num}.html'
+            if not self.cache.exists(key):
+                self.cache.write(key, self.fetch(row['URL']))
 
     def read_records(self) -> Iterator[dict[str, str]]:
         for row in self.load_index():
-            url = row['URL']
-            record_num = self.parse_record_number_from_path(url)
-            key = self.get_record_number_cache_key(record_num)
-            page = BeautifulSoup(self.cache.read(key), 'html.parser')
+            record_num = row.pop('record_num')
+            key = f'records/{record_num}.html'
+            page = bs(self.cache.read(key))
             section = page.find(id='primaryContent')
             div = section.find('div', {'class': 'definition-list'})
             record = {}
@@ -189,13 +197,13 @@ class DE(CommonScraper, state='DE'):
                     record[key] = value
             yield record
 
-    def fetch_index_tables(self) -> Iterator[BeautifulSoup]:
+    def fetch_index_tables(self) -> Iterator[Soup]:
         page = 1
         while True:
             key = f'pages/{page}.html'
             url = self.index_url_template.format(page=page)
             text = self.fetch(url)
-            doc = BeautifulSoup(text, 'html.parser')
+            doc = bs(text)
             table = doc.find('table')
             if not table:
                 break
@@ -208,13 +216,6 @@ class DE(CommonScraper, state='DE'):
 
     def load_index(self) -> list[dict[str, str]]:
         return json.loads(self.cache.read('index.json'))
-
-    def get_record_number_cache_key(self, record_num: int) -> str:
-        return f'records/{record_num}.html'
-
-    def parse_record_number_from_path(self, href: str) -> int:
-        return int(href.rsplit('/')[-1].removesuffix('.html'))
-
 
 class GA(Scraper, state='GA'):
     base_url = 'https://www.tcsg.edu'
@@ -231,7 +232,7 @@ class GA(Scraper, state='GA'):
         self.augment()
 
     def augment(self):
-        logger.info('Augmenting scraped data')
+        logger.debug('Augmenting scraped data')
         entries = dict(self.fetch_entries())
         fillrow = [''] * len(self.extra_headers)
         with self.ctx_rewrite() as (reader, writer):
@@ -241,21 +242,21 @@ class GA(Scraper, state='GA'):
                 writer.writerow(values + extra)
 
     def fetch_entries(self) -> Iterator[tuple[str, list[str]]]:
-        logger.info('Fetching entries')
+        logger.debug('Fetching entries')
         self.session.headers = {'User-Agent': self.user_agent}
         rep = self.session.post(self.api_url, data=self.get_api_payload())
         rep.raise_for_status()
         for listing in rep.json()['data']:
-            a = BeautifulSoup(listing[0], 'html5lib').find('a')
+            a = bs(listing[0], 'html5lib').find('a')
             yield a.text, [a['href'], listing[2]]
 
     def get_api_payload(self):
         rep = self.get_url(self.public_url)
         rep.raise_for_status()
-        doc = BeautifulSoup(rep.text, 'html5lib')
+        doc = bs(rep.text, 'html5lib')
         return dict(self.payload, nonce=self.extract_nonce(doc))
 
-    def extract_nonce(self, doc: BeautifulSoup) -> str|None:
+    def extract_nonce(self, doc: Soup) -> str|None:
         script = doc.find(
             'script',
             text=lambda text: text and 'window.gvDTglobals.push' in text)
@@ -300,7 +301,7 @@ class IN(CommonScraper, state='IN'):
         self.write_csv()
 
     def read_records(self):
-        doc = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
+        doc = bs(self.cache.read('latest.html'))
         for i, table in enumerate(doc.find_all('table')):
             it = self.read_table(table)
             if i == 0:
@@ -308,7 +309,7 @@ class IN(CommonScraper, state='IN'):
             for values in it:
                 yield dict(zip(headers, values))
 
-    def read_table(self, table: BeautifulSoup) -> Iterator[list[str]]:
+    def read_table(self, table: Soup) -> Iterator[list[str]]:
         tags = ['td', 'th']
         for tr in table.find_all('tr'):
             tds = tr.find_all(tags)
@@ -319,14 +320,13 @@ class IN(CommonScraper, state='IN'):
             values.append(self.parse_url(last))
             yield values
 
-    def parse_url(self, cell: BeautifulSoup) -> str:
+    def parse_url(self, cell: Soup) -> str:
         if cell.name == 'th':
             return 'url'
         a = cell.find('a')
         if a:
             return self.base_url + a['href']
         return cell.text.strip()
-
 
 class FL(Scraper, state='FL'):
 
@@ -346,27 +346,29 @@ class FL(Scraper, state='FL'):
     def fetch_lookup(self) -> Iterator[tuple[str, str]]:
         for file in self.cache.files('.', '*_page_*.html'):
             with open(file) as f:
-                doc = BeautifulSoup(f, 'html5lib')
+                doc = bs(f, 'html5lib')
             table = doc.find('table')
-            tbody = table.find('tbody')
-            for tr in tbody.find_all('tr'):
-                tds = tr.find_all('td')
-                last = tds.pop()
-                if last.find('input', id='download'):
-                    el = last.find('input', type='hidden')
-                    if el:
-                        key = self.row_key(td.text for td in tds)
-                        yield key, el['value']
+            yield from self.parse_lookup_table(table)
+
+    def parse_lookup_table(self, table: Soup) -> Iterator[tuple[str, str]]:
+        tbody = table.find('tbody')
+        for tr in tbody.find_all('tr'):
+            tds = tr.find_all('td')
+            last = tds.pop()
+            if last.find('input', id='download'):
+                el = last.find('input', type='hidden')
+                if el:
+                    key = self.row_key(td.text for td in tds)
+                    yield key, el['value']
 
     def row_key(self, values: Iterable[str]) -> str:
         return ''.join(re.sub(r'\s', '', value) for value in values)
-
 
 class SC(CommonScraper, state='SC'):
     base_url = 'https://scworks.org'
     public_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
     index_url = public_url
-    headers_map = {
+    headers_species = {
         **{
             r: ['Company', 'Location', 'Layoff/Closure Date', 'Positions', 'Closure or Layoff', 'NAICS Code']
             for r in [range(2020), range(2021, 2022)]
@@ -375,7 +377,7 @@ class SC(CommonScraper, state='SC'):
         None: ['Company', 'County', 'Notice Date', 'Layoff/Closure Date', 'Impacted', 'Layoff/Closure', 'Address']
     }
     extra_headers = ['year', 'url']
-    headers = list(utils.unique(chain(*reversed(headers_map.values()), extra_headers)))
+    headers = list(utils.unique(chain(*reversed(headers_species.values()), extra_headers)))
     realign_most = 0.9
 
     def scrape(self) -> None:
@@ -386,7 +388,7 @@ class SC(CommonScraper, state='SC'):
     def scrape_index(self) -> None:
         super().scrape_index()
         index: list[tuple[int, str]] = []
-        page = BeautifulSoup(self.cache.read('latest.html'), 'html.parser')
+        page = bs(self.cache.read('latest.html'))
         for a in page.find_all('a'):
             href = str(a.get('href', ''))
             if href.endswith('.pdf'):
@@ -403,18 +405,18 @@ class SC(CommonScraper, state='SC'):
 
     def read_records(self) -> Iterator[dict[str, str]]:
         for year, url in self.load_index():
-            headers = self.get_year_headers(year) + self.extra_headers
+            headers = self.get_header_species(year) + self.extra_headers
             extra = [str(year), url]
             it = self.read_table(Path(self.cache.path, f'{year}.pdf'))
             next(it)
             for row in it:
                 yield dict(zip(headers, row + extra))
 
-    def get_year_headers(self, year: int) -> list[str]:
-        for key, headers in self.headers_map.items():
+    def get_header_species(self, year: int) -> list[str]:
+        for key, headers in self.headers_species.items():
             if key and year in key:
                 return headers
-        return self.headers_map[None]
+        return self.headers_species[None]
 
     def read_table(self, path: Path) -> Iterator[list[str]]:
         with pdfplumber.open(path) as pdf:
@@ -427,14 +429,14 @@ class SC(CommonScraper, state='SC'):
             it = list(it)
             yield from it
 
-    def process_table(self, table: list[list[str|None]]) -> list[list[str|None]]|None:
-        table = self.skip_extra_header(table)
+    def process_table(self, table: list[list[str|None]]) -> list[list]:
+        self.remove_extra_header(table)
         if self.table_is_sparse(table):
             logger.debug(f'skip sparse {table=}')
-            return
+            return []
         if self.table_is_summary(table):
             logger.debug(f'skip summary {table=}')
-            return
+            return []
         table = self.filter_sparse_rows(table)
         table = self.filter_empty_columns(table)
         self.realign_columns(table)
@@ -463,18 +465,16 @@ class SC(CommonScraper, state='SC'):
     def load_index(self) -> list[tuple[int, str]]:
         return list(map(tuple, json.loads(self.cache.read('index.json'))))
 
-    def skip_extra_header(self, table: list[list]) -> list[list]:
-        header = table[0]
-        if not utils.morethan(1, header):
-            logger.debug(f'shift {header=}')
-            table = table[1:]
-        return table
-
     def table_is_sparse(self, table: list[list]) -> bool:
         return not any(utils.morethan(1, row) for row in table)
 
     def table_is_summary(self, table: list[list]) -> bool:
         return bool(table) and table[0][:2] == ['County', 'Impacted']
+
+    def remove_extra_header(self, table: list[list]) -> None:
+        if table and not utils.morethan(1, table[0]):
+            logger.debug(f'remove extra {table[0]}')
+            del table[0]
 
     def filter_sparse_rows(self, table: list[list]) -> list[list]:
         return [row for row in table if utils.morethan(2, row)]
@@ -530,23 +530,22 @@ class SC(CommonScraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
-
 class MO(CommonScraper, state='MO'):
     start_year = 2019
     base_url = 'https://jobs.mo.gov/warn'
     archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/MO'
-    headers_map = {
+    headers_species = {
         10: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'Notes', 'url'],
         9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
         8: ['Received', 'Title', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
     }
-    headers = list(utils.unique(chain(*headers_map.values())))
+    headers = list(utils.unique(chain(*headers_species.values())))
 
     def scrape(self) -> None:
         self.download_pages()
         self.write_csv()
 
-    def download_pages(self):
+    def download_pages(self) -> None:
         now = utils.now()
         for year in range(self.start_year, now.year + 1):
             key = f'pages/{year}.html'
@@ -565,19 +564,26 @@ class MO(CommonScraper, state='MO'):
     def read_records(self) -> Iterable[dict[str, str]]:
         for path in map(Path, self.cache.files('pages', '*.html')):
             year = int(path.name.removesuffix('.html'))
-            logger.info(f'{year=}')
             url = f'{self.base_url}/{year}'
-            page = BeautifulSoup(path.read_text(), 'html.parser')
+            page = bs(path.read_text())
             table = page.find('table')
             head, *trs = table.find_all('tr')
-            headers = self.headers_map[len(head.find_all(['td', 'th']))]
+            headers = self.get_header_species(head)
             for tr in trs:
-                tds = tr.find_all('td')
-                values = [td.text.strip() for td in tds]
-                if utils.morethan(1, values):
-                    values.append(url)
+                values = [*self.read_tr(tr), url]
+                if utils.morethan(2, values):
                     yield dict(zip(headers, values))
 
+    def get_header_species(self, head: Soup) -> list[str]:
+        return self.headers_species[len(head.find_all(['td', 'th']))]
+
+    def read_tr(self, tr: Soup) -> Iterator[str]:
+        for td in tr.find_all('td'):
+            yield td.text.strip()
+
+def bs(markup, features='html.parser', **kw):
+    return Soup(markup, features, **kw)
+    
 warn_scraper_names = warn.utils.get_all_scrapers()
 
 @functools.cache

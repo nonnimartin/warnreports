@@ -5,8 +5,7 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
-from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.operations import IndexModel
@@ -16,7 +15,7 @@ from .models import *
 from .models import db
 from .scrapers import scrapers
 from .translators import translators
-from .utils import Stage
+from .utils import SaveType, Stage
 
 logger = utils.get_logger('pipeline')
 
@@ -46,6 +45,7 @@ class Pipeline:
         self.translator = translators[self.state]()
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
         self.mongo = search.mongo if settings.MONGODB_ENABLED else None
+        self.translations_log = settings.BUILD_DIR/'translate'/f'{self.state.lower()}.log'
         self.summary = {}
 
     async def run(self, stage: Stage, clean: bool = False) -> None:
@@ -65,28 +65,24 @@ class Pipeline:
             await self.mongo.reports.delete_many(dict(state=self.state))
         elif stage is stage.Extract:
             self.scraper.clean()
-        else:
+        elif stage is stage.Translate:
             if self.mongo is None:
-                self.file(stage).unlink(missing_ok=True)
+                self.translations_log.unlink(missing_ok=True)
             else:
                 await self.mongo.translations.delete_many(dict(state=self.state))
 
     async def extract(self, clean: bool = False) -> dict:
-        stage = Stage.Extract
-        file = self.scraper.file
-        hashes = dict(prev=utils.hashfile(file, missing_ok=True))
+        prev = self.scraper.stats()
         if clean:
-            await self.clean(stage)
+            await self.clean(Stage.Extract)
         self.scraper.scrape()
-        hashes.update(cur=utils.hashfile(file))
-        change = len(set(hashes.values())) > 1
-        size = file.stat().st_size
-        return dict(change=change, size=size, hashes=hashes)
+        cur = self.scraper.stats()
+        change = cur != prev
+        return dict(change=change, cur=cur, prev=prev)
 
     async def translate(self, clean: bool = False) -> dict:
-        stage = Stage.Translate
         if clean:
-            await self.clean(stage)
+            await self.clean(Stage.Translate)
         async with self.ctx_translate() as (reader, writer):
             count = 0
             async for row in reader:
@@ -97,22 +93,20 @@ class Pipeline:
         return dict(count=count)
 
     async def load(self, clean: bool = False) -> dict:
-        stage = Stage.Load
         counts = dict.fromkeys(map(str, SaveType), 0)
         async with self.ctx_load() as reader:
             if clean:
-                await self.clean(stage)
+                await self.clean(Stage.Load)
             async for entry in reader:
                 counts[self.save(entry)] += 1
         counts['total'] = sum(counts.values())
         return counts
 
     async def index(self, clean: bool = False) -> dict:
-        stage = Stage.Index
         if self.mongo is None:
             raise Exception(f'mongo not enabled')
         if clean:
-            await self.clean(stage)
+            await self.clean(Stage.Index)
         q = Report.select_for_reduce()
         q = q.where(Report.state == self.state)
         docs = map(ReportData.as_doc, ReportData.map_reduce(q))
@@ -181,9 +175,6 @@ class Pipeline:
             NaicsReport.insert_many(add).execute()
         return save
 
-    def file(self, stage: Stage) -> Path|None:
-        return Stage(stage).file(self.state)
-
     def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
         src = entry.get('report_id') or json.dumps(list(row.values()))
         return uuid.uuid5(self.namespace, src)
@@ -196,10 +187,10 @@ class Pipeline:
 
     @asynccontextmanager
     async def ctx_translate(self):
-        with utils.csvdicts(self.scraper.file, restkey='__') as reader:
+        with self.scraper.reader() as reader:
             reader = utils.as_aiter(reader)
             if self.mongo is None:
-                dest = self.file(Stage.Translate)
+                dest = self.translations_log
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with dest.open('w') as file:
                     yield reader, LogdictWriter(file)
@@ -211,7 +202,8 @@ class Pipeline:
     @asynccontextmanager
     async def ctx_load(self):
         if self.mongo is None:
-            with utils.logdicts(self.file(Stage.Translate)) as reader:
+            with self.translations_log.open() as file:
+                reader = utils.logdict_reader(file)
                 with db.atomic():
                     yield utils.as_aiter(reader)
         else:
@@ -239,11 +231,12 @@ class MongoWriter(EntryWriter):
     async def write(self, entry: dict[str, Any]):
         await self.coll.replace_one(dict(id=entry['id']), entry, True)
 
-class SaveType(utils.StrEnum):
-    Create = 'create'
-    Update = 'update'
-    Nochange = 'nochange'
-    Skip = 'skip'
+def logdict_reader(file: io.TextIOWrapper) -> Iterator[dict[str, Any]]:
+    while True:
+        line = file.readline()
+        if not line:
+            break
+        yield json.loads(line)
 
 class Command(utils.BaseCommand):
     'Run a pipeline stage'
