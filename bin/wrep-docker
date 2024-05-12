@@ -1,0 +1,7 @@
+#!/bin/sh
+if [ "$#" -eq 0 ] ; then
+  echo "Usage: wrep <COMMAND> [...]" >&2
+  exit 1
+fi
+cd /code
+exec python -m wrep.$@

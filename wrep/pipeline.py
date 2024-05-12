@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, Iterator
-
-from motor.motor_asyncio import AsyncIOMotorCollection
-from pymongo.operations import IndexModel
+from typing import Any
 
 from . import search, settings, utils
+from .backends.etl import *
 from .models import *
 from .models import db
 from .scrapers import scrapers
@@ -46,7 +42,8 @@ class Pipeline:
         self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
         self.is_mongo = settings.MONGODB_ENABLED
         self.mongo = search.mongo if self.is_mongo else None
-        self.translations_log = settings.BUILD_DIR/'translate'/f'{self.state.lower()}.log'
+        self.extraction_backend = self._extraction_backend()
+        self.translation_backend = self._translation_backend()
         self.summary = {}
 
     async def run(self, stage: Stage, clean: bool = False) -> None:
@@ -58,15 +55,12 @@ class Pipeline:
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'clean {stage} {self.state}')
-        if stage is stage.Extract:
+        if stage is stage.Scrape:
             await self.scraper.clean()
-            if self.is_mongo:
-                await self.mongo.extractions.delete_many(dict(state=self.state))
+        elif stage is stage.Extract:
+            await self.extraction_backend.clean()
         elif stage is stage.Translate:
-            if self.is_mongo:
-                await self.mongo.translations.delete_many(dict(state=self.state))
-            else:
-                self.translations_log.unlink(missing_ok=True)
+            await self.translation_backend.clean()
         elif stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
         elif stage is stage.Index:
@@ -74,31 +68,27 @@ class Pipeline:
                 raise ConfigError(f'mongo not enabled')
             await self.mongo.reports.delete_many(dict(state=self.state))
 
+    async def scrape(self, clean: bool = False) -> dict:
+        prev = self.scraper.stat()
+        if clean:
+            await self.clean(Stage.Scrape)
+        await self.scraper.scrape()
+        cur = self.scraper.stat()
+        return dict(prev=prev, cur=cur)
+
     async def extract(self, clean: bool = False) -> dict:
         if clean:
             await self.clean(Stage.Extract)
-        await self.scraper.scrape()
-        count = None
-        if self.is_mongo:
-            await self.mongo.extractions.delete_many(dict(state=self.state))
-            await self.mongo.extractions.create_indexes([
-                IndexModel({'state': 'hashed'})])
-            with self.scraper.extract() as reader:
-                it = utils.CountingIter(reader)
-                docs = (dict(state=self.state)|doc for doc in it)
-                await self.mongo.extractions.insert_many(docs, ordered=False)
-                count = it.count
+        count = await self.extraction_backend.run()
         return dict(stats=self.scraper.stat(), count=count)
 
     async def translate(self, clean: bool = False) -> dict:
         if clean:
             await self.clean(Stage.Translate)
-        async with self.ctx_translate() as (reader, writer):
+        async with self.translation_backend.runctx() as (reader, writer):
             count = 0
             async for row in reader:
                 count += 1
-                row.pop('_id', None)
-                row.pop('state', None)
                 entry = self.translator.entry(row)
                 entry.update(id=self.entry_uuid(entry, row), state=self.state, row=row)
                 await writer.write(entry)
@@ -106,11 +96,12 @@ class Pipeline:
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
-        async with self.ctx_load() as reader:
-            if clean:
-                await self.clean(Stage.Load)
-            async for entry in reader:
-                counts[self.save(entry)] += 1
+        async with self.translation_backend.reader() as reader:
+            with db.atomic():
+                if clean:
+                    await self.clean(Stage.Load)
+                async for entry in reader:
+                    counts[self.save(entry)] += 1
         counts['total'] = sum(counts.values())
         return counts
 
@@ -197,62 +188,23 @@ class Pipeline:
                 value = self.json_types[field](value)
         return value
 
-    @asynccontextmanager
-    async def ctx_translate(self):
+    def _extraction_backend(self) -> ExtractionBackend:
         if self.is_mongo:
-            await self.mongo.translations.create_indexes([
-                IndexModel({'id': 'hashed'}),
-                IndexModel({'state': 'hashed'})])
-            reader = self.mongo.extractions.find(dict(state=self.state))
-            yield reader, MongoWriter(self.mongo.translations)
+            cls = MongoExtraction
+            dest = self.mongo.extractions
         else:
-            with self.scraper.extract() as reader:
-                reader = utils.as_aiter(reader)
-                dest = self.translations_log
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                with dest.open('w') as file:
-                    yield reader, LogdictWrapper(file)
+            cls = FileExtraction
+            dest = settings.BUILD_DIR/'extract'/f'{self.state.lower()}.log'
+        return cls(self.scraper, dest)
 
-    @asynccontextmanager
-    async def ctx_load(self):
+    def _translation_backend(self) -> TranslationBackend:
         if self.is_mongo:
-            with db.atomic():
-                yield self.mongo.translations.find(dict(state=self.state))
+            cls = MongoTranslation
+            dest = self.mongo.translations
         else:
-            with self.translations_log.open() as file:
-                with db.atomic():
-                    yield LogdictWrapper(file)
-
-class EntryWriter:
-
-    async def write(self, entry: dict[str, Any]):
-        raise NotImplementedError
-
-class LogdictWrapper(EntryWriter):
-
-    def __init__(self, file: io.TextIOWrapper):
-        self.file = file
-
-    def __iter__(self) -> Iterator[dict[str, Any]]:
-        while True:
-            line = self.file.readline()
-            if not line:
-                break
-            yield json.loads(line)
-
-    __aiter__ = utils.as_aiter
-
-    async def write(self, entry: dict[str, Any]):
-        json.dump(entry, self.file, default=utils.json_default)
-        self.file.write('\n')
-
-class MongoWriter(EntryWriter):
-
-    def __init__(self, coll: AsyncIOMotorCollection):
-        self.coll = coll
-
-    async def write(self, entry: dict[str, Any]):
-        await self.coll.replace_one(dict(id=entry['id']), entry, True)
+            cls = FileTranslation
+            dest = settings.BUILD_DIR/'translate'/f'{self.state.lower()}.log'
+        return cls(self.extraction_backend, dest)
 
 class Command(utils.BaseCommand):
     'Run a pipeline stage'
@@ -270,7 +222,7 @@ class Command(utils.BaseCommand):
         self.pipelines = list(map(Pipeline, self.states))
         self.stages_groups = [], [], []
         groupings = [
-            [Stage.Extract, Stage.Translate],
+            [Stage.Scrape, Stage.Extract, Stage.Translate],
             [Stage.Load],
             [Stage.Index]]
         for stage in self.stages:
@@ -283,15 +235,15 @@ class Command(utils.BaseCommand):
 
     async def run(self):
         it = iter(self.stages_groups)
-        await self.run_pipelines_concurrently(*next(it))
-        await self.run_pipelines_consecutively(*next(it))
-        await self.run_pipelines_concurrently(*next(it))
+        await self.run_concurrently(*next(it))
+        await self.run_consecutively(*next(it))
+        await self.run_concurrently(*next(it))
 
-    async def run_pipelines_consecutively(self, *stages: Stage):
+    async def run_consecutively(self, *stages: Stage):
         for pipeline in self.pipelines:
             await self.run_pipeline(pipeline, *stages)
 
-    async def run_pipelines_concurrently(self, *stages: Stage):
+    async def run_concurrently(self, *stages: Stage):
         async with asyncio.TaskGroup() as tg:
             for pipeline in self.pipelines:
                 tg.create_task(self.run_pipeline(pipeline, *stages))

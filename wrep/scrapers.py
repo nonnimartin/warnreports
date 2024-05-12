@@ -557,7 +557,7 @@ class MO(Scraper, state='MO'):
 
     async def clean(self) -> None:
         await super().clean()
-        for path in map(Path, self.cache.files('pages', '*.html')):
+        for path in self.list_page_files():
             path.unlink()
 
     @contextmanager
@@ -565,7 +565,7 @@ class MO(Scraper, state='MO'):
         yield self.read_records()
 
     def read_records(self) -> Iterable[dict[str, str]]:
-        for path in map(Path, self.cache.files('pages', '*.html')):
+        for path in self.list_page_files():
             year = int(path.name.removesuffix('.html'))
             url = f'{self.base_url}/{year}'
             page = bs(path.read_text())
@@ -583,6 +583,17 @@ class MO(Scraper, state='MO'):
     def read_tr(self, tr: Soup) -> Iterator[str]:
         for td in tr.find_all('td'):
             yield td.text.strip()
+
+    def list_page_files(self) -> list[Path]:
+        files = self.cache.files('pages', '*.html')
+        files.sort(reverse=True)
+        return list(map(Path, files))
+
+    def stat(self):
+        files = self.list_page_files()
+        return dict(
+            hash=utils.hashfiles(files),
+            size=sum(file.stat().st_size for file in files))
 
 def bs(markup, features='html.parser', **kw):
     return Soup(markup, features, **kw)
@@ -609,8 +620,8 @@ del(state)
 class Cache(warn.cache.Cache):
 
     def __init__(self, state: str):
-        data_dir = settings.BUILD_DIR/'extract'
-        super().__init__(data_dir/'cache'/state.lower())
+        data_dir = settings.BUILD_DIR/'scrape'
+        super().__init__(data_dir/state.lower())
 
     def delete(self, key: str):
         self.topath(key).unlink(missing_ok=True)
@@ -632,13 +643,14 @@ class Cache(warn.cache.Cache):
 class Runner(warn.Runner):
 
     def __init__(self, state: str):
-        self.state = state.lower()
-        data_dir = settings.BUILD_DIR/'extract'
+        self.state = state.upper()
+        cache_dir = settings.BUILD_DIR/'scrape'
+        data_dir = cache_dir/self.state.lower()
         self.file = data_dir/f'{self.state.lower()}.csv'
-        super().__init__(data_dir, data_dir/'cache')
+        super().__init__(data_dir, cache_dir)
 
     def scrape(self) -> None:
-        super().scrape(self.state)
+        super().scrape(self.state.lower())
 
     def stat(self) -> dict[str, Any]:
         file = self.file

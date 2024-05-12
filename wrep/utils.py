@@ -35,11 +35,21 @@ def now(**kw) -> datetime:
     return dt
 
 def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
-    try:
-        return hashlib.new(alg, path.read_bytes()).hexdigest()
-    except FileNotFoundError:
-        if not missing_ok:
-            raise
+    return hashfiles((path,), alg=alg, missing_ok=missing_ok)
+
+def hashfiles(paths: Iterable[Path], alg: str = 'sha1', missing_ok: bool = False) -> str|None:
+    h = hashlib.new(alg)
+    found = False
+    for path in paths:
+        try:
+            h.update(path.read_bytes())
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
+        else:
+            found = True
+    if found:
+        return h.hexdigest()
 
 def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):
@@ -190,6 +200,7 @@ class BaseCommand:
         pass
 
 class Stage(StrEnum):
+    Scrape = 'scrape'
     Extract = 'extract'
     Translate = 'translate'
     Load = 'load'
