@@ -10,13 +10,14 @@ from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 from uuid import UUID
 
 import dateutil.parser
 
 from . import settings
 
+T = TypeVar('T')
 
 def get_logger(name: str|None = None) -> logging.Logger:
     if name:
@@ -53,14 +54,7 @@ def unique(it):
             yield value
         done.add(value)
 
-def logdict_reader(file: io.TextIOWrapper) -> Iterator[dict[str, str]]:
-    while True:
-        line = file.readline()
-        if not line:
-            break
-        yield json.loads(line)
-
-async def as_aiter(it):
+async def as_aiter(it: Iterable[T]):
     for x in it:
         yield x
 
@@ -96,7 +90,7 @@ def init_logging() -> None:
 
 def sync(ret):
     if asyncio.iscoroutine(ret):
-        ret = asyncio.get_event_loop().run_until_complete(ret)
+        ret = asyncio.run(ret)
     return ret
 
 def send_email(recipient: str, subject: str, body: str) -> bool:
@@ -145,6 +139,20 @@ def jinja_env():
     import jinja2
     loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
     return jinja2.Environment(loader=loader)
+
+class ConfigError(Exception):
+    pass
+
+class CountingIter:
+
+    def __init__(self, it: Iterable[T]):
+        self.it = it
+
+    def __iter__(self) -> Iterator[T]:
+        self.count = 0
+        for x in self.it:
+            self.count += 1
+            yield x
 
 class StrEnum(str, enum.Enum):
 

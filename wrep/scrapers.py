@@ -1,17 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import functools
 import json
 import re
-import time
-from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import timezone
 from importlib import import_module
-from itertools import chain
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Iterable, Iterator
 
 import pdfplumber
 import requests
@@ -22,112 +20,99 @@ import warn.runner
 import warn.utils
 
 from . import settings, utils
-from .utils import Stage
 
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
 
-class Scraper(ABC):
+class Scraper:
 
     state: str
     base_url: str|None = None
-    public_url: str|None = None
     request_delay = 0
 
     def __init__(self):
-        stage = Stage.Extract
-        stage_dir = settings.BUILD_DIR/stage
-        self.file = stage_dir/f'{self.state.lower()}.csv'
-        self.runner = warn.runner.Runner(stage_dir, stage_dir/'cache')
-        self.cache = warn.cache.Cache(self.runner.cache_dir/self.state.lower())
+        self.runner = Runner(self.state)
         self.session = requests.session()
+        self.cache = Cache(self.state)
         self.request_count = 0
-        self._scraper = get_scraper_module(self.state)
-        if self._scraper and not self.public_url:
-            src = getattr(self._scraper, '__source__', None)
-            if isinstance(src, Mapping) and 'url' in src:
-                self.public_url = src['url']
 
-    def clean(self) -> None:
-        self.file.unlink(missing_ok=True)
+    async def clean(self) -> None:
+        self.runner.file.unlink(missing_ok=True)
 
-    def scrape(self) -> None:
-        self.runner.scrape(self.state)
+    async def scrape(self) -> None:
+        self.runner.scrape()
 
-    def fetch(self, url: str, **kw) -> str:
-        return self.get_url(url, **kw).content.decode()
+    @contextmanager
+    def extract(self):
+        with self.runner.file.open() as file:
+            yield csv.DictReader(file, restkey='__')
 
-    def get_url(self, url: str, **kw) -> requests.Response:
-        if not url.startswith('http://') and not url.startswith('https://') and self.base_url:
-            url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
+    async def fetch(self, url: str, **kw) -> str:
+        rep = await self.req_get(url, **kw)
+        return rep.content.decode()
+
+    async def cache_fetch(self, key: str, url: str, **kw) -> str:
+        text = await self.fetch(url, **kw)
+        self.cache.write(key, text)
+        return text
+
+    async def cache_download(self, key: str, url: str, encoding: str|None = None, **kw) -> requests.Response:
+        # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
+        dest = self.cache.topath(key)
+        logger.debug(f'Downloading {url} to {dest}')
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with await self.req_get(url, stream=True, **kw) as rep:
+            rep.encoding = encoding or rep.encoding or 'utf-8'
+            with dest.open('wb') as f:
+                for chunk in rep.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        await asyncio.sleep(0)
+        return rep
+
+    async def req_get(self, url: str, **kw) -> requests.Response:
         if self.request_delay and self.request_count:
             logger.debug(f'request delay: {self.request_delay}s')
-            time.sleep(self.request_delay)
+            await asyncio.sleep(self.request_delay)
+        url = self.absurl(url)
         kw.setdefault('session', self.session)
         rep = warn.utils.get_url(url, **kw)
         self.request_count += 1
         rep.raise_for_status()
+        if not kw.get('stream'):
+            await asyncio.sleep(0)
         return rep
 
-    def stats(self) -> dict[str, Any]:
-        return dict(
-            hash=utils.hashfile(self.file),
-            size=self.file.stat().st_size)
+    def stat(self) -> dict[str, Any]:
+        return dict(runner=self.runner.stat())
 
-    @contextmanager
-    def reader(self):
-        with self.file.open() as file:
-            yield csv.DictReader(file, restkey='__')
-
-    @contextmanager
-    def ctx_rewrite(self):
-        newfile = Path(f'{self.file}.rewrite')
-        with self.file.open() as reader:
-            with newfile.open('w') as writer:
-                yield csv.reader(reader), csv.writer(writer)
-        newfile.rename(self.file)
+    def absurl(self, url: str) -> str:
+        if not url.startswith('http://') and not url.startswith('https://') and self.base_url:
+            url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
+        return url
 
     def __init_subclass__(cls, state: str|None = None) -> None:
         if state:
             cls.state = state.upper()
             scrapers[cls.state] = cls
 
-class CommonScraper(Scraper):
-    headers: Sequence[str] = ()
-    index_url: str
-
-    def get_headers(self) -> Sequence[str]:
-        return self.headers
-
-    @abstractmethod
-    def read_records(self) -> Iterable[dict[str, str]]: ...
-
-    def write_csv(self) -> None:
-        with self.file.open('w') as file:
-            writer = csv.DictWriter(file, fieldnames=self.get_headers())
-            writer.writeheader()
-            writer.writerows(self.read_records())
-
-    def scrape_index(self) -> None:
-        self.cache.write('latest.html', self.fetch(self.index_url))
-
-class AK(CommonScraper, state='AK'):
+class AK(Scraper, state='AK'):
     base_url = 'https://jobs.alaska.gov'
-    index_url = f'{base_url}/RR/WARN_notices.htm'
-    public_url = index_url
-    headers = ['Company', 'Location', 'Notice Date', 'Layoff Date', 'Employees Affected', 'Notes', 'url']
+    index_url = '/RR/WARN_notices.htm'
     space_pat = re.compile(r'[\s\n]+')
 
-    def scrape(self) -> None:
-        self.scrape_index()
-        self.write_csv()
+    async def scrape(self) -> None:
+        await self.cache_download('latest.html', self.index_url)
 
-    def read_records(self) -> Iterator[dict[str, str]]:
+    async def clean(self):
+        await super().clean()
+        self.cache.delete('latest.html')
+
+    @contextmanager
+    def extract(self):
         doc = bs(self.cache.read('latest.html'))
         it = self.read_table(doc.find('table'))
         headers = next(it)
-        for values in it:
-            yield dict(zip(headers, values))
+        yield (dict(zip(headers, values)) for values in it)
 
     def read_table(self, table: Soup) -> Iterator[list[str]]:
         for tr in table.find_all('tr'):
@@ -148,39 +133,53 @@ class AK(CommonScraper, state='AK'):
             return self.base_url + a['href']
         return ''
 
-class DE(CommonScraper, state='DE'):
+class DE(Scraper, state='DE'):
     base_url = 'https://joblink.delaware.gov'
-    index_url_template = '/search/warn_lookups?commit=Search&page={page}&q%5Bs%5D=notice_on+desc'
+    index_url = '/search/warn_lookups?commit=Search&page=1&q%5Bs%5D=notice_on+desc'
     request_delay = 1
     index_headers = ['Employer', 'City', 'ZIP', 'LWIB Area', 'Notice Date', 'WARN Type', 'URL']
     record_headers = ['Company Name', 'Address', 'Notice Date', 'Number of Employees Affected']
-    headers = list(utils.unique(chain(record_headers, index_headers)))
 
-    def scrape(self) -> None:
-        self.scrape_index()
-        self.download_pages()
-        self.write_csv()
-
-    def scrape_index(self) -> None:
+    async def scrape(self) -> None:
         index: list[dict[str, str]] = []
-        for table in self.fetch_index_tables():
+        async for table in self.fetch_index_tables():
             tbody = table.find('tbody')
             for tr in tbody.find_all('tr'):
                 row = dict.fromkeys(self.index_headers, '')
                 for key, td in zip(self.index_headers[:-1], tr.find_all('td')):
                     row[key] = td.text.strip()
-                href = tr.find('td').find('a')['href']
+                href = str(tr.find('td').find('a')['href'])
+                record_num = str(int(href.rsplit('/')[-1].removesuffix('.html')))
+                key = f'records/{record_num}.html'
+                if not self.cache.exists(key):
+                    await self.cache_download(key, href)
                 row['URL'] = href
-                row['record_num'] = str(int(href.rsplit('/')[-1].removesuffix('.html')))
+                row['record_num'] = record_num
                 index.append(row)
-        self.cache.write('index.json', json.dumps(index, indent=2))
+        self.cache.write_json('index.json', index, indent=2)
 
-    def download_pages(self) -> None:
-        for row in self.load_index():
-            record_num = row.pop('record_num')
-            key = f'records/{record_num}.html'
-            if not self.cache.exists(key):
-                self.cache.write(key, self.fetch(row['URL']))
+    async def fetch_index_tables(self):
+        page = 1
+        url = self.index_url
+        while url:
+            key = f'pages/{page}.html'
+            doc = bs(await self.cache_fetch(key, url))
+            table = doc.find('table')
+            if table:
+                yield table
+            nextlink = doc.find('a', {'class': 'next_page', 'rel': 'next'})
+            url = nextlink['href'] if nextlink else None
+            page += 1
+
+    async def clean(self):
+        await super().clean()
+        self.cache.delete('index.json')
+        for path in map(Path, self.cache.files('pages', '*.html')):
+            path.unlink()
+
+    @contextmanager
+    def extract(self):
+        yield self.read_records()
 
     def read_records(self) -> Iterator[dict[str, str]]:
         for row in self.load_index():
@@ -197,64 +196,64 @@ class DE(CommonScraper, state='DE'):
                     record[key] = value
             yield record
 
-    def fetch_index_tables(self) -> Iterator[Soup]:
-        page = 1
-        while True:
-            key = f'pages/{page}.html'
-            url = self.index_url_template.format(page=page)
-            text = self.fetch(url)
-            doc = bs(text)
-            table = doc.find('table')
-            if not table:
-                break
-            if 'no matches for your search results' in text:
-                logger.debug(f'No matches for {page=}')
-                break
-            self.cache.write(key, text)
-            yield table
-            page += 1
-
     def load_index(self) -> list[dict[str, str]]:
-        return json.loads(self.cache.read('index.json'))
+        return self.cache.read_json('index.json')
 
 class GA(Scraper, state='GA'):
     base_url = 'https://www.tcsg.edu'
-    public_url = f'{base_url}/warn-public-view/'
+    index_url = '/warn-public-view/'
     api_url = f'{base_url}/wp-admin/admin-ajax.php'
     user_agent = (
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36')
-
     extra_headers = ['entry_url', 'submitted_date']
 
-    def scrape(self):
-        super().scrape()
-        self.augment()
-
-    def augment(self):
-        logger.debug('Augmenting scraped data')
-        entries = dict(self.fetch_entries())
-        fillrow = [''] * len(self.extra_headers)
-        with self.ctx_rewrite() as (reader, writer):
-            writer.writerow(next(reader) + self.extra_headers)
-            for values in reader:
-                extra = entries.get(values[0]) or fillrow
-                writer.writerow(values + extra)
-
-    def fetch_entries(self) -> Iterator[tuple[str, list[str]]]:
-        logger.debug('Fetching entries')
+    async def scrape(self):
+        text = await self.cache_fetch('latest.html', self.index_url)
+        doc = bs(text, 'html5lib')
+        payload = dict(self.payload, nonce=self.extract_nonce(doc))
         self.session.headers = {'User-Agent': self.user_agent}
-        rep = self.session.post(self.api_url, data=self.get_api_payload())
+        rep = self.session.post(self.api_url, data=payload)
         rep.raise_for_status()
+        index = {}
         for listing in rep.json()['data']:
             a = bs(listing[0], 'html5lib').find('a')
-            yield a.text, [a['href'], listing[2]]
+            index[a.text] = [a['href'], listing[2]]
+        self.cache.write_json('index.json', index, indent=2)
+        if self.needs_scrape():
+            self.runner.scrape()
+            self.runner.file.rename(self.cache.topath('source.csv'))
 
-    def get_api_payload(self):
-        rep = self.get_url(self.public_url)
-        rep.raise_for_status()
-        doc = bs(rep.text, 'html5lib')
-        return dict(self.payload, nonce=self.extract_nonce(doc))
+    async def clean(self):
+        await super().clean()
+        for key in ('latest.html', 'index.json', 'source.csv'):
+            self.cache.delete(key)
+
+    @contextmanager
+    def extract(self):
+        with self.cache.open('source.csv') as file:
+            yield self.read_records(csv.reader(file))
+
+    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
+        index = self.load_index()
+        fillrow = [''] * len(self.extra_headers)
+        headers = next(it) + self.extra_headers
+        for values in it:
+            values += index.get(values[0]) or fillrow
+            yield dict(zip(headers, values))
+
+    def load_index(self) -> dict[str, tuple[str, str]]:
+        index: dict = self.cache.read_json('index.json')
+        return {key: tuple(item) for key, item in index.items()}
+
+    def needs_scrape(self):
+        source = self.cache.topath('source.csv')
+        keys = (f'{key}.format3' for key in self.load_index())
+        return not (
+            source.exists() and
+            source.stat().st_size and
+            self.cache.exists('index.json') and
+            all(map(self.cache.exists, keys)))
 
     def extract_nonce(self, doc: Soup) -> str|None:
         script = doc.find(
@@ -281,24 +280,20 @@ class GA(Scraper, state='GA'):
         setUrlOnSearch=True,
         shortcode_atts=dict(id=77460))
 
-class IN(CommonScraper, state='IN'):
+class IN(Scraper, state='IN'):
     base_url = 'https://www.in.gov'
-    index_url = f'{base_url}/dwd/warn-notices/current-warn-notices/'
-    public_url = index_url
-    headers = [
-        'Company',
-        'City',
-        'Affected Workers',
-        'Notice Date',
-        'LO/CL Date',
-        'NAICS',
-        'Description of Work/Industry',
-        'Notice Type',
-        'url']
+    index_url = '/dwd/warn-notices/current-warn-notices/'
 
-    def scrape(self) -> None:
-        self.scrape_index()
-        self.write_csv()
+    async def scrape(self) -> None:
+        await self.cache_download('latest.html', self.index_url)
+
+    async def clean(self) -> None:
+        await super().clean()
+        self.cache.delete('latest.html')
+
+    @contextmanager
+    def extract(self):
+        yield self.read_records()
 
     def read_records(self):
         doc = bs(self.cache.read('latest.html'))
@@ -330,23 +325,30 @@ class IN(CommonScraper, state='IN'):
 
 class FL(Scraper, state='FL'):
 
-    def scrape(self) -> None:
-        super().scrape()
-        self.augment()
+    async def scrape(self) -> None:
+        self.runner.scrape()
+        self.runner.file.rename(self.cache.topath('source.csv'))
 
-    def augment(self) -> None:
+    async def clean(self) -> None:
+        await super().clean()
+        self.cache.delete('source.csv')
+
+    @contextmanager
+    def extract(self):
+        with self.cache.open('source.csv') as file:
+            yield self.read_records(csv.reader(file))
+
+    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
         lookup = dict(self.fetch_lookup())
-        with self.ctx_rewrite() as (reader, writer):
-            writer.writerow(next(reader) + ['download'])
-            for values in reader:
-                key = self.row_key(values)
-                values.append(lookup.get(key, ''))
-                writer.writerow(values)
+        headers = next(it) + ['download']
+        for values in it:
+            key = self.row_key(values)
+            values.append(lookup.get(key, ''))
+            yield dict(zip(headers, values))
 
-    def fetch_lookup(self) -> Iterator[tuple[str, str]]:
+    def fetch_lookup(self):
         for file in self.cache.files('.', '*_page_*.html'):
-            with open(file) as f:
-                doc = bs(f, 'html5lib')
+            doc = bs(Path(file).read_text(), 'html5lib')
             table = doc.find('table')
             yield from self.parse_lookup_table(table)
 
@@ -364,10 +366,9 @@ class FL(Scraper, state='FL'):
     def row_key(self, values: Iterable[str]) -> str:
         return ''.join(re.sub(r'\s', '', value) for value in values)
 
-class SC(CommonScraper, state='SC'):
+class SC(Scraper, state='SC'):
     base_url = 'https://scworks.org'
-    public_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
-    index_url = public_url
+    index_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
     headers_species = {
         **{
             r: ['Company', 'Location', 'Layoff/Closure Date', 'Positions', 'Closure or Layoff', 'NAICS Code']
@@ -377,31 +378,31 @@ class SC(CommonScraper, state='SC'):
         None: ['Company', 'County', 'Notice Date', 'Layoff/Closure Date', 'Impacted', 'Layoff/Closure', 'Address']
     }
     extra_headers = ['year', 'url']
-    headers = list(utils.unique(chain(*reversed(headers_species.values()), extra_headers)))
     realign_most = 0.9
 
-    def scrape(self) -> None:
-        self.scrape_index()
-        self.download_pdfs()
-        self.write_csv()
-
-    def scrape_index(self) -> None:
-        super().scrape_index()
+    async def scrape(self) -> None:
         index: list[tuple[int, str]] = []
-        page = bs(self.cache.read('latest.html'))
+        text = await self.cache_fetch('latest.html', self.index_url)
+        page = bs(text)
         for a in page.find_all('a'):
             href = str(a.get('href', ''))
             if href.endswith('.pdf'):
                 year = int(href.split('/')[-1][:4])
                 index.append((year, href))
+                key = f'{year}.pdf'
+                if not self.cache.exists(key) or year >= utils.now().year - 1:
+                    await self.cache_download(key, href)
         index.sort()
-        self.cache.write('index.json', json.dumps(index, indent=2))
+        self.cache.write_json('index.json', index, indent=2)
 
-    def download_pdfs(self) -> None:
-        for year, url in self.load_index():
-            key = f'{year}.pdf'
-            if not self.cache.exists(key) or year >= utils.now().year - 1:
-                self.cache.download(key, self.base_url + url)
+    async def clean(self) -> None:
+        await super().clean()
+        for key in ('latest.html', 'index.json'):
+            self.cache.delete(key)
+
+    @contextmanager
+    def extract(self):
+        yield self.read_records()
 
     def read_records(self) -> Iterator[dict[str, str]]:
         for year, url in self.load_index():
@@ -426,7 +427,6 @@ class SC(CommonScraper, state='SC'):
             it = filter(None, it)
             it = self.merge_tables(it)
             it = (list(map(self.clean_cell, row)) for row in it)
-            it = list(it)
             yield from it
 
     def process_table(self, table: list[list[str|None]]) -> list[list]:
@@ -463,7 +463,7 @@ class SC(CommonScraper, state='SC'):
         return text
 
     def load_index(self) -> list[tuple[int, str]]:
-        return list(map(tuple, json.loads(self.cache.read('index.json'))))
+        return list(map(tuple, self.cache.read_json('index.json')))
 
     def table_is_sparse(self, table: list[list]) -> bool:
         return not any(utils.morethan(1, row) for row in table)
@@ -530,7 +530,7 @@ class SC(CommonScraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
-class MO(CommonScraper, state='MO'):
+class MO(Scraper, state='MO'):
     start_year = 2019
     base_url = 'https://jobs.mo.gov/warn'
     archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/MO'
@@ -539,27 +539,30 @@ class MO(CommonScraper, state='MO'):
         9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
         8: ['Received', 'Title', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
     }
-    headers = list(utils.unique(chain(*headers_species.values())))
 
-    def scrape(self) -> None:
-        self.download_pages()
-        self.write_csv()
-
-    def download_pages(self) -> None:
+    async def scrape(self) -> None:
         now = utils.now()
         for year in range(self.start_year, now.year + 1):
             key = f'pages/{year}.html'
             if self.cache.exists(key) and year < now.year - 1:
                 continue
             url = f'{self.archive_url}/{key}'
-            rep = self.get_url(url)
+            rep = await self.cache_download(key, url)
             if year == now.year:
                 dt = utils.parse_date(rep.headers.get('Last-Modified'))
                 if not dt:
                     logger.warning(f'Cannot parse last-modified header')
                 elif dt < utils.now(days=-7, tz=timezone.utc):
                     logger.warning(f'Current year page more than 7 days old {url=}')
-            self.cache.write(key, rep.content.decode())
+
+    async def clean(self) -> None:
+        await super().clean()
+        for path in map(Path, self.cache.files('pages', '*.html')):
+            path.unlink()
+
+    @contextmanager
+    def extract(self):
+        yield self.read_records()
 
     def read_records(self) -> Iterable[dict[str, str]]:
         for path in map(Path, self.cache.files('pages', '*.html')):
@@ -602,3 +605,45 @@ for state in map(str.upper, warn_scraper_names):
     if state not in scrapers:
         scrapers[state] = create_scraper(state)
 del(state)
+
+class Cache(warn.cache.Cache):
+
+    def __init__(self, state: str):
+        data_dir = settings.BUILD_DIR/'extract'
+        super().__init__(data_dir/'cache'/state.lower())
+
+    def delete(self, key: str):
+        self.topath(key).unlink(missing_ok=True)
+    
+    def topath(self, key: str):
+        return Path(self.path, key)
+
+    def open(self, key: str, *args, **kw):
+        return self.topath(key).open(*args, **kw)
+
+    def write_json(self, key: str, obj: Any, **kw):
+        with self.open(key, 'w') as file:
+            json.dump(obj, file, **kw)
+
+    def read_json(self, key: str, **kw) -> Any:
+        with self.open(key) as file:
+            return json.load(file, **kw)
+
+class Runner(warn.Runner):
+
+    def __init__(self, state: str):
+        self.state = state.lower()
+        data_dir = settings.BUILD_DIR/'extract'
+        self.file = data_dir/f'{self.state.lower()}.csv'
+        super().__init__(data_dir, data_dir/'cache')
+
+    def scrape(self) -> None:
+        super().scrape(self.state)
+
+    def stat(self) -> dict[str, Any]:
+        file = self.file
+        if file.exists():
+            return dict(
+                hash=utils.hashfile(file),
+                size=file.stat().st_size)
+        return {}

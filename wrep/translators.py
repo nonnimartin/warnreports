@@ -1013,11 +1013,11 @@ class ReviewTable:
                     self.columns.append(header)
 
     def rows(self, limit: int|None = None):
-        with self.scraper.reader() as reader:
+        with self.scraper.extract() as reader:
             it = map(list, map(self.values, reader))
             it = itertools.islice(it, limit)
             if not self.empty:
-                it = filter(lambda x: any(x[1:]), it)
+                it = filter(lambda x: utils.morethan(1, x), it)
             yield from it
 
     def headers(self):
@@ -1091,7 +1091,7 @@ class Command(utils.BaseCommand):
         for state in self.states:
             scraper = scrapers[state]()
             translator = translators[state]()
-            with scraper.reader() as it:
+            with scraper.extract() as it:
                 if self.opts.reverse:
                     it = reversed(list(it))
                 it = [
