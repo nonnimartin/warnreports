@@ -4,7 +4,8 @@ WORKDIR /code
 CMD python -m wrep.main
 ENV BUILD_DIR=/build
 ENV UVICORN_HOST=0.0.0.0
-RUN apk --no-cache -q add bash curl
+RUN apk --no-cache -q add bash curl &&\
+    ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
 RUN ./scripts/install-warn-scraper.sh
 COPY ./requirements.txt ./

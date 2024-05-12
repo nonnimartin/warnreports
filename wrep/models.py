@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Annotated, Literal, TypeAlias
+from typing import (Annotated, Any, ClassVar, Iterable, Iterator, Literal,
+                    Self, TypeAlias)
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
 
@@ -10,20 +12,17 @@ from annotated_types import Le
 from peewee import IntegrityError as IntegrityError
 from playhouse import db_url
 from pydantic import BaseModel as DataModel
-from pydantic import EmailStr, HttpUrl, NonNegativeInt, StringConstraints
+from pydantic import (ConfigDict, EmailStr, Field, NonNegativeInt, PositiveInt,
+                      StringConstraints)
 from pydantic_core import ValidationError as ValidationError
 
 from . import settings, utils
 
-__all__ = ['Follow', 'IntegrityError', 'Naics', 'NaicsReport', 'Report']
+__all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
-class OrmModel(orm.Model):
-    class Meta:
-        database = db
-
-class Report(OrmModel):
+class Report(orm.Model):
     NAMESPACE = uuid5(settings.NAMESPACE, 'Report')
     id = orm.UUIDField(primary_key=True)
     company = orm.CharField(max_length=512, index=True, collation='NOCASE')
@@ -36,21 +35,204 @@ class Report(OrmModel):
     action = orm.CharField(max_length=64, null=True, index=True)
     url = orm.CharField(max_length=2083, null=True)
 
-class Naics(OrmModel):
+    class Meta:
+        database = db
+
+    @classmethod
+    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+        q = cls.select(NaicsReport, Naics, cls)
+        q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
+        q = q.join_from(NaicsReport, Naics, orm.JOIN['LEFT_OUTER'])
+        q = q.order_by(cls.id, Naics.code)
+        return q
+
+class Naics(orm.Model):
     id = orm.IntegerField(primary_key=True)
     code = orm.CharField(max_length=32, index=True)
     title = orm.CharField(max_length=255, index=True, collation='NOCASE')
 
-class NaicsReport(OrmModel):
+    class Meta:
+        database = db
+
+class NaicsReport(orm.Model):
     naics = orm.ForeignKeyField(Naics, on_delete='CASCADE')
     report = orm.ForeignKeyField(Report, on_delete='CASCADE')
 
     class Meta:
-        indexes = [
-            (('naics', 'report'), True)
-        ]
+        database = db
+        indexes = [(('naics', 'report'), True)]
 
-class Follow(OrmModel):
+# ----------------------------
+
+__all__ += [
+    'CompanyData',
+    'CompanyDetail',
+    'CompanyName',
+    'DataModel',
+    'Limit',
+    'NaicsData',
+    'NaicsDetail',
+    'Offset',
+    'PageNumber',
+    'ReportData',
+    'StateCode',
+    'StateData',
+    'StateDetail',
+    'ValidationError']
+
+Limit = Annotated[NonNegativeInt, Le(1000)]
+Offset: TypeAlias = NonNegativeInt
+PageNumber: TypeAlias = PositiveInt
+CompanyName = Annotated[str, StringConstraints(min_length=1)]
+StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
+
+class ReportData(DataModel):
+    id: UUID = Field(alias='_id')
+    company: CompanyName
+    state: StateCode
+    location: str|None
+    reported: datetime
+    starting: datetime|None
+    employees: int|None
+    action: str|None
+    url: str|None
+    naics: list[NaicsData] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        from_attributes=True)
+
+    @classmethod
+    def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
+        if it is None:
+            it = Report.select_for_reduce()
+        inst: Self|None = None
+        for report in it:
+            if inst is None or inst.id != report.id:
+                if inst:
+                    yield inst
+                inst = cls.model_validate(report)
+            inst.reduce_obj(report)
+        if inst:
+            yield inst
+
+    def reduce_obj(self, report: Report) -> None:
+        nr = getattr(report, 'naicsreport', None)
+        if isinstance(nr, NaicsReport):
+            naics = NaicsData.model_validate(nr.naics)
+            self.naics.append(naics)
+
+    def as_doc(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=True)
+
+class NaicsData(DataModel):
+    id: int
+    code: str
+    title: str
+    model_config = ConfigDict(from_attributes=True)
+
+class NaicsDetail(NaicsData):
+    reports_count: int
+
+class CompanyData(DataModel):
+    company: CompanyName
+    state: StateCode
+    model_config = ConfigDict(from_attributes=True)
+
+class CompanyDetail(CompanyData):
+    last_reported: datetime|None
+    reports_count: int
+
+class StateData(DataModel):
+    state: StateCode
+
+class StateDetail(StateData):
+    last_reported: datetime|None
+    reports_count: int
+
+# ----------------------------
+
+__all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'NaicsFilter', 'StatesFilter']
+
+class FilterModel(DataModel):
+    order: str|None = None
+
+    order_fields: ClassVar[set[str]] = set()
+    default_ordering: ClassVar[list[tuple[str, Literal[1, -1]]]] = []
+
+    def get_ordering(self):
+        if self.order:
+            yield from self.parse_ordering(self.order, self.order_fields)
+        else:
+            yield from self.default_ordering
+
+    def parse_ordering(self, order: str, allowed: set[str]|None = None):
+        for field in filter(None, re.split(r',\s*', order)):
+            if field.startswith('-'):
+                field = field[1:]
+                dir_ = -1
+            else:
+                dir_ = 1
+            if allowed is None or field in allowed:
+                yield field, dir_
+
+class ReportsFilter(FilterModel):
+    id: UUID|None = None
+    text: str|None = None
+    company: CompanyName|None = None
+    state: StateCode|None = None
+    location: str|None = None
+    action: str|None = None
+    naics: int|None = None
+    reported_after: datetime|None = None
+    reported_before: datetime|None = None
+    starting_after: datetime|None = None
+    starting_before: datetime|None = None
+    employees_gt: int|None = None
+    employees_lt: int|None = None
+    order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
+    default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
+
+class CompaniesFilter(FilterModel):
+    text: str|None = None
+    company: CompanyName|None = None
+    state: StateCode|None = None
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    last_reported_after: datetime|None = None
+    last_reported_before: datetime|None = None
+    order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
+    default_ordering: ClassVar = [('company', 1), ('state', 1)]
+
+class StatesFilter(FilterModel):
+    state: StateCode|None = None
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    last_reported_after: datetime|None = None
+    last_reported_before: datetime|None = None
+    order_fields: ClassVar = {'state', 'reports_count', 'last_reported'}
+    default_ordering: ClassVar = [('state', 1)]
+
+class NaicsFilter(FilterModel):
+    id: int|None = None
+    code: int|None = None
+    prefix: int|None = None
+    title: str|None = None
+    text: str|None = None
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count'}
+    default_ordering: ClassVar = [('code', 1), ('id', 1)]
+
+# ----------------------------
+
+__all__ += ['Follow', 'FollowData', 'Token', 'EmailStr']
+
+userdb: orm.Database = db_url.connect(settings.USERS_DB_URL)
+
+Token: TypeAlias = UUID
+
+class Follow(orm.Model):
     id = orm.UUIDField(primary_key=True, default=uuid4)
     email = orm.CharField(index=True, collation='NOCASE')
     company = orm.CharField(max_length=512, index=True, collation='NOCASE')
@@ -61,9 +243,8 @@ class Follow(OrmModel):
     token = orm.UUIDField(unique=True, default=uuid4)
 
     class Meta:
-        indexes = [
-            (('email', 'company', 'state'), True),
-        ]
+        database = userdb
+        indexes = [(('email', 'company', 'state'), True)]
 
     @property
     def confirm_url(self) -> str:
@@ -83,78 +264,17 @@ class Follow(OrmModel):
         query = urlencode(dict(token=self.token, email=self.email))
         return f'{settings.SITE_URL}{path}?{query}'
 
-# ----------------------------
-
-__all__ += [
-    'CompanyData',
-    'EmailStr',
-    'FollowData',
-    'Limit',
-    'Offset',
-    'ReportData',
-    'State',
-    'StateData',
-    'SuccessData',
-    'Token',
-    'ValidationError']
-
-Token: TypeAlias = UUID
-Offset: TypeAlias = NonNegativeInt
-Limit = Annotated[NonNegativeInt, Le(1000)]
-NonemptyStr = Annotated[str, StringConstraints(min_length=1)]
-State = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
-
-class DataModel(DataModel):
-
-    @classmethod
-    def orm_fields(cls, model: type[OrmModel]) -> list[orm.Field]:
-        return [model._meta.fields[field] for field in cls.model_fields]
-
-class ReportData(DataModel):
-    id: UUID
-    company: str
-    state: State
-    location: str|None
-    reported: datetime
-    starting: datetime|None
-    employees: int|None
-    action: str|None
-    url: HttpUrl|None
-
-    @staticmethod
-    def orm_filters(
-        search: str|None = None,
-        company: str|None = None,
-        state: State|None = None,
-        location: str|None = None,
-    ):
-        return (
-            not state or Report.state == state,
-            not company or Report.company.ilike(f'%{company}%'),
-            not location or Report.location.ilike(f'%{location}%'),
-            not search or (
-                Report.company.ilike(f'%{search}%') |
-                Report.location.ilike(f'%{search}%')))
-
-class CompanyData(DataModel):
-    company: str
-    state: State
-
 class FollowData(DataModel):
     email: EmailStr
-    company: NonemptyStr
-    state: State|Literal['*'] = '*'
+    company: CompanyName
+    state: StateCode|Literal['*'] = '*'
 
-class StateData(DataModel):
-    state: State
-
-class SuccessData(DataModel):
-    success: Literal[True] = True
 
 # ----------------------------
 
 def migrate() -> None:
-    db.create_tables([Report, Naics, NaicsReport, Follow])
+    db.create_tables([Report, Naics, NaicsReport])
+    userdb.create_tables([Follow])
 
 def load_naics() -> None:
     import requests
@@ -169,7 +289,9 @@ def load_naics() -> None:
     with db.atomic():
         Naics.replace_many(records).execute()
 
-actions = dict(migrate=migrate, load_naics=load_naics)
+actions = dict(
+    migrate=migrate,
+    load_naics=load_naics)
 
 class Command(utils.BaseCommand):
 

@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-import csv
+import asyncio
 import enum
 import hashlib
+import io
 import json
 import logging
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 from uuid import UUID
 
 import dateutil.parser
 
 from . import settings
+
+T = TypeVar('T')
 
 def get_logger(name: str|None = None) -> logging.Logger:
     if name:
@@ -32,23 +35,38 @@ def now(**kw) -> datetime:
     return dt
 
 def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
-    try:
-        return hashlib.new(alg, path.read_bytes()).hexdigest()
-    except FileNotFoundError:
-        if not missing_ok:
-            raise
+    return hashfiles((path,), alg=alg, missing_ok=missing_ok)
 
-def csvdicts(path: Path, **kw) -> Iterator[dict[str, str]]:
-    with open(path) as file:
-        yield from csv.DictReader(file, **kw)
+def hashfiles(paths: Iterable[Path], alg: str = 'sha1', missing_ok: bool = False) -> str|None:
+    h = hashlib.new(alg)
+    found = False
+    for path in paths:
+        try:
+            h.update(path.read_bytes())
+        except FileNotFoundError:
+            if not missing_ok:
+                raise
+        else:
+            found = True
+    if found:
+        return h.hexdigest()
 
-def logdicts(path: Path) -> Iterator[dict[str, str]]:
-    with open(path) as file:
-        while True:
-            line = file.readline()
-            if not line:
-                break
-            yield json.loads(line)
+def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
+    for i, _ in enumerate(filter(pred, it), start=1):
+        if i > n:
+            return True
+    return False
+
+def unique(it):
+    done = set()
+    for value in it:
+        if value not in done:
+            yield value
+        done.add(value)
+
+async def as_aiter(it: Iterable[T]):
+    for x in it:
+        yield x
 
 def parse_date(value: str) -> datetime|None:
     value = value or ''
@@ -68,7 +86,7 @@ def parse_int(value: str) -> int|None:
 
 def render(template: str, *args, **kw) -> str:
     return jinja_env().get_template(template).render(*args, **kw)
-    
+
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -79,6 +97,11 @@ def json_default(value: Any) -> Any:
 def init_logging() -> None:
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level)
+
+def sync(ret):
+    if asyncio.iscoroutine(ret):
+        ret = asyncio.run(ret)
+    return ret
 
 def send_email(recipient: str, subject: str, body: str) -> bool:
     backend = email_backends[settings.EMAIL_BACKEND]
@@ -127,6 +150,20 @@ def jinja_env():
     loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
     return jinja2.Environment(loader=loader)
 
+class ConfigError(Exception):
+    pass
+
+class CountingIter:
+
+    def __init__(self, it: Iterable[T]):
+        self.it = it
+
+    def __iter__(self) -> Iterator[T]:
+        self.count = 0
+        for x in self.it:
+            self.count += 1
+            yield x
+
 class StrEnum(str, enum.Enum):
 
     def __str__(self):
@@ -146,7 +183,7 @@ class BaseCommand:
 
     @classmethod
     def main(cls, args=None):
-        cls(cls.parse(args)).run()
+        sync(cls(cls.parse(args)).run())
 
     @classmethod
     def parse(cls, args=None):
@@ -159,25 +196,18 @@ class BaseCommand:
     def setup(self, opts):
         pass
 
-    def run(self):
+    async def run(self):
         pass
 
 class Stage(StrEnum):
+    Scrape = 'scrape'
     Extract = 'extract'
     Translate = 'translate'
     Load = 'load'
+    Index = 'index'
 
-    @property
-    def dir(self) -> Path:
-        return settings.BUILD_DIR/self
-
-    @property
-    def ext(self) -> str|None:
-        if self is self.Extract:
-            return 'csv'
-        if self is self.Translate:
-            return 'log'
-
-    def file(self, state: str) -> Path|None:
-        if self.ext:
-            return Path(self.dir, f'{state.lower()}.{self.ext}')
+class SaveType(StrEnum):
+    Create = 'create'
+    Update = 'update'
+    Nochange = 'nochange'
+    Skip = 'skip'
