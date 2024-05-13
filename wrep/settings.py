@@ -20,3 +20,6 @@ SITE_URL = getenv('SITE_URL', 'http://localhost:8000')
 EMAIL_BACKEND = getenv('EMAIL_BACKEND', 'ses')
 EMAIL_ACCOUNT = getenv('EMAIL_ACCOUNT', 'you@somewhere.example')
 FEED_ENTRY_LIMIT = int(getenv('FEED_ENTRY_LIMIT', 20))
+SENTRY_ENABLED = getenv('SENTRY_ENABLED', '').lower() == 'true'
+SENTRY_DSN = getenv('SENTRY_DSN', '')
+SENTRY_ENVIRONMENT = getenv('SENTRY_ENVIRONMENT', 'dev')
