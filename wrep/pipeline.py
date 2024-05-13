@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Iterable
 
 from . import search, settings, utils
 from .backends.etl import *
@@ -12,7 +13,6 @@ from .models import *
 from .models import db
 from .scrapers import scrapers
 from .translators import translators
-from .utils import ConfigError
 
 logger = utils.get_logger('pipeline')
 
@@ -57,17 +57,17 @@ class Pipeline:
         self.mongo = search.mongo if self.is_mongo else None
         self.extraction_backend = self._extraction_backend()
         self.translation_backend = self._translation_backend()
-        self.summary = {}
 
-    async def run(self, stage: Stage, clean: bool = False) -> None:
+    async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
-        logger.info(f'run {stage} {self.state}')
-        self.summary[stage] = await getattr(self, stage)(clean=clean)
-        logger.info(f'run {stage} {self.state} {self.summary[stage]}')
+        logger.info(f'{self.state}:{stage}:start')
+        summary: dict = await getattr(self, stage)(clean=clean)
+        logger.info(f'{self.state}:{stage}:complete {summary}')
+        return summary
 
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
-        logger.info(f'clean {stage} {self.state}')
+        logger.info(f'{self.state}:{stage}:clean')
         if stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Extract:
@@ -77,25 +77,29 @@ class Pipeline:
         elif stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
         elif stage is stage.Index:
-            if not self.is_mongo:
-                raise ConfigError(f'mongo not enabled')
-            await self.mongo.reports.delete_many(dict(state=self.state))
+            if self.is_mongo:
+                await self.mongo.reports.delete_many(dict(state=self.state))
 
     async def scrape(self, clean: bool = False) -> dict:
-        prev = self.scraper.stat()
+        prev = await self.scraper.stat()
         if clean:
             await self.clean(Stage.Scrape)
         await self.scraper.scrape()
-        cur = self.scraper.stat()
-        return dict(prev=prev, cur=cur)
+        cur = await self.scraper.stat()
+        nochange = cur == prev if cur else None
+        return dict(prev=prev, cur=cur, nochange=nochange)
 
     async def extract(self, clean: bool = False) -> dict:
+        prev = await self.extraction_backend.stat()
         if clean:
             await self.clean(Stage.Extract)
         count = await self.extraction_backend.run()
-        return dict(stats=self.scraper.stat(), count=count)
+        cur = await self.extraction_backend.stat()
+        nochange = cur == prev if cur else None
+        return dict(count=count, prev=prev, cur=cur, nochange=nochange)
 
     async def translate(self, clean: bool = False) -> dict:
+        prev = await self.translation_backend.stat()
         if clean:
             await self.clean(Stage.Translate)
         async with self.translation_backend.runctx() as (reader, writer):
@@ -105,7 +109,9 @@ class Pipeline:
                 entry = self.translator.entry(row)
                 entry.update(id=self.entry_uuid(entry, row), state=self.state, row=row)
                 await writer.write(entry)
-        return dict(count=count)
+        cur = await self.translation_backend.stat()
+        nochange = cur == prev if cur else None
+        return dict(count=count, prev=prev, cur=cur, nochange=nochange)
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
@@ -115,29 +121,33 @@ class Pipeline:
                     await self.clean(Stage.Load)
                 async for entry in reader:
                     counts[self.save(entry)] += 1
-        counts['total'] = sum(counts.values())
-        return counts
+        count = sum(counts.values())
+        nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
+        return dict(count=count, counts=counts, nochange=nochange)
 
     async def index(self, clean: bool = False) -> dict:
-        if self.mongo is None:
-            raise ConfigError(f'mongo not enabled')
+        if not self.is_mongo:
+            logger.warning('mongo not enabled, nothing to do.')
+            return dict(skip=True)
         if clean:
             await self.clean(Stage.Index)
+        counts = dict.fromkeys(map(str, SaveType), 0)
         q = Report.select_for_reduce()
         q = q.where(Report.state == self.state)
         docs = map(ReportData.as_doc, ReportData.map_reduce(q))
-        count = q.count()
-        counts = dict(created=0, updated=0)
-        if clean:
-            if count:
-                await self.mongo.reports.insert_many(docs, ordered=False)
-                counts['created'] += count
-        else:
-            for doc in docs:
-                filt = dict(_id=doc['_id'])
-                res = await self.mongo.reports.replace_one(filt, doc, True)
-                counts['updated'] += res.modified_count
-        return counts
+        it = utils.CountingIter(docs)
+        for doc in it:
+            filt = dict(_id=doc['_id'])
+            res = await self.mongo.reports.replace_one(filt, doc, True)
+            if res.upserted_id:
+                counts[SaveType.Create] += 1
+            elif res.modified_count:
+                counts[SaveType.Update] += 1
+            else:
+                counts[SaveType.Nochange] += 1
+        count = sum(counts.values())
+        nochange = count == counts[SaveType.Nochange]
+        return dict(count=count, counts=counts, nochange=nochange)
 
     def save(self, entry: dict) -> SaveType:
         save = SaveType.Nochange
@@ -219,63 +229,107 @@ class Pipeline:
             dest = settings.BUILD_DIR/'translate'/f'{self.state.lower()}.log'
         return cls(self.extraction_backend, dest)
 
+class PipelineRunner:
+
+    GROUPING = {
+        Stage.Scrape: 0,
+        Stage.Extract: 0,
+        Stage.Translate: 0,
+        Stage.Load: 1,
+        Stage.Index: 2}
+
+    def __init__(
+        self,
+        stages: Iterable[Stage|str],
+        states: Iterable[StateCode],
+        clean: bool = False,
+        clean_only: bool = False,
+        incremental: bool = False,
+    ):
+        if clean_only and (clean or incremental):
+            raise ValueError(f'Cannot specify clean_only with clean or incremental')
+        self.clean = clean
+        self.clean_only = clean_only
+        self.incremental = incremental
+        self.stages = list(utils.unique(map(Stage, stages)))
+        self.states = list(utils.unique(map(str.upper, states)))
+        self.pipelines = list(map(Pipeline, self.states))
+        self.runs: dict[StateCode, list[dict]] = defaultdict(list)
+        self.grouping: tuple[list[Stage], ...] = [], [], []
+        for stage in self.stages:
+            self.grouping[self.GROUPING[stage]].append(stage)
+
+    async def run(self) -> None:
+        it = iter(self.grouping)
+        await self._run_concurrently(*next(it))
+        await self._run_consecutively(*next(it))
+        await self._run_concurrently(*next(it))
+
+    async def _run_consecutively(self, *stages: Stage) -> None:
+        for pipeline in self.pipelines:
+            await self._run_pipeline(pipeline, *stages)
+
+    async def _run_concurrently(self, *stages: Stage) -> None:
+        async with asyncio.TaskGroup() as group:
+            for pipeline in self.pipelines:
+                group.create_task(self._run_pipeline(pipeline, *stages))
+
+    async def _run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
+        for stage in stages:
+            state = pipeline.state
+            res = dict(state=state, stage=stage)
+            if self._should_skip(state):
+                logger.info(f'{state}:{stage}:skip')
+                res.update(skip=True)
+            elif self.clean_only:
+                await pipeline.clean(stage)
+                res.update(clean_only=True)
+            else:
+                res = await pipeline.run(stage, clean=self.clean)
+                res.update(clean=self.clean)
+            self.runs[pipeline.state].append(res)
+
+    def _should_skip(self, state: StateCode) -> bool:
+        return bool(
+            self.incremental and
+            (runs := self.runs[state]) and
+            runs[-1].get('nochange'))
+
 class Command(utils.BaseCommand):
-    'Run a pipeline stage'
+    'Run a pipeline'
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('stage', metavar='stages')
+        parser.add_argument('stages', metavar='stages', type=cls.stages_opt)
         parser.add_argument('states', nargs='*', metavar='state')
         parser.add_argument('--clean', '-c', action='store_true')
         parser.add_argument('--clean-only', '-x', action='store_true')
+        parser.add_argument('--incremental', '-i', action='store_true')
 
     def setup(self, opts):
-        self.stages = list(utils.unique(map(self.get_stage, opts.stage.split(','))))
-        self.states = list(utils.unique(map(str.upper, opts.states or translators)))
-        self.pipelines = list(map(Pipeline, self.states))
-        self.stages_groups = [], [], []
-        groupings = [
-            [Stage.Scrape, Stage.Extract, Stage.Translate],
-            [Stage.Load],
-            [Stage.Index]]
-        for stage in self.stages:
-            for i, grouping in enumerate(groupings):
-                if stage in grouping:
-                    break
-            else:
-                raise ValueError(stage)
-            self.stages_groups[i].append(stage)
+        opts.states = opts.states or list(translators)
+        self.runner = PipelineRunner(**vars(opts))
 
     async def run(self):
-        it = iter(self.stages_groups)
-        await self.run_concurrently(*next(it))
-        await self.run_consecutively(*next(it))
-        await self.run_concurrently(*next(it))
-
-    async def run_consecutively(self, *stages: Stage):
-        for pipeline in self.pipelines:
-            await self.run_pipeline(pipeline, *stages)
-
-    async def run_concurrently(self, *stages: Stage):
-        async with asyncio.TaskGroup() as tg:
-            for pipeline in self.pipelines:
-                tg.create_task(self.run_pipeline(pipeline, *stages))
-
-    async def run_pipeline(self, pipeline: Pipeline, *stages: Stage):
-        for stage in stages:
-            if self.opts.clean_only:
-                coro = pipeline.clean(stage)
-            else:
-                coro = pipeline.run(stage, clean=self.opts.clean)
-            await coro
+        await self.runner.run()
 
     @staticmethod
-    def get_stage(value: Stage|str) -> Stage:
-        if len(value) == 1:
-            for stage in Stage:
-                if stage[0] == value.lower():
-                    return stage
-        return Stage(value.lower())
+    def stages_opt(value: str) -> list[Stage]:
+        if value == 'all':
+            return list(Stage)
+        values = map(str.lower, value.split(','))
+        stages = []
+        for value in values:
+            if len(value) == 1:
+                for stage in Stage:
+                    if stage[0] == value:
+                        stages.append(stage)
+                        break
+                else:
+                    stages.append(Stage(value))
+            else:
+                stages.append(Stage(value))
+        return stages
 
 if __name__ == '__main__':
     Command.main()

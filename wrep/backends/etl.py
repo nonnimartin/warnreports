@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
-import asyncio
-from pathlib import Path
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, AsyncIterable, Generator, Generic, Iterable, Iterator, TypeVar
+from pathlib import Path
+from typing import (Any, AsyncGenerator, AsyncIterable, Generic, Iterator,
+                    TypeVar)
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.operations import IndexModel
@@ -23,9 +24,33 @@ __all__ = [
     'TranslationBackend']
 
 T = TypeVar('T')
+S = TypeVar('S', bound='Scraper|ExtractionBackend')
+
 logger = utils.get_logger('backends.etl')
 
-class ExtractionBackend(Generic[T]):
+class DocWriter(ABC):
+
+    @abstractmethod
+    async def write(self, doc: dict[str, Any]) -> None: ...
+
+class BackendMixin(Generic[T, S]):
+    
+    def __init__(self, source: S, dest: T):
+        self.state = source.state.upper()
+        self.scraper = source
+        self.dest = dest
+
+    @abstractmethod
+    async def clean(self) -> None: ...
+
+    async def stat(self) -> dict:
+        return {}
+
+    @abstractmethod
+    @asynccontextmanager
+    async def reader(self) -> AsyncGenerator[AsyncIterable[dict[str, T]]]: ...
+
+class ExtractionBackend(BackendMixin[str, Scraper], Generic[T]):
 
     def __init__(self, source: Scraper, dest: T):
         self.state = source.state.upper()
@@ -35,14 +60,7 @@ class ExtractionBackend(Generic[T]):
     @abstractmethod
     async def run(self) -> int: ...
 
-    @abstractmethod
-    async def clean(self) -> None: ...
-
-    @abstractmethod
-    @asynccontextmanager
-    async def reader(self) -> AsyncGenerator[AsyncIterable[dict[str, str]]]: ...
-
-class TranslationBackend(Generic[T]):
+class TranslationBackend(BackendMixin[Any, ExtractionBackend], Generic[T]):
 
     def __init__(self, source: ExtractionBackend, dest: T):
         self.state = source.state.upper()
@@ -50,24 +68,19 @@ class TranslationBackend(Generic[T]):
         self.dest = dest
     
     @abstractmethod
-    async def clean(self) -> None: ...
-
-    @abstractmethod
     @asynccontextmanager
     async def runctx(self) -> AsyncGenerator[tuple[AsyncIterable[dict[str, str]], DocWriter]]: ...
-
-    @abstractmethod
-    @asynccontextmanager
-    async def reader(self) -> AsyncGenerator[AsyncIterable[dict[str, Any]]]: ...
 
 class MongoExtraction(ExtractionBackend[AsyncIOMotorCollection]):
 
     async def run(self):
         await self.dest.delete_many(dict(state=self.state))
-        await self.dest.create_indexes([IndexModel({'state': 'hashed'})])
+        await self.dest.create_indexes([
+            IndexModel({'state': 'hashed'}),
+            IndexModel({'_i': 1})])
         with self.scraper.extract() as reader:
             it = utils.CountingIter(reader)
-            docs = (dict(state=self.state)|doc for doc in it)
+            docs = (dict(state=self.state, _i=i)|doc for i, doc in enumerate(it))
             await self.dest.insert_many(docs, ordered=False)
         return it.count
 
@@ -78,17 +91,13 @@ class MongoExtraction(ExtractionBackend[AsyncIOMotorCollection]):
     async def reader(self):
         yield (
             self.clean_doc(doc) async for doc in
-            self.dest.find(dict(state=self.state)))
+            self.dest.find(dict(state=self.state)).sort('_i'))
 
     def clean_doc(self, doc: dict):
+        doc.pop('_i', None)
         doc.pop('_id', None)
         doc.pop('state', None)
         return doc
-
-class DocWriter(ABC):
-
-    @abstractmethod
-    async def write(self, doc: dict[str, Any]) -> None: ...
 
 class FileExtraction(ExtractionBackend[Path]):
 
@@ -105,6 +114,12 @@ class FileExtraction(ExtractionBackend[Path]):
     async def clean(self) -> None:
         self.dest.unlink(missing_ok=True)
 
+    async def stat(self):
+        files = [self.dest]
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files))
+
     @asynccontextmanager
     async def reader(self):
         with self.dest.open() as file:
@@ -112,8 +127,7 @@ class FileExtraction(ExtractionBackend[Path]):
 
 class MongoTranslation(TranslationBackend[AsyncIOMotorCollection], DocWriter):
 
-    async def clean(self) -> None:
-        await self.dest.delete_many(dict(state=self.state))
+    clean = MongoExtraction.clean
 
     async def write(self, entry: dict[str, Any]):
         await self.dest.replace_one(dict(id=entry['id']), entry, True)
@@ -125,14 +139,16 @@ class MongoTranslation(TranslationBackend[AsyncIOMotorCollection], DocWriter):
             IndexModel({'state': 'hashed'})])
         async with self.source.reader() as reader:
             yield reader, self
+
     @asynccontextmanager
     async def reader(self):
         yield self.dest.find(dict(state=self.state))
 
 class FileTranslation(TranslationBackend[Path]):
 
-    async def clean(self) -> None:
-        self.dest.unlink(missing_ok=True)
+    clean = FileExtraction.clean
+    reader = FileExtraction.reader
+    stat = FileExtraction.stat
 
     @asynccontextmanager
     async def runctx(self):
@@ -140,11 +156,6 @@ class FileTranslation(TranslationBackend[Path]):
         async with self.source.reader() as reader:
             with self.dest.open('w') as file:
                 yield reader, LogdictWrapper(file)
-
-    @asynccontextmanager
-    async def reader(self):
-        with self.dest.open() as file:
-            yield LogdictWrapper(file)
 
 class LogdictWrapper(DocWriter):
 

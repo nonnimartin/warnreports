@@ -4,7 +4,7 @@ from uuid import UUID
 
 import click
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,10 +29,7 @@ async def index(req: Request) -> HTMLResponse:
 
 @app.get('/r/{id}', include_in_schema=False)
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
-    try:
-        report = await retrieve(ReportData, id=id)
-    except NotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    report = await retrieve404(ReportData, id=id)
     context = dict(report=report)
     return templates.TemplateResponse(req, 'report.jinja', context)
 

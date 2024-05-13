@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import timezone
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Generator, Iterable, Iterator
 
 import pdfplumber
 import requests
@@ -42,8 +42,11 @@ class Scraper:
     async def scrape(self) -> None:
         self.runner.scrape()
 
+    async def stat(self) -> dict[str, Any]:
+        return self.runner.stat()
+
     @contextmanager
-    def extract(self):
+    def extract(self) -> Generator[Iterable[dict[str, str]]]:
         with self.runner.file.open() as file:
             yield csv.DictReader(file, restkey='__')
 
@@ -82,9 +85,6 @@ class Scraper:
             await asyncio.sleep(0)
         return rep
 
-    def stat(self) -> dict[str, Any]:
-        return dict(runner=self.runner.stat())
-
     def absurl(self, url: str) -> str:
         if not url.startswith('http://') and not url.startswith('https://') and self.base_url:
             url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
@@ -104,11 +104,21 @@ class AK(Scraper, state='AK'):
         await self.cache_download('latest.html', self.index_url)
 
     async def clean(self):
-        await super().clean()
         self.cache.delete('latest.html')
 
+    async def stat(self):
+        try:
+            page = bs(self.cache.read('latest.html'))
+        except FileNotFoundError:
+            strings = []
+        else:
+            strings = [page.find('table').text]
+        return dict(
+            hash=utils.hashstrings(strings),
+            size=sum(map(len, strings)))
+
     @contextmanager
-    def extract(self):
+    def extract(self) -> Generator[Iterator[dict[str, str]]]:
         doc = bs(self.cache.read('latest.html'))
         it = self.read_table(doc.find('table'))
         headers = next(it)
@@ -172,9 +182,8 @@ class DE(Scraper, state='DE'):
             page += 1
 
     async def clean(self):
-        await super().clean()
         self.cache.delete('index.json')
-        for path in map(Path, self.cache.files('pages', '*.html')):
+        for path in self.list_page_files():
             path.unlink()
 
     @contextmanager
@@ -199,6 +208,23 @@ class DE(Scraper, state='DE'):
     def load_index(self) -> list[dict[str, str]]:
         return self.cache.read_json('index.json')
 
+    def list_page_files(self) -> list[Path]:
+        files = self.cache.files('pages', '*.html')
+        files.sort(reverse=True)
+        return list(map(Path, files))
+
+    def list_record_files(self) -> list[Path]:
+        files = self.cache.files('records', '*.html')
+        files.sort(reverse=True)
+        return list(map(Path, files))
+
+    async def stat(self):
+        files = [self.cache.topath('index.json')]
+        files += self.list_record_files()
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files))
+
 class GA(Scraper, state='GA'):
     base_url = 'https://www.tcsg.edu'
     index_url = '/warn-public-view/'
@@ -222,16 +248,21 @@ class GA(Scraper, state='GA'):
         self.cache.write_json('index.json', index, indent=2)
         if self.needs_scrape():
             self.runner.scrape()
-            self.runner.file.rename(self.cache.topath('source.csv'))
 
     async def clean(self):
         await super().clean()
-        for key in ('latest.html', 'index.json', 'source.csv'):
-            self.cache.delete(key)
+        self.cache.delete('latest.html', 'index.json')
+
+    async def stat(self):
+        files = [self.cache.topath('index.json')]
+        files += self.list_record_files()
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files))
 
     @contextmanager
     def extract(self):
-        with self.cache.open('source.csv') as file:
+        with self.runner.file.open() as file:
             yield self.read_records(csv.reader(file))
 
     def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
@@ -247,7 +278,7 @@ class GA(Scraper, state='GA'):
         return {key: tuple(item) for key, item in index.items()}
 
     def needs_scrape(self):
-        source = self.cache.topath('source.csv')
+        source = self.runner.file
         keys = (f'{key}.format3' for key in self.load_index())
         return not (
             source.exists() and
@@ -262,6 +293,11 @@ class GA(Scraper, state='GA'):
         match = re.search(r'"nonce":"([^"]+)"', str(script))
         if match:
             return match.group(1)
+
+    def list_record_files(self) -> list[Path]:
+        files = self.cache.files('.', '*.format3')
+        files.sort(reverse=True)
+        return list(map(Path, files))
 
     payload = dict(
         columns=[
@@ -288,7 +324,6 @@ class IN(Scraper, state='IN'):
         await self.cache_download('latest.html', self.index_url)
 
     async def clean(self) -> None:
-        await super().clean()
         self.cache.delete('latest.html')
 
     @contextmanager
@@ -323,19 +358,25 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
+    async def stat(self):
+        try:
+            page = bs(self.cache.read('latest.html'))
+        except FileNotFoundError:
+            strings = []
+        else:
+            strings = [table.text for table in page.find_all('table')]
+        return dict(
+            hash=utils.hashstrings(strings),
+            size=sum(map(len, strings)))
+
 class FL(Scraper, state='FL'):
 
     async def scrape(self) -> None:
         self.runner.scrape()
-        self.runner.file.rename(self.cache.topath('source.csv'))
-
-    async def clean(self) -> None:
-        await super().clean()
-        self.cache.delete('source.csv')
 
     @contextmanager
     def extract(self):
-        with self.cache.open('source.csv') as file:
+        with self.runner.file.open() as file:
             yield self.read_records(csv.reader(file))
 
     def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
@@ -396,9 +437,7 @@ class SC(Scraper, state='SC'):
         self.cache.write_json('index.json', index, indent=2)
 
     async def clean(self) -> None:
-        await super().clean()
-        for key in ('latest.html', 'index.json'):
-            self.cache.delete(key)
+        self.cache.delete('latest.html', 'index.json')
 
     @contextmanager
     def extract(self):
@@ -465,6 +504,11 @@ class SC(Scraper, state='SC'):
     def load_index(self) -> list[tuple[int, str]]:
         return list(map(tuple, self.cache.read_json('index.json')))
 
+    def list_record_files(self) -> list[Path]:
+        files = self.cache.files('.', '*.pdf')
+        files.sort(reverse=True)
+        return list(map(Path, files))
+
     def table_is_sparse(self, table: list[list]) -> bool:
         return not any(utils.morethan(1, row) for row in table)
 
@@ -514,6 +558,13 @@ class SC(Scraper, state='SC'):
                         del row[d]
             c += 1
 
+    async def stat(self):
+        files = [self.cache.topath('index.json')]
+        files += self.list_record_files()
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files))
+
     rewrites = {
         'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
         'roup7,/ 5In/2c0.23': '7/5/2023',
@@ -556,9 +607,16 @@ class MO(Scraper, state='MO'):
                     logger.warning(f'Current year page more than 7 days old {url=}')
 
     async def clean(self) -> None:
-        await super().clean()
         for path in self.list_page_files():
             path.unlink()
+
+    async def stat(self):
+        it = self.list_page_files()
+        it = (bs(file.read_bytes()) for file in it)
+        strings = [page.find('table').text for page in it]
+        return dict(
+            hash=utils.hashstrings(strings),
+            size=sum(map(len, strings)))
 
     @contextmanager
     def extract(self):
@@ -589,12 +647,6 @@ class MO(Scraper, state='MO'):
         files.sort(reverse=True)
         return list(map(Path, files))
 
-    def stat(self):
-        files = self.list_page_files()
-        return dict(
-            hash=utils.hashfiles(files),
-            size=sum(file.stat().st_size for file in files))
-
 def bs(markup, features='html.parser', **kw):
     return Soup(markup, features, **kw)
     
@@ -623,8 +675,9 @@ class Cache(warn.cache.Cache):
         data_dir = settings.BUILD_DIR/'scrape'
         super().__init__(data_dir/state.lower())
 
-    def delete(self, key: str):
-        self.topath(key).unlink(missing_ok=True)
+    def delete(self, *keys: str):
+        for path in map(self.topath, keys):
+            path.unlink(missing_ok=True)
     
     def topath(self, key: str):
         return Path(self.path, key)

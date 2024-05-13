@@ -34,18 +34,32 @@ def now(**kw) -> datetime:
     return dt
 
 def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
-    return hashfiles((path,), alg=alg, missing_ok=missing_ok)
+    return hashobjects((path,), alg=alg, missing_ok=missing_ok)
 
 def hashfiles(paths: Iterable[Path], alg: str = 'sha1', missing_ok: bool = False) -> str|None:
+    return hashobjects(paths, alg=alg, missing_ok=missing_ok)
+
+def hashstrings(strings: Iterable[str], alg: str = 'sha1') -> str|None:
+    return hashobjects(strings, alg=alg)
+
+def hashobjects(objs, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
     h = hashlib.new(alg)
     found = False
-    for path in paths:
-        try:
-            h.update(path.read_bytes())
-        except FileNotFoundError:
-            if not missing_ok:
-                raise
-        else:
+    for obj in objs:
+        if isinstance(obj, Path):
+            try:
+                h.update(obj.read_bytes())
+            except FileNotFoundError:
+                if not missing_ok:
+                    raise
+            else:
+                found = True
+        elif isinstance(obj, str):
+            if obj:
+                h.update(obj.encode())
+                found = True
+        elif obj:
+            h.update(obj)
             found = True
     if found:
         return h.hexdigest()
@@ -128,9 +142,6 @@ def jinja_env():
     import jinja2
     loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
     return jinja2.Environment(loader=loader)
-
-class ConfigError(Exception):
-    pass
 
 class CountingIter:
 
