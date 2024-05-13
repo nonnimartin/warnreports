@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import functools
 import json
 import re
 from contextlib import contextmanager
 from datetime import timezone
-from importlib import import_module
+from itertools import chain
 from pathlib import Path
 from typing import Any, Generator, Iterable, Iterator
+from urllib.parse import urlparse
 
 import pdfplumber
 import requests
@@ -143,6 +143,58 @@ class AK(Scraper, state='AK'):
             return self.base_url + a['href']
         return ''
 
+class CA(Scraper, state='CA'):
+    base_url = 'https://edd.ca.gov'
+    index_url = '/Jobs_and_Training/Layoff_Services_WARN.htm'
+    hrefpat = re.compile(r'warn[-_]?report', re.I)
+
+    async def scrape(self) -> None:
+        page = bs(await self.cache_fetch('latest.html', self.index_url))
+        index = []
+        for link in page.find_all('a'):
+            href = str(link.get('href', ''))
+            if self.hrefpat.search(href):
+                key = Path(urlparse(href).path).name
+                if not key.endswith('.pdf') or not self.cache.exists(key):
+                    await self.cache_download(key, href)
+                index.append(key)
+        index.sort()
+        self.cache.write_json('index.json', index, indent=2)
+
+    async def clean(self):
+        self.cache.delete('latest.html', 'index.json')
+
+    async def stat(self):
+        files = self.list_record_files()
+        files += [self.cache.topath('index.json')]
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files if file.exists()))
+
+    @contextmanager
+    def extract(self):
+        files = map(self.cache.topath, self.load_index())
+        yield chain.from_iterable(map(self.read_record_file, files))
+
+    def read_record_file(self, file: Path) -> Iterator[dict[str, str]]:
+        from warn.scrapers import ca
+        if file.name.endswith('.pdf'):
+            records = ca._extract_pdf_data(file)
+        else:
+            records = ca._extract_excel_data(file)
+        return map(self.clean_record, records)
+
+    def clean_record(self, record: dict[str, Any]) -> dict[str, str]:
+        return {k: str(v) for k, v in record.items()}
+
+    def list_record_files(self) -> list[Path]:
+        files = self.cache.files('.', '*.pdf')
+        files += self.cache.files('.', '*.xlsx')
+        return sorted(map(Path, files))
+
+    def load_index(self) -> list[str]:
+        return self.cache.read_json('index.json')
+
 class DE(Scraper, state='DE'):
     base_url = 'https://joblink.delaware.gov'
     index_url = '/search/warn_lookups?commit=Search&page=1&q%5Bs%5D=notice_on+desc'
@@ -223,7 +275,7 @@ class DE(Scraper, state='DE'):
         files += self.list_record_files()
         return dict(
             hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files))
+            size=sum(file.stat().st_size for file in files if file.exists()))
 
 class GA(Scraper, state='GA'):
     base_url = 'https://www.tcsg.edu'
@@ -258,7 +310,7 @@ class GA(Scraper, state='GA'):
         files += self.list_record_files()
         return dict(
             hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files))
+            size=sum(file.stat().st_size for file in files if file.exists()))
 
     @contextmanager
     def extract(self):
@@ -563,7 +615,7 @@ class SC(Scraper, state='SC'):
         files += self.list_record_files()
         return dict(
             hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files))
+            size=sum(file.stat().st_size for file in files if file.exists()))
 
     rewrites = {
         'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
@@ -647,28 +699,6 @@ class MO(Scraper, state='MO'):
         files.sort(reverse=True)
         return list(map(Path, files))
 
-def bs(markup, features='html.parser', **kw):
-    return Soup(markup, features, **kw)
-    
-warn_scraper_names = warn.utils.get_all_scrapers()
-
-@functools.cache
-def get_scraper_module(state: str):
-    state = state.lower()
-    if state in warn_scraper_names:
-        return import_module(f'warn.scrapers.{state}')
-
-def create_scraper(state: str) -> type[Scraper]:
-    class DefaultScraper(Scraper):
-        pass
-    DefaultScraper.state = state
-    return DefaultScraper
-
-for state in map(str.upper, warn_scraper_names):
-    if state not in scrapers:
-        scrapers[state] = create_scraper(state)
-del(state)
-
 class Cache(warn.cache.Cache):
 
     def __init__(self, state: str):
@@ -712,3 +742,19 @@ class Runner(warn.Runner):
                 hash=utils.hashfile(file),
                 size=file.stat().st_size)
         return {}
+
+def bs(markup, features='html.parser', **kw):
+    return Soup(markup, features, **kw)
+    
+warn_scraper_names = warn.utils.get_all_scrapers()
+
+def create_scraper(state: str) -> type[Scraper]:
+    class DefaultScraper(Scraper):
+        pass
+    DefaultScraper.state = state
+    return DefaultScraper
+
+for state in map(str.upper, warn_scraper_names):
+    if state not in scrapers:
+        scrapers[state] = create_scraper(state)
+del(state)

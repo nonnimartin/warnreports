@@ -90,9 +90,11 @@ class Pipeline:
         return dict(prev=prev, cur=cur, nochange=nochange)
 
     async def extract(self, clean: bool = False) -> dict:
+        stage = Stage.Extract
         prev = await self.extraction_backend.stat()
+        logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
-            await self.clean(Stage.Extract)
+            await self.clean(stage)
         count = await self.extraction_backend.run()
         cur = await self.extraction_backend.stat()
         nochange = cur == prev if cur else None
@@ -280,7 +282,7 @@ class PipelineRunner:
             res = dict(state=state, stage=stage)
             if self._should_skip(state):
                 logger.info(f'{state}:{stage}:skip')
-                res.update(skip=True)
+                res.update(skip=True, nochange=True)
             elif self.clean_only:
                 await pipeline.clean(stage)
                 res.update(clean_only=True)
