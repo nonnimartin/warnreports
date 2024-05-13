@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import enum
 import hashlib
-import io
-import json
 import logging
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, TypeVar
+from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
+                    Iterator, TypeVar)
 from uuid import UUID
 
 import dateutil.parser
@@ -57,16 +56,20 @@ def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
             return True
     return False
 
-def unique(it):
+def unique(it: Iterable[T]) -> Iterator[T]:
     done = set()
     for value in it:
         if value not in done:
             yield value
-        done.add(value)
+            done.add(value)
 
-async def as_aiter(it: Iterable[T]):
-    for x in it:
-        yield x
+async def as_aiter(it: Iterable[T]|AsyncIterable[T]) -> AsyncIterator[T]:
+    if isinstance(it, AsyncIterable):
+        async for x in it:
+            yield x
+    else:
+        for x in it:
+            yield x
 
 def parse_date(value: str) -> datetime|None:
     value = value or ''
@@ -85,7 +88,10 @@ def parse_int(value: str) -> int|None:
         pass
 
 def render(template: str, *args, **kw) -> str:
-    return jinja_env().get_template(template).render(*args, **kw)
+    return get_template(template).render(*args, **kw)
+
+def get_template(template: str):
+    return jinja_env().get_template(template)
 
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
@@ -103,6 +109,9 @@ def sync(ret):
         ret = asyncio.run(ret)
     return ret
 
+from .backends.email import instances as email_backends
+
+
 def send_email(recipient: str, subject: str, body: str) -> bool:
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_ACCOUNT
@@ -113,36 +122,6 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
     else:
         logger.info('Failed to send email.')
     return success
-
-class SesEmailBackend:
-
-    @property
-    @cache
-    def client(self):
-        import boto3
-        return boto3.client('ses')
-
-    def send(self, sender: str, recipient: str, subject: str, body: str) -> bool:
-        response = self.client.send_email(
-            Source=sender,
-            Destination={'ToAddresses': [recipient]},
-            Message={
-                'Subject': {'Data': subject},
-                'Body': {
-                    fmt: {'Data': body,'Charset': 'UTF-8'}
-                    for fmt in ('Text', 'Html')}})
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200
-
-class DebugEmailBackend:
-
-    @staticmethod
-    def send(sender: str, recipient: str, subject: str, body: str) -> bool:
-        logger.info(f'{sender=} {recipient=} {subject=} {body=}')
-        return True
-
-email_backends = {
-    'ses': SesEmailBackend(),
-    'debug': DebugEmailBackend()}
 
 @cache
 def jinja_env():
@@ -198,16 +177,3 @@ class BaseCommand:
 
     async def run(self):
         pass
-
-class Stage(StrEnum):
-    Scrape = 'scrape'
-    Extract = 'extract'
-    Translate = 'translate'
-    Load = 'load'
-    Index = 'index'
-
-class SaveType(StrEnum):
-    Create = 'create'
-    Update = 'update'
-    Nochange = 'nochange'
-    Skip = 'skip'

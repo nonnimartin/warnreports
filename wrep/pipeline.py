@@ -12,9 +12,22 @@ from .models import *
 from .models import db
 from .scrapers import scrapers
 from .translators import translators
-from .utils import ConfigError, SaveType, Stage
+from .utils import ConfigError
 
 logger = utils.get_logger('pipeline')
+
+class Stage(utils.StrEnum):
+    Scrape = 'scrape'
+    Extract = 'extract'
+    Translate = 'translate'
+    Load = 'load'
+    Index = 'index'
+
+class SaveType(utils.StrEnum):
+    Create = 'create'
+    Update = 'update'
+    Nochange = 'nochange'
+    Skip = 'skip'
 
 class Pipeline:
 
