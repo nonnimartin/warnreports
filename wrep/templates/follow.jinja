@@ -1,29 +1,29 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>WARN Reporter - Follow</title>
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/css/bootstrap.min.css" rel="stylesheet">
-  <link href="/static/css/main.css" rel="stylesheet">
-  <!-- <link href="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.css" rel="stylesheet"> -->
-</head>
-<body>
-  <div class="container">
-    <h1>WARN Notice Subscription Service</h1>
-    <form>
-      <div class="typeahead">
-        <div class="form-group">
-          <div><label for="searchCompany">Company: <span class="req">*</span></label></div>
-          <input type="text" id="company" class="form-control tt-query" placeholder="Search..." required/>
-          <hr class="rounded">
-          <div><label for="emailAddress">Email: <span class="req">*</span></label></div>
-          <input type="email" class="form-control" id="email" placeholder="Enter your email" required>
-        </div>
-        <button type="button" class="btn btn-primary" id="submitBtn" disabled>Submit</button>
-      </div>
-    </form>
+{%- extends 'base.jinja' %}
+{%- block content %}
+<h1>WARN Notice Subscription Service</h1>
+<form>
+  <div class="typeahead">
+    <div class="form-group">
+      <div><label for="searchCompany">Company: <span class="req">*</span></label></div>
+      <input type="text" id="company" class="form-control tt-query" placeholder="Search..." required/>
+      <hr class="rounded">
+      <div><label for="emailAddress">Email: <span class="req">*</span></label></div>
+      <input type="email" class="form-control" id="email" placeholder="Enter your email" required>
+    </div>
+    <button type="button" class="btn btn-primary" id="submitBtn" disabled>Submit</button>
   </div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.js"></script>
-  <script src="/static/js/main.js"></script>
-</body>
-</html>
+</form>
+{%- endblock %}
+
+{%- block title %}
+{{- super() }} - Follow
+{%- endblock %}
+
+{%- block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/typeahead.js/0.11.1/typeahead.bundle.min.js"></script>
+<script src="/static/js/follow.js"></script>
+{%- endblock %}
+
+{%- block styles %}
+<link href="/static/css/follow.css" rel="stylesheet">
+{%- endblock %}

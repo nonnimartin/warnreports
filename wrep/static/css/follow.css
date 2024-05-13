@@ -1,0 +1,34 @@
+.typeahead {
+    position: relative;
+}
+
+.typeahead .tt-query {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    border: 2px solid #ccc;
+    border-radius: 4px;
+    background-color: #fff;
+    transition: border-color 0.3s ease;
+}
+
+.typeahead .tt-query:focus {
+    border-color: #69c;
+    outline: none;
+}
+
+.typeahead .tt-suggestion {
+    padding: 8px 12px;
+    font-size: 14px;
+    color: #333;
+    cursor: pointer;
+}
+
+.typeahead .tt-suggestion:hover,
+.typeahead .tt-suggestion:focus {
+    background-color: #6b96a0;
+}
+
+.tt-menu {
+    background-color: #6b96a0;
+}

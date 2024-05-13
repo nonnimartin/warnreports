@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from html import unescape as html_unescape
 from typing import Any
 
@@ -11,6 +11,7 @@ from pydantic import HttpUrl
 
 from . import utils
 from .models import ValidationError
+from .ref.tz import zoneinfos
 
 PAT_SPACES = re.compile(r'\s+')
 PAT_NONDIGITS = re.compile(r'[^\d]+')
@@ -30,6 +31,7 @@ _r = re.compile
 
 class Translator:
 
+    tz = timezone.utc
     headermap: dict[str, str] = {}
     default_url: str|None = None
     rewrites: dict[str, list[tuple[str|re.Pattern, str]]] = dict(
@@ -130,6 +132,8 @@ class Translator:
             not any((dt.hour, dt.minute, dt.second)) and
             # Sane date range
             1980 <= dt.year <= utils.now().year + 10):
+            if not dt.tzinfo:
+                dt = dt.replace(tzinfo=self.tz)
             return dt
 
     def parse_dates(self, value: str) -> list[datetime]:
@@ -143,6 +147,7 @@ class Translator:
     def __init_subclass__(cls, state: str|None = None) -> None:
         cls.rewrites = Translator.rewrites | cls.rewrites
         if state:
+            cls.tz = zoneinfos[state.upper()]
             translators[state.upper()] = cls
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000

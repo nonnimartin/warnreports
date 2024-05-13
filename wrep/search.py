@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from abc import abstractmethod
 from collections import ChainMap
-from typing import Any, ClassVar, Generic, Iterable, Sequence, TypeVar
+from typing import (Any, AsyncIterable, ClassVar, Generic, Iterable, Sequence,
+                    TypeVar)
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorCursor, AsyncIOMotorDatabase)
@@ -20,7 +21,7 @@ DM = TypeVar('DM', bound=DataModel)
 logger = utils.get_logger('search')
 
 
-class BaseSearch(FilterModel, Generic[QS, DM]):
+class BaseSearch(FilterModel[DM], Generic[QS, DM]):
 
     async def search(self, limit: Limit|None = None, offset: Offset = 0):
         qs = self.get_queryset()
@@ -44,8 +45,12 @@ class BaseSearch(FilterModel, Generic[QS, DM]):
     @abstractmethod
     def paginate_queryset(self, qs: QS, limit: Limit|None, offset: Offset) -> QS: ...
 
+    async def iter_queryset(self, qs: QS) -> AsyncIterable[DM]:
+        async for obj in utils.as_aiter(qs):
+            yield self.result_model.model_validate(obj)
+
     async def queryset_to_list(self, qs: QS) -> list[DM]:
-        return list(qs)
+        return [obj async for obj in self.iter_queryset(qs)]
 
 class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
 
@@ -63,9 +68,6 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
         if limit:
             qs = qs.limit(limit)
         return qs
-
-    async def queryset_to_list(self, qs):
-        return await qs.to_list(None)
 
     @staticmethod
     def wc_contains(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
@@ -294,7 +296,7 @@ async def search(
 ) -> list[DM]:
     return await filters[model](**params or {}).search(limit, offset)
 
-async def retrieve(model: type[DM], **params) -> DM|None:
+async def retrieve(model: type[DM], **params) -> DM:
     results = await search(model, params, 1)
     if results:
         return results[0]

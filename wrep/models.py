@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import (Annotated, Any, ClassVar, Iterable, Iterator, Literal,
-                    Self, TypeAlias)
+from typing import (Annotated, Any, ClassVar, Generic, Iterable, Iterator,
+                    Literal, Self, TypeAlias, TypeVar)
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
+from zoneinfo import ZoneInfo
 
 import peewee as orm
 from annotated_types import Le
@@ -13,10 +14,11 @@ from peewee import IntegrityError as IntegrityError
 from playhouse import db_url
 from pydantic import BaseModel as DataModel
 from pydantic import (ConfigDict, EmailStr, Field, NonNegativeInt, PositiveInt,
-                      StringConstraints)
+                      StringConstraints, field_serializer)
 from pydantic_core import ValidationError as ValidationError
 
 from . import settings, utils
+from .ref.tz import zoneinfos
 
 __all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
 
@@ -80,11 +82,15 @@ __all__ += [
     'StateDetail',
     'ValidationError']
 
+DM = TypeVar('DM', bound=DataModel)
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
 StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
+
+def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
+    return dt and dt.replace(hour=0, tzinfo=tzinfo)
 
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
@@ -125,6 +131,10 @@ class ReportData(DataModel):
     def as_doc(self) -> dict[str, Any]:
         return self.model_dump(by_alias=True)
 
+    @field_serializer('reported', 'starting')
+    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+        return tzreplace(dt, zoneinfos[self.state])
+   
 class NaicsData(DataModel):
     id: int
     code: str
@@ -143,6 +153,10 @@ class CompanyDetail(CompanyData):
     last_reported: datetime|None
     reports_count: int
 
+    @field_serializer('last_reported')
+    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+        return tzreplace(dt, zoneinfos[self.state])
+
 class StateData(DataModel):
     state: StateCode
 
@@ -150,13 +164,17 @@ class StateDetail(StateData):
     last_reported: datetime|None
     reports_count: int
 
+    @field_serializer('last_reported')
+    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+        return tzreplace(dt, zoneinfos[self.state])
+
 # ----------------------------
 
 __all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'NaicsFilter', 'StatesFilter']
 
-class FilterModel(DataModel):
+class FilterModel(DataModel, Generic[DM]):
     order: str|None = None
-
+    result_model: ClassVar[type[DM]]
     order_fields: ClassVar[set[str]] = set()
     default_ordering: ClassVar[list[tuple[str, Literal[1, -1]]]] = []
 
@@ -176,7 +194,7 @@ class FilterModel(DataModel):
             if allowed is None or field in allowed:
                 yield field, dir_
 
-class ReportsFilter(FilterModel):
+class ReportsFilter(FilterModel[ReportData]):
     id: UUID|None = None
     text: str|None = None
     company: CompanyName|None = None
@@ -190,10 +208,11 @@ class ReportsFilter(FilterModel):
     starting_before: datetime|None = None
     employees_gt: int|None = None
     employees_lt: int|None = None
+    result_model: ClassVar = ReportData
     order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
 
-class CompaniesFilter(FilterModel):
+class CompaniesFilter(FilterModel[CompanyDetail]):
     text: str|None = None
     company: CompanyName|None = None
     state: StateCode|None = None
@@ -201,19 +220,21 @@ class CompaniesFilter(FilterModel):
     reports_count_lt: int|None = None
     last_reported_after: datetime|None = None
     last_reported_before: datetime|None = None
+    result_model: ClassVar = CompanyDetail
     order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('company', 1), ('state', 1)]
 
-class StatesFilter(FilterModel):
+class StatesFilter(FilterModel[StateDetail]):
     state: StateCode|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
     last_reported_after: datetime|None = None
     last_reported_before: datetime|None = None
+    result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'state', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('state', 1)]
 
-class NaicsFilter(FilterModel):
+class NaicsFilter(FilterModel[NaicsDetail]):
     id: int|None = None
     code: int|None = None
     prefix: int|None = None
@@ -221,6 +242,7 @@ class NaicsFilter(FilterModel):
     text: str|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
+    result_model: ClassVar = NaicsDetail
     order_fields: ClassVar = {'id', 'code', 'title', 'reports_count'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 

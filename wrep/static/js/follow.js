@@ -9,7 +9,6 @@ $(function () {
     $('#submitBtn').click(function () {
         const email = $('#email').val()
         const company = $('#company').val()
-
         $.ajax({
             url: '/follow/new',
             method: 'POST',
@@ -26,6 +25,7 @@ $(function () {
         })
     })
 
+    const limit = 20
     $('.tt-query').typeahead({
         hint: true,
         highlight: true,
@@ -34,13 +34,13 @@ $(function () {
         name: 'search-results',
         source: new Bloodhound({
             remote: {
-                url: '/api/v0/companies?company=%QUERY',
+                url: `/api/v0/companies?company=%QUERY&limit=${limit}`,
                 wildcard: '%QUERY',
             },
             datumTokenizer: Bloodhound.tokenizers.whitespace,
             queryTokenizer: Bloodhound.tokenizers.whitespace
         }),
-        limit: 20,
+        limit,
         display: 'company',
         templates: {
             suggestion: data => $('<p/>').text(data.company).addClass('tt-suggestion')
