@@ -31,8 +31,8 @@ python -m wrep.models migrate
 # Load NAICS data
 python -m wrep.models load_naics
 
-# Pipeline
-python -m wrep.pipeline -h
+# Run pipeline
+python -m wrep.pipeline all
 
 # Run server
 python -m wrep.main
@@ -51,13 +51,13 @@ Example commands:
 
 ```sh
 # Create schema
-docker compose exec app python -m wrep.models migrate
+docker compose exec app wrep models migrate
 
-# Clean and build index
-docker compose exec app python -m wrep.search build
+# Load NAICS data
+docker compose exec app wrep models load_naics
 
-# Run index pipeline stage
-docker compose exec app python -m wrep.pipeline index
+# Run pipeline
+docker compose exec app wrep pipeline all
 ```
 
 Mongo Express is available at http://127.0.0.1:8081/

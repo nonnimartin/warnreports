@@ -11,6 +11,7 @@ pydantic[email]
 python_dotenv
 python-dateutil
 requests
+sentry-sdk[fastapi]
 tabulate
 uvicorn[standard]
 

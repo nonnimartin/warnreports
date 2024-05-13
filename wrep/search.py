@@ -6,6 +6,7 @@ from collections import ChainMap
 from typing import (Any, AsyncIterable, ClassVar, Generic, Iterable, Sequence,
                     TypeVar)
 
+from fastapi import HTTPException, status
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorCursor, AsyncIOMotorDatabase)
 from pymongo.operations import IndexModel
@@ -13,7 +14,7 @@ from pymongo.operations import IndexModel
 from . import settings, utils
 from .models import *
 
-__all__ = ['filters', 'mongo', 'retrieve', 'search', 'NotFoundError']
+__all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
 
 QS = TypeVar('QS')
 ST = TypeVar('ST', bound='BaseSearch')
@@ -301,6 +302,12 @@ async def retrieve(model: type[DM], **params) -> DM:
     if results:
         return results[0]
     raise NotFoundError
+
+async def retrieve404(model: type[DM], **params) -> DM:
+    try:
+        return await retrieve(model, **params)
+    except NotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
 
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
 mongo = mongo_client.active

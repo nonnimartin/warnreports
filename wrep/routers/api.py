@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from .. import utils
 from ..models import *
@@ -46,13 +46,6 @@ async def reports_list(
         order=order)
     return await search(ReportData, params, limit, (page - 1) * limit)
 
-@router.get('/reports/{id}', response_model_by_alias=False)
-async def report_get(id: UUID) -> ReportData:
-    try:
-        return await retrieve(ReportData, id=id)
-    except NotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
-
 @router.get('/naics')
 async def naics_list(
     code: int|None = None,
@@ -74,13 +67,6 @@ async def naics_list(
         reports_count_lt=reports_count_lt,
         order=order)
     return await search(NaicsDetail, params, limit, (page - 1) * limit)
-
-@router.get('/naics/{id}')
-async def naics_get(id: int) -> NaicsDetail:
-    try:
-        return await retrieve(NaicsDetail, id=id)
-    except NotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
 
 @router.get('/companies')
 async def companies_list(
@@ -124,9 +110,14 @@ async def states_list(
         order=order)
     return await search(StateDetail, params)
 
+@router.get('/reports/{id}', response_model_by_alias=False)
+async def report_get(id: UUID) -> ReportData:
+    return await retrieve404(ReportData, id=id)
+
+@router.get('/naics/{id}')
+async def naics_get(id: int) -> NaicsDetail:
+    return await retrieve404(NaicsDetail, id=id)
+
 @router.get('/states/{state}')
 async def state_get(state: StateCode) -> StateDetail:
-    try:
-        return await retrieve(StateDetail, state=state)
-    except NotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    return await retrieve404(StateDetail, state=state)
