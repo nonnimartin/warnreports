@@ -8,13 +8,14 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
-from typing import Any, Generator, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
 from urllib.parse import urlparse
 
 import openpyxl
 import pdfplumber
 import requests
 from bs4 import BeautifulSoup as Soup
+from bs4.element import PageElement, ResultSet, Tag
 
 import warn.cache
 import warn.runner
@@ -75,7 +76,6 @@ class Scraper:
 
     async def req_get(self, url: str, **kw) -> requests.Response:
         if self.request_delay and self.request_count:
-            logger.debug(f'request delay: {self.request_delay}s')
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
         kw.setdefault('session', self.session)
@@ -200,7 +200,9 @@ class CO(Scraper, state='CO'):
 
     async def scrape(self):
         self.runner.scrape()
+        await asyncio.sleep(0)
         with self.runner.file.open() as file:
+            # upstream scraper uses set() for header, which is unordered & breaks hashing.
             headers = sorted(next(csv.reader(file)))
         with self.runner.file.open() as file:
             reader = csv.DictReader(file)
@@ -267,6 +269,13 @@ class DE(Scraper, state='DE'):
         for path in self.list_page_files():
             path.unlink()
 
+    async def stat(self):
+        files = [self.cache.topath('index.json')]
+        files += self.list_record_files()
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files if file.exists()))
+
     @contextmanager
     def extract(self):
         yield self.read_records()
@@ -298,13 +307,6 @@ class DE(Scraper, state='DE'):
         files = self.cache.files('records', '*.html')
         files.sort(reverse=True)
         return list(map(Path, files))
-
-    async def stat(self):
-        files = [self.cache.topath('index.json')]
-        files += self.list_record_files()
-        return dict(
-            hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files if file.exists()))
 
 class FL(Scraper, state='FL'):
 
@@ -366,6 +368,7 @@ class GA(Scraper, state='GA'):
             index[a.text] = [a['href'], listing[2]]
         self.cache.write_json('index.json', index, indent=2)
         if self.needs_scrape():
+            await asyncio.sleep(0)
             self.runner.scrape()
 
     async def clean(self):
@@ -488,6 +491,72 @@ class IN(Scraper, state='IN'):
             hash=utils.hashstrings(strings),
             size=sum(map(len, strings)))
 
+class MO(Scraper, state='MO'):
+    start_year = 2019
+    base_url = 'https://jobs.mo.gov/warn'
+    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/MO'
+    headers_species = {
+        10: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'Notes', 'url'],
+        9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
+        8: ['Received', 'Title', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
+    }
+
+    async def scrape(self) -> None:
+        now = utils.now()
+        for year in range(self.start_year, now.year + 1):
+            key = f'pages/{year}.html'
+            if self.cache.exists(key) and year < now.year - 1:
+                continue
+            url = f'{self.archive_url}/{key}'
+            rep = await self.cache_download(key, url)
+            if year == now.year:
+                dt = utils.parse_date(rep.headers.get('Last-Modified'))
+                if not dt:
+                    logger.warning(f'Cannot parse last-modified header')
+                elif dt < utils.now(days=-7, tz=timezone.utc):
+                    logger.warning(f'Current year page more than 7 days old {url=}')
+
+    async def clean(self) -> None:
+        for path in self.list_page_files():
+            path.unlink()
+
+    async def stat(self):
+        it = self.list_page_files()
+        it = (bs(file.read_bytes()) for file in it)
+        strings = [page.find('table').text for page in it]
+        return dict(
+            hash=utils.hashstrings(strings),
+            size=sum(map(len, strings)))
+
+    @contextmanager
+    def extract(self):
+        yield self.read_records()
+
+    def read_records(self) -> Iterable[dict[str, str]]:
+        for path in self.list_page_files():
+            year = int(path.name.removesuffix('.html'))
+            url = f'{self.base_url}/{year}'
+            page = bs(path.read_text())
+            table = page.find('table')
+            head, *trs = table.find_all('tr')
+            headers = self.get_header_species(head)
+            for tr in trs:
+                values = [*self.read_tr(tr), url]
+                if utils.morethan(2, values):
+                    yield dict(zip(headers, values))
+
+    def get_header_species(self, head: Soup) -> list[str]:
+        return self.headers_species[len(head.find_all(['td', 'th']))]
+
+    def read_tr(self, tr: Soup) -> Iterator[str]:
+        for td in tr.find_all('td'):
+            yield td.text.strip()
+
+    def list_page_files(self) -> list[Path]:
+        files = self.cache.files('pages', '*.html')
+        files.sort(reverse=True)
+        return list(map(Path, files))
+
 class NY(Scraper, state='NY'):
     base_url = 'https://dol.ny.gov'
     index_url = '/warn-notices'
@@ -524,11 +593,7 @@ class NY(Scraper, state='NY'):
         yield chain.from_iterable(tables)
 
     def read_record_file(self, file: Path) -> Iterator[dict[str, str]]:
-        if file.name.endswith('.xlsx'):
-            func = self.read_xlsx_file
-        else:
-            func = self.read_html_file
-        yield from func(file)
+        return getattr(self, f'read_{file.name[-4:]}_file')(file)
 
     def read_xlsx_file(self, file: Path) -> Iterator[dict[str, str]]:
         worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
@@ -582,7 +647,7 @@ class SC(Scraper, state='SC'):
         text = await self.cache_fetch('latest.html', self.index_url)
         page = bs(text)
         for a in page.find_all('a'):
-            href = str(a.get('href', ''))
+            href = a.get('href', '')
             if href.endswith('.pdf'):
                 year = int(href.split('/')[-1][:4])
                 index.append((year, href))
@@ -610,7 +675,7 @@ class SC(Scraper, state='SC'):
         for year, url in self.load_index():
             headers = self.get_header_species(year) + self.extra_headers
             extra = [str(year), url]
-            it = self.read_table(Path(self.cache.path, f'{year}.pdf'))
+            it = self.read_table(self.cache.topath(f'{year}.pdf'))
             next(it)
             for row in it:
                 yield dict(zip(headers, row + extra))
@@ -737,71 +802,18 @@ class SC(Scraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
-class MO(Scraper, state='MO'):
-    start_year = 2019
-    base_url = 'https://jobs.mo.gov/warn'
-    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/MO'
-    headers_species = {
-        10: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'Notes', 'url'],
-        9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
-        8: ['Received', 'Title', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
-    }
-
-    async def scrape(self) -> None:
-        now = utils.now()
-        for year in range(self.start_year, now.year + 1):
-            key = f'pages/{year}.html'
-            if self.cache.exists(key) and year < now.year - 1:
-                continue
-            url = f'{self.archive_url}/{key}'
-            rep = await self.cache_download(key, url)
-            if year == now.year:
-                dt = utils.parse_date(rep.headers.get('Last-Modified'))
-                if not dt:
-                    logger.warning(f'Cannot parse last-modified header')
-                elif dt < utils.now(days=-7, tz=timezone.utc):
-                    logger.warning(f'Current year page more than 7 days old {url=}')
-
-    async def clean(self) -> None:
-        for path in self.list_page_files():
-            path.unlink()
-
-    async def stat(self):
-        it = self.list_page_files()
-        it = (bs(file.read_bytes()) for file in it)
-        strings = [page.find('table').text for page in it]
-        return dict(
-            hash=utils.hashstrings(strings),
-            size=sum(map(len, strings)))
-
-    @contextmanager
-    def extract(self):
-        yield self.read_records()
-
-    def read_records(self) -> Iterable[dict[str, str]]:
-        for path in self.list_page_files():
-            year = int(path.name.removesuffix('.html'))
-            url = f'{self.base_url}/{year}'
-            page = bs(path.read_text())
-            table = page.find('table')
-            head, *trs = table.find_all('tr')
-            headers = self.get_header_species(head)
-            for tr in trs:
-                values = [*self.read_tr(tr), url]
-                if utils.morethan(2, values):
-                    yield dict(zip(headers, values))
-
-    def get_header_species(self, head: Soup) -> list[str]:
-        return self.headers_species[len(head.find_all(['td', 'th']))]
-
-    def read_tr(self, tr: Soup) -> Iterator[str]:
-        for td in tr.find_all('td'):
-            yield td.text.strip()
-
-    def list_page_files(self) -> list[Path]:
-        files = self.cache.files('pages', '*.html')
-        files.sort(reverse=True)
-        return list(map(Path, files))
+class VA(Scraper, state='VA'):
+    # TODO: detail url: https://www.vec.virginia.gov/warn-notice-detail/18595
+    base_url = 'https://www.vec.virginia.gov'
+    index_url = '/warn-notices'
+    rss_url = '/warn-notices-rss-1'
+    """
+    the downloadable csv does not have links
+    <ul class="pagination">
+        <li class="next"><a title="Go to next page" href="/warn-notices?page=2">
+    
+    NB: there are about 50 pages. you can filter by year. there is a select box that lists them.
+    """
 
 class Cache(warn.cache.Cache):
 
@@ -859,3 +871,15 @@ scrapers.update({
     for state in map(str.upper, warn.utils.get_all_scrapers())
     if state not in scrapers})
 
+if TYPE_CHECKING:
+    from typing import overload
+    class Soup(Soup):
+        @overload
+        def find_all(
+            self,
+            name:str|Any=...,
+            attrs: dict[str, Any]=...,
+            recursive:bool=True,
+            string:str|Any=...,
+            limit:int|None=...,
+            **kwargs) -> ResultSet[Soup|PageElement|Tag]: ...

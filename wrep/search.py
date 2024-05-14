@@ -178,9 +178,9 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
         'reported': Report.reported,
         'starting': Report.starting,
         'employees': Report.employees,
-        'state': Report.state.collate('NOCASE'),
-        'company': Report.company.collate('NOCASE'),
-        'action': Report.action.collate('NOCASE'),
+        'state': Report.state,
+        'company': Report.company,
+        'action': Report.action,
     }
 
     def get_filters(self):
@@ -210,9 +210,9 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
         if self.employees_gt is not None:
             yield Report.employees > self.employees_gt
 
-class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
+class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
     sql_model_class: ClassVar = Report
-    sql_group_by: ClassVar = [Report.company, Report.state]
+    sql_group_by: ClassVar = [Report.state]
     alias_fieldmap: ClassVar = {
         'reports_count': orm.fn.Count(Report.id).alias('reports_count'),
         'last_reported': orm.fn.Max(Report.reported).alias('last_reported'),
@@ -234,13 +234,6 @@ class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
             alias = self.alias_fieldmap['last_reported']
             yield alias > self.last_reported_after
 
-class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
-    sql_model_class: ClassVar = Report
-    sql_group_by: ClassVar = [Report.state]
-    alias_fieldmap: ClassVar = SqlCompaniesFilter.alias_fieldmap
-    order_fieldmap: ClassVar = SqlCompaniesFilter.order_fieldmap
-    get_filters = SqlCompaniesFilter.get_filters
-
 class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsDetail]):
     sql_model_class: ClassVar = Naics
     sql_group_by: ClassVar = [Naics]
@@ -251,7 +244,7 @@ class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsDetail]):
     order_fieldmap: ClassVar = {
         'id': Naics.id,
         'code': Naics.code,
-        'title': Naics.title.collate('NOCASE'),
+        'title': Naics.title,
     }
 
     def get_filters(self):
@@ -282,7 +275,6 @@ class NotFoundError(Exception):
 
 filters: dict[type[DataModel], type[BaseSearch]] = {
     ReportData: SqlReportsFilter,
-    CompanyDetail: SqlCompaniesFilter,
     StateDetail: SqlStatesFilter,
     NaicsDetail: SqlNaicsFilter}
 

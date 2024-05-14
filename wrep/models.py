@@ -27,10 +27,10 @@ db: orm.Database = db_url.connect(settings.DB_URL)
 class Report(orm.Model):
     NAMESPACE = uuid5(settings.NAMESPACE, 'Report')
     id = orm.UUIDField(primary_key=True)
-    company = orm.CharField(max_length=512, index=True, collation='NOCASE')
-    state = orm.CharField(max_length=2, index=True, collation='NOCASE')
+    company = orm.CharField(max_length=512, index=True)
+    state = orm.CharField(max_length=2, index=True)
     created = orm.DateTimeField(index=True, default=utils.now)
-    location = orm.CharField(max_length=255, null=True, index=True, collation='NOCASE')
+    location = orm.CharField(max_length=255, null=True, index=True)
     reported = orm.DateTimeField(index=True)
     starting = orm.DateTimeField(null=True, index=True)
     employees = orm.IntegerField(null=True)
@@ -48,10 +48,18 @@ class Report(orm.Model):
         q = q.order_by(cls.id, Naics.code)
         return q
 
+class StateStat(orm.Model):
+    id = orm.CharField(max_length=2, primary_key=True)
+    last_reported = orm.DateTimeField(null=True, index=True)
+    reports_count = orm.IntegerField(index=True, default=0)
+
+    class Meta:
+        database = db
+
 class Naics(orm.Model):
     id = orm.IntegerField(primary_key=True)
     code = orm.CharField(max_length=32, index=True)
-    title = orm.CharField(max_length=255, index=True, collation='NOCASE')
+    title = orm.CharField(max_length=255, index=True)
 
     class Meta:
         database = db
@@ -67,8 +75,6 @@ class NaicsReport(orm.Model):
 # ----------------------------
 
 __all__ += [
-    'CompanyData',
-    'CompanyDetail',
     'CompanyName',
     'DataModel',
     'Limit',
@@ -78,7 +84,6 @@ __all__ += [
     'PageNumber',
     'ReportData',
     'StateCode',
-    'StateData',
     'StateDetail',
     'ValidationError']
 
@@ -144,25 +149,11 @@ class NaicsData(DataModel):
 class NaicsDetail(NaicsData):
     reports_count: int
 
-class CompanyData(DataModel):
-    company: CompanyName
+class StateDetail(DataModel):
     state: StateCode
-    model_config = ConfigDict(from_attributes=True)
-
-class CompanyDetail(CompanyData):
     last_reported: datetime|None
     reports_count: int
-
-    @field_serializer('last_reported')
-    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
-        return tzreplace(dt, zoneinfos[self.state])
-
-class StateData(DataModel):
-    state: StateCode
-
-class StateDetail(StateData):
-    last_reported: datetime|None
-    reports_count: int
+    model_config = ConfigDict(populate_by_name=True,from_attributes=True)
 
     @field_serializer('last_reported')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
@@ -170,7 +161,7 @@ class StateDetail(StateData):
 
 # ----------------------------
 
-__all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'NaicsFilter', 'StatesFilter']
+__all__ += ['FilterModel', 'ReportsFilter', 'NaicsFilter', 'StatesFilter']
 
 class FilterModel(DataModel, Generic[DM]):
     order: str|None = None
@@ -211,18 +202,6 @@ class ReportsFilter(FilterModel[ReportData]):
     result_model: ClassVar = ReportData
     order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
-
-class CompaniesFilter(FilterModel[CompanyDetail]):
-    text: str|None = None
-    company: CompanyName|None = None
-    state: StateCode|None = None
-    reports_count_gt: int|None = None
-    reports_count_lt: int|None = None
-    last_reported_after: datetime|None = None
-    last_reported_before: datetime|None = None
-    result_model: ClassVar = CompanyDetail
-    order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
-    default_ordering: ClassVar = [('company', 1), ('state', 1)]
 
 class StatesFilter(FilterModel[StateDetail]):
     state: StateCode|None = None
@@ -291,11 +270,10 @@ class FollowData(DataModel):
     company: CompanyName
     state: StateCode|Literal['*'] = '*'
 
-
 # ----------------------------
 
 def migrate() -> None:
-    db.create_tables([Report, Naics, NaicsReport])
+    db.create_tables([Report, StateStat, Naics, NaicsReport])
     userdb.create_tables([Follow])
 
 def load_naics() -> None:
@@ -309,10 +287,11 @@ def load_naics() -> None:
             title=entry['title'])
         for entry in rep.json())
     with db.atomic():
-        Naics.replace_many(records).execute()
+        Naics.insert_many(records).on_conflict('IGNORE').execute()
 
 actions = dict(
     migrate=migrate,
+    naics=load_naics,
     load_naics=load_naics)
 
 class Command(utils.BaseCommand):
