@@ -5,6 +5,7 @@ import json
 import uuid
 from collections import defaultdict
 from datetime import datetime
+from itertools import batched
 from typing import Any, Iterable
 
 from . import search, settings, utils
@@ -247,12 +248,14 @@ class PipelineRunner:
         clean: bool = False,
         clean_only: bool = False,
         incremental: bool = False,
+        concurrent: bool = False,
     ):
         if clean_only and (clean or incremental):
             raise ValueError(f'Cannot specify clean_only with clean or incremental')
         self.clean = clean
         self.clean_only = clean_only
         self.incremental = incremental
+        self.concurrent = concurrent
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
         self.pipelines = list(map(Pipeline, self.states))
@@ -263,18 +266,23 @@ class PipelineRunner:
 
     async def run(self) -> None:
         it = iter(self.grouping)
-        await self._run_concurrently(*next(it))
+        if self.concurrent:
+            run_concurrently = self._run_concurrently
+        else:
+            run_concurrently = self._run_consecutively
+        await run_concurrently(*next(it))
         await self._run_consecutively(*next(it))
-        await self._run_concurrently(*next(it))
+        await run_concurrently(*next(it))
 
     async def _run_consecutively(self, *stages: Stage) -> None:
         for pipeline in self.pipelines:
             await self._run_pipeline(pipeline, *stages)
 
     async def _run_concurrently(self, *stages: Stage) -> None:
-        async with asyncio.TaskGroup() as group:
-            for pipeline in self.pipelines:
-                group.create_task(self._run_pipeline(pipeline, *stages))
+        for pipelines in batched(self.pipelines, 4):
+            async with asyncio.TaskGroup() as group:
+                for pipeline in pipelines:
+                    group.create_task(self._run_pipeline(pipeline, *stages))
 
     async def _run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
         for stage in stages:
@@ -307,6 +315,7 @@ class Command(utils.BaseCommand):
         parser.add_argument('--clean', '-c', action='store_true')
         parser.add_argument('--clean-only', '-x', action='store_true')
         parser.add_argument('--incremental', '-i', action='store_true')
+        parser.add_argument('--concurrent', '-t', action='store_true')
 
     def setup(self, opts):
         opts.states = opts.states or list(translators)
