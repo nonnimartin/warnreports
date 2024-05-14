@@ -306,30 +306,3 @@ class Command(utils.BaseCommand):
 
 if __name__ == '__main__':
     Command.main()
-
-# __all__ += ['CompanyData', 'CompanyDetail', 'CompaniesFilter', ]
-
-# class CompanyData(DataModel):
-#     company: CompanyName
-#     state: StateCode
-#     model_config = ConfigDict(from_attributes=True)
-
-# class CompanyDetail(CompanyData):
-#     last_reported: datetime|None
-#     reports_count: int
-
-#     @field_serializer('last_reported')
-#     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
-#         return tzreplace(dt, zoneinfos[self.state])
-
-# class CompaniesFilter(FilterModel[CompanyDetail]):
-#     text: str|None = None
-#     company: CompanyName|None = None
-#     state: StateCode|None = None
-#     reports_count_gt: int|None = None
-#     reports_count_lt: int|None = None
-#     last_reported_after: datetime|None = None
-#     last_reported_before: datetime|None = None
-#     result_model: ClassVar = CompanyDetail
-#     order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
-#     default_ordering: ClassVar = [('company', 1), ('state', 1)]

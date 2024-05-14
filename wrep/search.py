@@ -342,13 +342,3 @@ class Command(utils.BaseCommand):
 
 if __name__ == '__main__':
     Command.main()
-
-
-# class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
-#     sql_model_class: ClassVar = Report
-#     sql_group_by: ClassVar = [Report.company, Report.state]
-#     alias_fieldmap: ClassVar = SqlStatesFilter.alias_fieldmap
-#     order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
-#     get_filters = SqlStatesFilter.get_filters
-
-# filters[CompanyDetail] = SqlCompaniesFilter

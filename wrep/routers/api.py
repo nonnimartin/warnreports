@@ -97,27 +97,3 @@ async def naics_list(
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:
     return await retrieve404(NaicsDetail, id=id)
-
-# @router.get('/companies')
-# async def companies_list(
-#     text: str|None = None,
-#     company: str|None = None,
-#     state: StateCode|None = None,
-#     reports_count_gt: int|None = None,
-#     reports_count_lt: int|None = None,
-#     last_reported_after: datetime|None = None,
-#     last_reported_before: datetime|None = None,
-#     order: str|None = None,
-#     limit: Limit = 50,
-#     page: PageNumber = 1
-# ) -> list[CompanyDetail]:
-#     params = dict(
-#         text=text,
-#         company=company,
-#         state=state,
-#         reports_count_gt=reports_count_gt,
-#         reports_count_lt=reports_count_lt,
-#         last_reported_after=last_reported_after,
-#         last_reported_before=last_reported_before,
-#         order=order)
-#     return await search(CompanyDetail, params, limit, (page - 1) * limit)
