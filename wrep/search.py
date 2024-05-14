@@ -178,9 +178,9 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
         'reported': Report.reported,
         'starting': Report.starting,
         'employees': Report.employees,
-        'state': Report.state.collate('NOCASE'),
-        'company': Report.company.collate('NOCASE'),
-        'action': Report.action.collate('NOCASE'),
+        'state': Report.state,
+        'company': Report.company,
+        'action': Report.action,
     }
 
     def get_filters(self):
@@ -244,7 +244,7 @@ class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsDetail]):
     order_fieldmap: ClassVar = {
         'id': Naics.id,
         'code': Naics.code,
-        'title': Naics.title.collate('NOCASE'),
+        'title': Naics.title,
     }
 
     def get_filters(self):

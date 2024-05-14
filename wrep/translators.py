@@ -923,6 +923,7 @@ class TX(Translator, state='TX'):
             (_r(r'_x000D_'), ''),
             (_r(r"'$"), ''),
             # TODO: Dallas4 Plano2 etc.
+            (_r(r'(dallas|plano|austin|antonio|houston|worth)\d', re.I), r'\1'),
         ],
         starting=[
             ('1930-03-30 00:00:00', '2020-03-30'),
@@ -956,12 +957,12 @@ class UT(Translator, state='UT'):
 
 class VA(Translator, state='VA'):
     default_url = 'https://www.vec.virginia.gov/warn-notices'
+    action_headers = ['Closure', 'Layoff', 'Permanent Reduction', 'Realignment']
     headermap = {
         'Company Name': 'company',
         'Notice Date': 'reported',
         'Location City': 'location',
         'Employees Affected': 'employees',
-        'Layoff': 'action',
         'Impact Date': 'starting'
     }
     rewrites = dict(
@@ -969,6 +970,12 @@ class VA(Translator, state='VA'):
             ('10/01/1973', '2020-10-01'),
         ],
     )
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        entry['action'] = '/'.join(
+            v for v in self.action_headers
+            if row.get(v) == 'Yes')
+        super().finish(entry, row)
 
 class VT(Translator, state='VT'):
     default_url = 'https://www.vermontjoblink.com/search/warn_lookups/new'

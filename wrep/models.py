@@ -27,10 +27,10 @@ db: orm.Database = db_url.connect(settings.DB_URL)
 class Report(orm.Model):
     NAMESPACE = uuid5(settings.NAMESPACE, 'Report')
     id = orm.UUIDField(primary_key=True)
-    company = orm.CharField(max_length=512, index=True, collation='NOCASE')
-    state = orm.CharField(max_length=2, index=True, collation='NOCASE')
+    company = orm.CharField(max_length=512, index=True)
+    state = orm.CharField(max_length=2, index=True)
     created = orm.DateTimeField(index=True, default=utils.now)
-    location = orm.CharField(max_length=255, null=True, index=True, collation='NOCASE')
+    location = orm.CharField(max_length=255, null=True, index=True)
     reported = orm.DateTimeField(index=True)
     starting = orm.DateTimeField(null=True, index=True)
     employees = orm.IntegerField(null=True)
@@ -48,10 +48,18 @@ class Report(orm.Model):
         q = q.order_by(cls.id, Naics.code)
         return q
 
+class StateStat(orm.Model):
+    id = orm.CharField(max_length=2, primary_key=True)
+    last_reported = orm.DateTimeField(null=True, index=True)
+    reports_count = orm.IntegerField(index=True, default=0)
+
+    class Meta:
+        database = db
+
 class Naics(orm.Model):
     id = orm.IntegerField(primary_key=True)
     code = orm.CharField(max_length=32, index=True)
-    title = orm.CharField(max_length=255, index=True, collation='NOCASE')
+    title = orm.CharField(max_length=255, index=True)
 
     class Meta:
         database = db
@@ -76,7 +84,6 @@ __all__ += [
     'PageNumber',
     'ReportData',
     'StateCode',
-    'StateData',
     'StateDetail',
     'ValidationError']
 
@@ -142,12 +149,11 @@ class NaicsData(DataModel):
 class NaicsDetail(NaicsData):
     reports_count: int
 
-class StateData(DataModel):
+class StateDetail(DataModel):
     state: StateCode
-
-class StateDetail(StateData):
     last_reported: datetime|None
     reports_count: int
+    model_config = ConfigDict(populate_by_name=True,from_attributes=True)
 
     @field_serializer('last_reported')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
@@ -267,15 +273,7 @@ class FollowData(DataModel):
 # ----------------------------
 
 def migrate() -> None:
-    if isinstance(db, orm.PostgresqlDatabase):
-        cur = db.execute_sql('SELECT collname FROM pg_collation')
-        names = {r[0].lower() for r in cur.fetchall()}
-        if 'nocase' not in names:
-            db.execute_sql(
-                "CREATE COLLATION nocase "
-                "(provider = icu, locale = 'und-u-ks-level2', "
-                "deterministic = true)")
-    db.create_tables([Report, Naics, NaicsReport])
+    db.create_tables([Report, StateStat, Naics, NaicsReport])
     userdb.create_tables([Follow])
 
 def load_naics() -> None:
@@ -293,6 +291,7 @@ def load_naics() -> None:
 
 actions = dict(
     migrate=migrate,
+    naics=load_naics,
     load_naics=load_naics)
 
 class Command(utils.BaseCommand):

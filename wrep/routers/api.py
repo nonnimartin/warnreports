@@ -50,7 +50,7 @@ async def reports_list(
 async def report_get(id: UUID) -> ReportData:
     return await retrieve404(ReportData, id=id)
 
-@router.get('/states')
+@router.get('/states', response_model_by_alias=False)
 async def states_list(
     state: StateCode|None = None,
     reports_count_gt: int|None = None,
@@ -68,7 +68,7 @@ async def states_list(
         order=order)
     return await search(StateDetail, params)
 
-@router.get('/states/{state}')
+@router.get('/states/{state}', response_model_by_alias=False)
 async def state_get(state: StateCode) -> StateDetail:
     return await retrieve404(StateDetail, state=state)
 
