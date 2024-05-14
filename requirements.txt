@@ -5,6 +5,7 @@ fastapi
 feedgen
 jinja2
 motor
+openpyxl
 peewee
 pdfplumber
 pydantic[email]
@@ -17,7 +18,6 @@ uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
 html5lib
-openpyxl
 tenacity
 xlrd
 retry

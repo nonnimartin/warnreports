@@ -765,12 +765,16 @@ class NY(Translator, state='NY'):
         'date_posted': 'location',
         'Number Affected': 'employees',
         'Dislocation Type': 'action',
+        'notice_url': 'url',
         'NAISC': 'naics', # sic
         'NAICS': 'naics' # in case it's fixed
     }
     rewrites = dict(
         naics=[
             ('79', ''),
+        ],
+        url=[
+            (_r(r'^(/.*)$'), r'https://dol.ny.gov\1')
         ]
     )
 

@@ -5,12 +5,13 @@ import csv
 import json
 import re
 from contextlib import contextmanager
-from datetime import timezone
+from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from typing import Any, Generator, Iterable, Iterator
 from urllib.parse import urlparse
 
+import openpyxl
 import pdfplumber
 import requests
 from bs4 import BeautifulSoup as Soup
@@ -195,6 +196,34 @@ class CA(Scraper, state='CA'):
     def load_index(self) -> list[str]:
         return self.cache.read_json('index.json')
 
+class CO(Scraper, state='CO'):
+
+    async def scrape(self):
+        self.runner.scrape()
+        with self.runner.file.open() as file:
+            headers = sorted(next(csv.reader(file)))
+        with self.runner.file.open() as file:
+            reader = csv.DictReader(file)
+            with self.cache.open('normalized.csv', 'w') as file:
+                writer = csv.DictWriter(file, fieldnames=headers)
+                writer.writeheader()
+                writer.writerows(reader)
+        self.runner.file.unlink()
+
+    async def clean(self):
+        self.cache.delete('normalized.csv')
+
+    async def stat(self):
+        file = self.cache.topath('normalized.csv')
+        return dict(
+            hash=utils.hashfile(file, missing_ok=True),
+            size=file.stat().st_size if file.exists() else 0)
+
+    @contextmanager
+    def extract(self) -> Generator[Iterable[dict[str, str]]]:
+        with self.cache.open('normalized.csv') as file:
+            yield csv.DictReader(file, restkey='__')
+
 class DE(Scraper, state='DE'):
     base_url = 'https://joblink.delaware.gov'
     index_url = '/search/warn_lookups?commit=Search&page=1&q%5Bs%5D=notice_on+desc'
@@ -276,6 +305,44 @@ class DE(Scraper, state='DE'):
         return dict(
             hash=utils.hashfiles(files, missing_ok=True),
             size=sum(file.stat().st_size for file in files if file.exists()))
+
+class FL(Scraper, state='FL'):
+
+    async def scrape(self) -> None:
+        self.runner.scrape()
+
+    @contextmanager
+    def extract(self):
+        with self.runner.file.open() as file:
+            yield self.read_records(csv.reader(file))
+
+    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
+        lookup = dict(self.fetch_lookup())
+        headers = next(it) + ['download']
+        for values in it:
+            key = self.row_key(values)
+            values.append(lookup.get(key, ''))
+            yield dict(zip(headers, values))
+
+    def fetch_lookup(self):
+        for file in self.cache.files('.', '*_page_*.html'):
+            doc = bs(Path(file).read_text(), 'html5lib')
+            table = doc.find('table')
+            yield from self.parse_lookup_table(table)
+
+    def parse_lookup_table(self, table: Soup) -> Iterator[tuple[str, str]]:
+        tbody = table.find('tbody')
+        for tr in tbody.find_all('tr'):
+            tds = tr.find_all('td')
+            last = tds.pop()
+            if last.find('input', id='download'):
+                el = last.find('input', type='hidden')
+                if el:
+                    key = self.row_key(td.text for td in tds)
+                    yield key, el['value']
+
+    def row_key(self, values: Iterable[str]) -> str:
+        return ''.join(re.sub(r'\s', '', value) for value in values)
 
 class GA(Scraper, state='GA'):
     base_url = 'https://www.tcsg.edu'
@@ -421,43 +488,80 @@ class IN(Scraper, state='IN'):
             hash=utils.hashstrings(strings),
             size=sum(map(len, strings)))
 
-class FL(Scraper, state='FL'):
+class NY(Scraper, state='NY'):
+    base_url = 'https://dol.ny.gov'
+    index_url = '/warn-notices'
+    past_urls = {
+        '2023.html': '/2023-warn-notices',
+        '2022.html': '/2022-warn-notices',
+        '2021.html': '/warn-notices-2021',
+        'ny_historical.xlsx': 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/NY/ny_historical.xlsx'}
 
     async def scrape(self) -> None:
-        self.runner.scrape()
+        await self.cache_download('latest.html', self.index_url)
+        for key, url in self.past_urls.items():
+            if not self.cache.exists(key):
+                await self.cache_download(key, url)
+
+    async def clean(self):
+        self.cache.delete('latest.html', *self.past_urls)
+
+    async def stat(self):
+        objs = list(map(self.cache.topath, self.past_urls))
+        size = sum(obj.stat().st_size for obj in objs if obj.exists())
+        if self.cache.exists('latest.html'):
+            table = self.find_table(bs(self.cache.read('latest.html')))
+            text = table.text
+            objs.append(text)
+            size += len(text)
+        return dict(hash=utils.hashobjects(objs, missing_ok=True), size=size)
 
     @contextmanager
     def extract(self):
-        with self.runner.file.open() as file:
-            yield self.read_records(csv.reader(file))
+        keys = ('latest.html', *self.past_urls)
+        files = map(self.cache.topath, keys)
+        tables = map(self.read_record_file, files)
+        yield chain.from_iterable(tables)
 
-    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
-        lookup = dict(self.fetch_lookup())
-        headers = next(it) + ['download']
+    def read_record_file(self, file: Path) -> Iterator[dict[str, str]]:
+        if file.name.endswith('.xlsx'):
+            func = self.read_xlsx_file
+        else:
+            func = self.read_html_file
+        yield from func(file)
+
+    def read_xlsx_file(self, file: Path) -> Iterator[dict[str, str]]:
+        worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
+        it = ([cell.value for cell in row] for row in worksheet.rows)
+        headers = next(it)
         for values in it:
-            key = self.row_key(values)
-            values.append(lookup.get(key, ''))
-            yield dict(zip(headers, values))
+            row = {}
+            for k, v in zip(headers, values):
+                if not (k or v):
+                    continue
+                if v is None:
+                    v = ''
+                elif isinstance(v, datetime):
+                    v = v.strftime(f'%Y-%m-%d')
+                else:
+                    v = str(v)
+                row[k] = v
+            yield row
 
-    def fetch_lookup(self):
-        for file in self.cache.files('.', '*_page_*.html'):
-            doc = bs(Path(file).read_text(), 'html5lib')
-            table = doc.find('table')
-            yield from self.parse_lookup_table(table)
-
-    def parse_lookup_table(self, table: Soup) -> Iterator[tuple[str, str]]:
-        tbody = table.find('tbody')
-        for tr in tbody.find_all('tr'):
+    def read_html_file(self, file: Path) -> Iterator[dict[str, str]]:
+        table = self.find_table(bs(file.read_bytes()))
+        it = iter(table.find_all('tr'))
+        next(it)
+        for tr in it:
             tds = tr.find_all('td')
-            last = tds.pop()
-            if last.find('input', id='download'):
-                el = last.find('input', type='hidden')
-                if el:
-                    key = self.row_key(td.text for td in tds)
-                    yield key, el['value']
+            yield dict(
+                company_name=tds[0].a.text,
+                notice_url=tds[0].a['href'],
+                date_posted=tds[1].text,
+                notice_dated=tds[2].text)
 
-    def row_key(self, values: Iterable[str]) -> str:
-        return ''.join(re.sub(r'\s', '', value) for value in values)
+    def find_table(self, page: Soup) -> Soup:
+         return page.find('div', {'class': 'landing-paragraphs'}).find('table')
 
 class SC(Scraper, state='SC'):
     base_url = 'https://scworks.org'
@@ -491,6 +595,13 @@ class SC(Scraper, state='SC'):
     async def clean(self) -> None:
         self.cache.delete('latest.html', 'index.json')
 
+    async def stat(self):
+        files = [self.cache.topath('index.json')]
+        files += self.list_record_files()
+        return dict(
+            hash=utils.hashfiles(files, missing_ok=True),
+            size=sum(file.stat().st_size for file in files if file.exists()))
+
     @contextmanager
     def extract(self):
         yield self.read_records()
@@ -512,13 +623,13 @@ class SC(Scraper, state='SC'):
 
     def read_table(self, path: Path) -> Iterator[list[str]]:
         with pdfplumber.open(path) as pdf:
-            it = (page.extract_tables() for page in pdf.pages)
-            it = (table for tables in it for table in tables)
-            it = map(self.process_table, it)
-            it = filter(None, it)
-            it = self.merge_tables(it)
-            it = (list(map(self.clean_cell, row)) for row in it)
-            yield from it
+            it = [page.extract_tables() for page in pdf.pages]
+        it = (table for tables in it for table in tables)
+        it = map(self.process_table, it)
+        it = filter(None, it)
+        it = self.merge_tables(it)
+        it = (list(map(self.clean_cell, row)) for row in it)
+        yield from it
 
     def process_table(self, table: list[list[str|None]]) -> list[list]:
         self.remove_extra_header(table)
@@ -609,13 +720,6 @@ class SC(Scraper, state='SC'):
                     else:
                         del row[d]
             c += 1
-
-    async def stat(self):
-        files = [self.cache.topath('index.json')]
-        files += self.list_record_files()
-        return dict(
-            hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files if file.exists()))
 
     rewrites = {
         'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
@@ -737,24 +841,21 @@ class Runner(warn.Runner):
 
     def stat(self) -> dict[str, Any]:
         file = self.file
-        if file.exists():
-            return dict(
-                hash=utils.hashfile(file),
-                size=file.stat().st_size)
-        return {}
+        return dict(
+            hash=utils.hashfile(file, missing_ok=True),
+            size=file.stat().st_size if file.exists() else 0)
 
 def bs(markup, features='html.parser', **kw):
     return Soup(markup, features, **kw)
     
-warn_scraper_names = warn.utils.get_all_scrapers()
-
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
         pass
-    DefaultScraper.state = state
+    DefaultScraper.state = state.upper()
     return DefaultScraper
 
-for state in map(str.upper, warn_scraper_names):
-    if state not in scrapers:
-        scrapers[state] = create_scraper(state)
-del(state)
+scrapers.update({
+    state: create_scraper(state)
+    for state in map(str.upper, warn.utils.get_all_scrapers())
+    if state not in scrapers})
+
