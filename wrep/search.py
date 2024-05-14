@@ -210,9 +210,9 @@ class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
         if self.employees_gt is not None:
             yield Report.employees > self.employees_gt
 
-class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
+class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
     sql_model_class: ClassVar = Report
-    sql_group_by: ClassVar = [Report.company, Report.state]
+    sql_group_by: ClassVar = [Report.state]
     alias_fieldmap: ClassVar = {
         'reports_count': orm.fn.Count(Report.id).alias('reports_count'),
         'last_reported': orm.fn.Max(Report.reported).alias('last_reported'),
@@ -233,13 +233,6 @@ class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
         if self.last_reported_after:
             alias = self.alias_fieldmap['last_reported']
             yield alias > self.last_reported_after
-
-class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
-    sql_model_class: ClassVar = Report
-    sql_group_by: ClassVar = [Report.state]
-    alias_fieldmap: ClassVar = SqlCompaniesFilter.alias_fieldmap
-    order_fieldmap: ClassVar = SqlCompaniesFilter.order_fieldmap
-    get_filters = SqlCompaniesFilter.get_filters
 
 class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsDetail]):
     sql_model_class: ClassVar = Naics
@@ -282,7 +275,6 @@ class NotFoundError(Exception):
 
 filters: dict[type[DataModel], type[BaseSearch]] = {
     ReportData: SqlReportsFilter,
-    CompanyDetail: SqlCompaniesFilter,
     StateDetail: SqlStatesFilter,
     NaicsDetail: SqlNaicsFilter}
 
@@ -350,3 +342,13 @@ class Command(utils.BaseCommand):
 
 if __name__ == '__main__':
     Command.main()
+
+
+# class SqlCompaniesFilter(CompaniesFilter, SqlSearch[CompanyDetail]):
+#     sql_model_class: ClassVar = Report
+#     sql_group_by: ClassVar = [Report.company, Report.state]
+#     alias_fieldmap: ClassVar = SqlStatesFilter.alias_fieldmap
+#     order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
+#     get_filters = SqlStatesFilter.get_filters
+
+# filters[CompanyDetail] = SqlCompaniesFilter

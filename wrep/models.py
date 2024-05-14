@@ -67,8 +67,6 @@ class NaicsReport(orm.Model):
 # ----------------------------
 
 __all__ += [
-    'CompanyData',
-    'CompanyDetail',
     'CompanyName',
     'DataModel',
     'Limit',
@@ -144,19 +142,6 @@ class NaicsData(DataModel):
 class NaicsDetail(NaicsData):
     reports_count: int
 
-class CompanyData(DataModel):
-    company: CompanyName
-    state: StateCode
-    model_config = ConfigDict(from_attributes=True)
-
-class CompanyDetail(CompanyData):
-    last_reported: datetime|None
-    reports_count: int
-
-    @field_serializer('last_reported')
-    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
-        return tzreplace(dt, zoneinfos[self.state])
-
 class StateData(DataModel):
     state: StateCode
 
@@ -170,7 +155,7 @@ class StateDetail(StateData):
 
 # ----------------------------
 
-__all__ += ['FilterModel', 'ReportsFilter', 'CompaniesFilter', 'NaicsFilter', 'StatesFilter']
+__all__ += ['FilterModel', 'ReportsFilter', 'NaicsFilter', 'StatesFilter']
 
 class FilterModel(DataModel, Generic[DM]):
     order: str|None = None
@@ -211,18 +196,6 @@ class ReportsFilter(FilterModel[ReportData]):
     result_model: ClassVar = ReportData
     order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
-
-class CompaniesFilter(FilterModel[CompanyDetail]):
-    text: str|None = None
-    company: CompanyName|None = None
-    state: StateCode|None = None
-    reports_count_gt: int|None = None
-    reports_count_lt: int|None = None
-    last_reported_after: datetime|None = None
-    last_reported_before: datetime|None = None
-    result_model: ClassVar = CompanyDetail
-    order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
-    default_ordering: ClassVar = [('company', 1), ('state', 1)]
 
 class StatesFilter(FilterModel[StateDetail]):
     state: StateCode|None = None
@@ -291,10 +264,17 @@ class FollowData(DataModel):
     company: CompanyName
     state: StateCode|Literal['*'] = '*'
 
-
 # ----------------------------
 
 def migrate() -> None:
+    if isinstance(db, orm.PostgresqlDatabase):
+        cur = db.execute_sql('SELECT collname FROM pg_collation')
+        names = {r[0].lower() for r in cur.fetchall()}
+        if 'nocase' not in names:
+            db.execute_sql(
+                "CREATE COLLATION nocase "
+                "(provider = icu, locale = 'und-u-ks-level2', "
+                "deterministic = true)")
     db.create_tables([Report, Naics, NaicsReport])
     userdb.create_tables([Follow])
 
@@ -309,7 +289,7 @@ def load_naics() -> None:
             title=entry['title'])
         for entry in rep.json())
     with db.atomic():
-        Naics.replace_many(records).execute()
+        Naics.insert_many(records).on_conflict('IGNORE').execute()
 
 actions = dict(
     migrate=migrate,
@@ -326,3 +306,30 @@ class Command(utils.BaseCommand):
 
 if __name__ == '__main__':
     Command.main()
+
+# __all__ += ['CompanyData', 'CompanyDetail', 'CompaniesFilter', ]
+
+# class CompanyData(DataModel):
+#     company: CompanyName
+#     state: StateCode
+#     model_config = ConfigDict(from_attributes=True)
+
+# class CompanyDetail(CompanyData):
+#     last_reported: datetime|None
+#     reports_count: int
+
+#     @field_serializer('last_reported')
+#     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+#         return tzreplace(dt, zoneinfos[self.state])
+
+# class CompaniesFilter(FilterModel[CompanyDetail]):
+#     text: str|None = None
+#     company: CompanyName|None = None
+#     state: StateCode|None = None
+#     reports_count_gt: int|None = None
+#     reports_count_lt: int|None = None
+#     last_reported_after: datetime|None = None
+#     last_reported_before: datetime|None = None
+#     result_model: ClassVar = CompanyDetail
+#     order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
+#     default_ordering: ClassVar = [('company', 1), ('state', 1)]
