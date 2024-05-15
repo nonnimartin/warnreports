@@ -3,13 +3,12 @@ from __future__ import annotations
 import asyncio
 import re
 from abc import abstractmethod
-from typing import (Any, AsyncIterable, ClassVar, Generic, Iterable,
-                    TypeVar)
-from pymongo.operations import IndexModel
+from typing import Any, AsyncIterable, ClassVar, Generic, Iterable, TypeVar
 
 from fastapi import HTTPException, status
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorCursor, AsyncIOMotorDatabase)
+from pymongo.operations import IndexModel
 
 from . import settings, utils
 from .models import *
@@ -18,7 +17,6 @@ __all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundErr
 
 QS = TypeVar('QS')
 ST = TypeVar('ST', bound='BaseSearch')
-DM = TypeVar('DM', bound=DataModel)
 logger = utils.get_logger('search')
 
 
@@ -47,7 +45,7 @@ class BaseSearch(FilterModel[DM], Generic[QS, DM]):
     def paginate_queryset(self, qs: QS, limit: Limit|None, offset: Offset) -> QS: ...
 
     async def iter_queryset(self, qs: QS) -> AsyncIterable[DM]:
-        async for obj in utils.as_aiter(qs):
+        async for obj in qs:
             yield self.result_model.model_validate(obj)
 
     async def queryset_to_list(self, qs: QS) -> list[DM]:
@@ -61,11 +59,11 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
         return mongo.get_collection(self.collection_name)
 
     def filter_queryset(self, qs: AsyncIOMotorCollection):
-        filters = list(self.get_filters())
+        filters = tuple(self.get_filters())
         return qs.find({'$and': filters} if filters else {})
 
     def order_queryset(self, qs):
-        orders = list(self.get_ordering())
+        orders = tuple(self.get_ordering())
         return qs.sort(orders) if orders else qs
 
     def paginate_queryset(self, qs, limit, offset):
@@ -230,17 +228,17 @@ search_indexes = dict(
         IndexModel({'reports_count': -1}),
     ])
 
-async def search_init(mongo: AsyncIOMotorDatabase = mongo) -> None:
+async def search_init() -> None:
     for name, indexes in search_indexes.items():
         await mongo.get_collection(name).create_indexes(indexes)
 
-async def search_clean(mongo: AsyncIOMotorDatabase = mongo) -> None:
+async def search_clean() -> None:
     for name in search_indexes:
         await mongo.get_collection(name).drop()
 
-async def search_build(mongo: AsyncIOMotorDatabase = mongo) -> None:
-    await search_clean(mongo)
-    await search_init(mongo)
+async def search_build() -> None:
+    await search_clean()
+    await search_init()
     it = map(ReportData.as_doc, ReportData.map_reduce())
     await mongo.reports.insert_many(it)
     it = map(StateDetail.model_validate, list(StateStat.select()))
