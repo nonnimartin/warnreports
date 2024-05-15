@@ -831,7 +831,7 @@ class Runner(warn.Runner):
         super().scrape(self.state.lower())
 
     def stat(self) -> dict[str, Any]:
-        return hashstat([self.file], missing_ok=True)
+        return hashstat([self.file])
 
 def bs(markup, features='html.parser', **kw):
     return Soup(markup, features, **kw)
@@ -842,9 +842,9 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
     for obj in it:
         if isinstance(obj, Path):
             try:
-                with obj.open() as f:
-                    h.update(f)
-                size += obj.stat().st_size
+                buf = obj.read_bytes()
+                h.update(buf)
+                size += len(buf)
             except FileNotFoundError:
                 pass
         elif isinstance(obj, str):
