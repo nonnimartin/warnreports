@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from abc import abstractmethod
-from collections import ChainMap
-from typing import (Any, AsyncIterable, ClassVar, Generic, Iterable, Sequence,
+from typing import (Any, AsyncIterable, ClassVar, Generic, Iterable,
                     TypeVar)
+from pymongo.operations import IndexModel
 
 from fastapi import HTTPException, status
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
@@ -54,6 +55,11 @@ class BaseSearch(FilterModel[DM], Generic[QS, DM]):
 
 class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
 
+    collection_name: ClassVar[str]
+
+    def get_queryset(self):
+        return mongo.get_collection(self.collection_name)
+
     def filter_queryset(self, qs: AsyncIOMotorCollection):
         filters = list(self.get_filters())
         return qs.find({'$and': filters} if filters else {})
@@ -77,68 +83,8 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
     def wc_startswith(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
         return re.compile(f'^{re.escape(text)}.*', flags)
 
-class SqlSearch(BaseSearch[orm.ModelSelect, DM]):
-    sql_model_class: ClassVar[orm.Model]
-    sql_joins: ClassVar[Sequence[tuple]] = ()
-    sql_group_by: ClassVar[Sequence] = ()
-    alias_fieldmap: ClassVar[dict[str, orm.Alias]] = {}
-    order_fieldmap: ClassVar[dict[str, orm.Field]] = {}
-
-    def get_queryset(self):
-        qs = self.sql_model_class.select(*self.get_selects())
-        for join in self.get_joins():
-            qs = qs.join_from(*join)
-        group_by = list(self.get_group_by())
-        if group_by:
-            qs = qs.group_by(*group_by)
-        return qs
-
-    def get_selects(self):
-        yield self.sql_model_class
-        yield from self.alias_fieldmap.values()
-
-    def get_group_by(self):
-        yield from self.sql_group_by
-
-    def get_joins(self):
-        yield from self.sql_joins
-
-    def filter_queryset(self, qs):
-        filters = list(self.get_filters())
-        return qs.where(*filters) if filters else qs
-
-    def order_queryset(self, qs):
-        orders = list(self.get_ordering())
-        return qs.order_by(*orders) if orders else qs
-
-    def paginate_queryset(self, qs, limit, offset):
-        if limit:
-            qs = qs.limit(limit)
-        if offset:
-            qs = qs.offset(offset)
-        return qs
-
-    def get_ordering(self):
-        fieldmap = ChainMap(self.order_fieldmap, self.alias_fieldmap)
-        for field, dir_ in super().get_ordering():
-            if field in fieldmap:
-                ormfield = fieldmap[field]
-                if dir_ == -1:
-                    ormfield = ormfield.desc()
-                yield ormfield
-
-    @staticmethod
-    def wc_contains(text: str) -> str:
-        return f'%{text}%'
-
-    @staticmethod
-    def wc_startswith(text: str) -> str:
-        return f'{text}%'
-
 class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
-
-    def get_queryset(self):
-        return mongo.reports
+    collection_name: ClassVar = 'reports'
 
     def get_filters(self):
         if self.id:
@@ -171,76 +117,62 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
         if self.employees_gt is not None:
             yield {'employees': {'$gt': self.employees_gt}}
 
-class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
-    sql_model_class: ClassVar = Report
-    sql_group_by: ClassVar = [Report.state]
-    alias_fieldmap: ClassVar = {
-        'reports_count': orm.fn.Count(Report.id).alias('reports_count'),
-        'last_reported': orm.fn.Max(Report.reported).alias('last_reported'),
-    }
-    order_fieldmap: ClassVar = {
-        'state': Report.state,
-    }
+class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
+    collection_name: ClassVar = 'states'
 
     def get_filters(self):
         if self.state:
-            yield Report.state == self.state
-        if self.reports_count_lt:
-            alias = self.alias_fieldmap['reports_count']
-            yield alias < self.reports_count_lt
-        if self.reports_count_gt:
-            alias = self.alias_fieldmap['reports_count']
-            yield alias > self.reports_count_gt
+            yield {'state': self.state.upper()}
+        if self.reports_count_lt is not None:
+            yield {'reports_count': {'$lt': self.reports_count_lt}}
+        if self.reports_count_gt is not None:
+            yield {'reports_count': {'$gt': self.reports_count_gt}}
         if self.last_reported_before:
-            alias = self.alias_fieldmap['last_reported']
-            yield alias < self.last_reported_before
+            yield {'last_reported': {'$lt': self.last_reported_before}}
         if self.last_reported_after:
-            alias = self.alias_fieldmap['last_reported']
-            yield alias > self.last_reported_after
+            yield {'last_reported': {'$gt': self.last_reported_after}}
 
-class SqlNaicsFilter(NaicsFilter, SqlSearch[NaicsDetail]):
-    sql_model_class: ClassVar = Naics
-    sql_group_by: ClassVar = [Naics]
-    sql_joins: ClassVar = [(Naics, NaicsReport, orm.JOIN['LEFT_OUTER'])]
-    alias_fieldmap: ClassVar[dict[str, orm.Alias]] = {
-        'reports_count': orm.fn.Count(NaicsReport.id).alias('reports_count'),
-    }
-    order_fieldmap: ClassVar = {
-        'id': Naics.id,
-        'code': Naics.code,
-        'title': Naics.title,
-    }
+class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
+    collection_name: ClassVar = 'companies'
 
     def get_filters(self):
-        if self.id is not None:
-            yield Naics.id == self.id
+        if self.company:
+            yield {'company': {'$regex': self.wc_contains(self.company)}}
+        yield from MongoStatesFilter.get_filters(self)
+
+class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
+    collection_name: ClassVar = 'naics'
+
+    def get_filters(self):
+        if self.id:
+            yield {'id': self.id}
         if self.code is not None:
-            yield Naics.id == self.code
+            yield {'code': self.code}
         if self.prefix:
-            wc = self.wc_startswith(str(self.prefix))
-            logger.info(f'{wc=}')
-            yield (Naics.id == self.prefix) | Naics.code.ilike(wc)
+            yield {
+                '$or': [
+                    {'code': {'$regex': self.wc_startswith(str(self.prefix))}},
+                    {'id': self.prefix}]}
         if self.title:
-            wc = self.wc_contains(self.title)
-            yield Naics.title.ilike(wc)
+            yield {'title': {'$regex': self.wc_contains(self.title)}}
         if self.text:
-            wc1 = self.wc_startswith(str(self.text))
-            wc2 = self.wc_contains(self.text)
-            yield Naics.title.ilike(wc2) | Naics.code.ilike(wc1)
+            yield {
+                '$or': [
+                    {'code': {'$regex': self.wc_startswith(str(self.text))}},
+                    {'title': {'$regex': self.wc_contains(self.text)}}]}
         if self.reports_count_lt is not None:
-            alias = self.alias_fieldmap['reports_count']
-            yield alias < self.reports_count_lt
+            yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:
-            alias = self.alias_fieldmap['reports_count']
-            yield alias > self.reports_count_gt
+            yield {'reports_count': {'$gt': self.reports_count_gt}}
 
 class NotFoundError(Exception):
     pass
 
 filters: dict[type[DataModel], type[BaseSearch]] = {
     ReportData: MongoReportsFilter,
-    StateDetail: SqlStatesFilter,
-    NaicsDetail: SqlNaicsFilter}
+    StateDetail: MongoStatesFilter,
+    CompanyDetail: MongoCompaniesFilter,
+    NaicsDetail: MongoNaicsFilter}
 
 async def search(
     model: type[DM],
@@ -265,23 +197,64 @@ async def retrieve404(model: type[DM], **params) -> DM:
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
 mongo = mongo_client.active
 
-async def mongo_init(mongo: AsyncIOMotorDatabase = mongo) -> None:
-    from .backends.etl import MongoIndex
-    await mongo.reports.create_indexes(MongoIndex.indexes)
+search_indexes = dict(
+    reports=[
+        IndexModel({'company': 'text', 'location': 'text'}),
+        IndexModel({'reported': 1}),
+        IndexModel({'reported': -1}),
+        IndexModel({'employees': 1}),
+        IndexModel({'employees': -1}),
+        IndexModel({'naics.code': 1}),
+        IndexModel({'naics.id': 1}),
+        IndexModel({'state': 'hashed'}),
+    ],
+    companies=[
+        IndexModel({'company': 1}),
+        IndexModel({'state': 'hashed'}),
+        IndexModel({'last_reported': 1}),
+        IndexModel({'last_reported': -1}),
+        IndexModel({'reports_count': 1}),
+        IndexModel({'reports_count': -1}),
+    ],
+    states=[
+        IndexModel({'state': 'hashed'}),
+        IndexModel({'last_reported': -1}),
+        IndexModel({'reports_count': -1}),
+    ],
+    naics=[
+        IndexModel({'id': 'hashed'}),
+        IndexModel({'id': 1}),
+        IndexModel({'code': 1}),
+        IndexModel({'title': 1}),
+        IndexModel({'reports_count': 1}),
+        IndexModel({'reports_count': -1}),
+    ])
 
-async def mongo_clean(mongo: AsyncIOMotorDatabase = mongo) -> None:
-    await mongo.reports.drop()
+async def search_init(mongo: AsyncIOMotorDatabase = mongo) -> None:
+    for name, indexes in search_indexes.items():
+        await mongo.get_collection(name).create_indexes(indexes)
 
-async def mongo_build(mongo: AsyncIOMotorDatabase = mongo) -> None:
-    await mongo_clean(mongo)
-    await mongo_init(mongo)
-    docs = map(ReportData.as_doc, ReportData.map_reduce())
-    await mongo.reports.insert_many(docs)
+async def search_clean(mongo: AsyncIOMotorDatabase = mongo) -> None:
+    for name in search_indexes:
+        await mongo.get_collection(name).drop()
+
+async def search_build(mongo: AsyncIOMotorDatabase = mongo) -> None:
+    await search_clean(mongo)
+    await search_init(mongo)
+    it = map(ReportData.as_doc, ReportData.map_reduce())
+    await mongo.reports.insert_many(it)
+    it = map(StateDetail.model_validate, list(StateStat.select()))
+    it = map(StateDetail.as_doc, it)
+    await mongo.states.insert_many(it)
+    it = map(CompanyDetail.as_doc, CompanyDetail.map_reduce())
+    await mongo.companies.insert_many(it)
+    it = map(NaicsDetail.as_doc, NaicsDetail.map_reduce())
+    await mongo.naics.insert_many(it)
 
 actions = dict(
-    init=mongo_init,
-    build=mongo_build,
-    clean=mongo_clean)
+    init=search_init,
+    build=search_build,
+    clean=search_clean)
 
 class Command(utils.BaseCommand):
 

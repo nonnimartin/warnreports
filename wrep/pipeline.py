@@ -55,9 +55,11 @@ class Pipeline:
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
         self.backends: dict[Stage, StageBackend] = {
-            Stage.Extract: MongoExtraction(self.state, mongo.extractions),
-            Stage.Translate: MongoTranslation(self.state, mongo.translations),
-            Stage.Index: MongoIndex(self.state, mongo.reports)}
+            stage: cls(self.state, mongo)
+            for stage, cls in dict.items({
+                Stage.Extract: MongoExtraction,
+                Stage.Translate: MongoTranslation,
+                Stage.Index: MongoSearchIndex})}
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -74,7 +76,9 @@ class Pipeline:
         elif stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Load:
-            Report.delete().where(Report.state == self.state).execute()
+            for model in Report, Company:
+                model.delete().where(model.state == self.state).execute()
+            StateStat.delete().where(StateStat.id == self.state).execute()
 
     async def scrape(self, clean: bool = False) -> dict:
         prev = await self.scraper.stat()
@@ -119,6 +123,9 @@ class Pipeline:
                     await self.clean(Stage.Load)
                 async for entry in reader:
                     counts[self.save(entry)] += 1
+                stat = StateStat.get_or_create(id=self.state)[0]
+                stat.self_update()
+                stat.save()
         count = sum(counts.values())
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
         return dict(count=count, counts=counts, nochange=nochange)
@@ -130,9 +137,15 @@ class Pipeline:
         backend: IndexBackend = self.backends[stage]
         q = Report.select_for_reduce().where(Report.state == self.state)
         reports = ReportData.map_reduce(q)
-        count, created, updated = await backend.update(reports)
+        count, created, updated = await backend.update_reports(reports)
         nochange = created + updated == 0
         counts = dict(created=created, updated=updated)
+        q = StateStat.select().where(StateStat.id == self.state)
+        detail = StateDetail.model_validate(q.get())
+        await backend.update_states(detail)
+        q = Company.select_for_reduce().where(Report.state == self.state)
+        await backend.update_companies(CompanyDetail.map_reduce(q))
+        await backend.update_naics(NaicsDetail.map_reduce())
         return dict(count=count, counts=counts, nochange=nochange)
 
     def save(self, entry: dict) -> SaveType:
@@ -161,6 +174,7 @@ class Pipeline:
         naics_save = self.save_naics(report, naics, industry)
         if save is save.Nochange:
             save = naics_save
+        Company.get_or_create(company=report.company, state=report.state)
         return save
 
     def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:

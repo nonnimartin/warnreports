@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import (Annotated, Any, ClassVar, Generic, Iterable, Iterator,
                     Literal, Self, TypeAlias, TypeVar)
-from uuid import UUID, uuid5
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import peewee as orm
@@ -19,7 +19,7 @@ from pydantic_core import ValidationError as ValidationError
 from . import settings, utils
 from .ref.tz import zoneinfos
 
-__all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
+__all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'StateStat', 'Company', 'orm']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
@@ -28,7 +28,6 @@ class OrmModel(orm.Model):
         database = db
 
 class Report(OrmModel):
-    NAMESPACE = uuid5(settings.NAMESPACE, 'Report')
     id = orm.UUIDField(primary_key=True)
     company = orm.CharField(max_length=512, index=True)
     state = orm.CharField(max_length=2, index=True)
@@ -53,10 +52,35 @@ class StateStat(OrmModel):
     last_reported = orm.DateTimeField(null=True, index=True)
     reports_count = orm.IntegerField(index=True, default=0)
 
+    def self_update(self):
+        q = Report.select(Report.reported).where(Report.state==self.id)
+        self.reports_count = q.count()
+        latest = q.order_by(Report.reported.desc()).limit(1).first()
+        self.last_reported = latest and latest.reported
+
+class Company(OrmModel):
+    company = orm.CharField(max_length=512, index=True)
+    state = orm.CharField(max_length=2, index=True)
+
+    @classmethod
+    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+        return Report.select().order_by(Report.state, Report.company)
+
+    class Meta:
+        indexes = [(('company', 'state'), True)]
+
 class Naics(OrmModel):
     id = orm.IntegerField(primary_key=True)
     code = orm.CharField(max_length=32, index=True)
     title = orm.CharField(max_length=255, index=True)
+
+    @classmethod
+    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+        q = cls.select(NaicsReport, Report, cls)
+        q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
+        q = q.join_from(NaicsReport, Report, orm.JOIN['LEFT_OUTER'])
+        q = q.order_by(cls.id)
+        return q
 
 class NaicsReport(OrmModel):
     naics = orm.ForeignKeyField(Naics, on_delete='CASCADE')
@@ -68,6 +92,7 @@ class NaicsReport(OrmModel):
 # ----------------------------
 
 __all__ += [
+    'CompanyDetail',
     'CompanyName',
     'DataModel',
     'Limit',
@@ -90,6 +115,11 @@ StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_uppe
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
     return dt and dt.replace(hour=0, tzinfo=tzinfo)
 
+class DataModel(DataModel):
+
+    def as_doc(self) -> dict[str, Any]:
+        return self.model_dump(by_alias=True)
+
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
     company: CompanyName
@@ -101,10 +131,7 @@ class ReportData(DataModel):
     action: str|None
     url: str|None
     naics: list[NaicsData] = Field(default_factory=list)
-
-    model_config = ConfigDict(
-        populate_by_name=True,
-        from_attributes=True)
+    model_config = ConfigDict(populate_by_name=True,from_attributes=True)
 
     @classmethod
     def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
@@ -126,9 +153,6 @@ class ReportData(DataModel):
             naics = NaicsData.model_validate(nr.naics)
             self.naics.append(naics)
 
-    def as_doc(self) -> dict[str, Any]:
-        return self.model_dump(by_alias=True)
-
     @field_serializer('reported', 'starting')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
         return tzreplace(dt, zoneinfos[self.state])
@@ -140,21 +164,61 @@ class NaicsData(DataModel):
     model_config = ConfigDict(from_attributes=True)
 
 class NaicsDetail(NaicsData):
-    reports_count: int
+    reports_count: int = 0
+
+    @classmethod
+    def map_reduce(cls) -> Iterator[Self]:
+        inst: Self|None = None
+        for naics in Naics.select_for_reduce():
+            if inst is None or inst.id != naics.id:
+                if inst:
+                    yield inst
+                inst = cls.model_validate(naics)
+            inst.reduce_obj(naics)
+        if inst:
+            yield inst
+
+    def reduce_obj(self, naics: Naics) -> None:
+        self.reports_count += 1
 
 class StateDetail(DataModel):
-    state: StateCode
-    last_reported: datetime|None
-    reports_count: int
-    model_config = ConfigDict(populate_by_name=True,from_attributes=True)
+    state: StateCode = Field(alias='id')
+    last_reported: datetime|None = None
+    reports_count: int = 0
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     @field_serializer('last_reported')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
         return tzreplace(dt, zoneinfos[self.state])
 
+class CompanyDetail(DataModel):
+    company: str
+    state: StateCode
+    reports_count: int = 0
+    last_reported: datetime|None = None
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    @classmethod
+    def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
+        if it is None:
+            it = Company.select_for_reduce()
+        inst: Self|None = None
+        for report in it:
+            if inst is None or inst.state != report.state or inst.company != report.company:
+                if inst:
+                    yield inst
+                inst = cls.model_validate(report)
+            inst.reduce_obj(report)
+        if inst:
+            yield inst
+
+    def reduce_obj(self, report: Report) -> None:
+        self.reports_count += 1
+        self.last_reported = max(filter(None, (self.last_reported, report.reported)))
+
 # ----------------------------
 
-__all__ += ['FilterModel', 'ReportsFilter', 'NaicsFilter', 'StatesFilter']
+__all__ += ['FilterModel', 'ReportsFilter', 'NaicsFilter', 'StatesFilter', 'CompaniesFilter']
 
 class FilterModel(DataModel, Generic[DM]):
     order: str|None = None
@@ -206,6 +270,18 @@ class StatesFilter(FilterModel[StateDetail]):
     order_fields: ClassVar = {'state', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('state', 1)]
 
+class CompaniesFilter(FilterModel[CompanyDetail]):
+    text: str|None = None
+    company: CompanyName|None = None
+    state: StateCode|None = None
+    reports_count_gt: int|None = None
+    reports_count_lt: int|None = None
+    last_reported_after: datetime|None = None
+    last_reported_before: datetime|None = None
+    result_model: ClassVar = CompanyDetail
+    order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
+    default_ordering: ClassVar = [('company', 1), ('state', 1)]
+
 class NaicsFilter(FilterModel[NaicsDetail]):
     id: int|None = None
     code: int|None = None
@@ -221,7 +297,7 @@ class NaicsFilter(FilterModel[NaicsDetail]):
 # ----------------------------
 
 def migrate() -> None:
-    db.create_tables([Report, StateStat, Naics, NaicsReport])
+    db.create_tables([Report, Company, StateStat, Naics, NaicsReport])
 
 def load_naics() -> None:
     import requests
