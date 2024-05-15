@@ -3,16 +3,18 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from html import unescape as html_unescape
 from typing import Any
 
 from pydantic import HttpUrl
 
-from . import utils
+from . import utils, settings
 from .models import ValidationError
 from .ref.tz import zoneinfos
 
+NAMESPACE = uuid.uuid5(settings.NAMESPACE, 'Report')
 PAT_SPACES = re.compile(r'\s+')
 PAT_NONDIGITS = re.compile(r'[^\d]+')
 ASCII_TRANS = {
@@ -58,6 +60,7 @@ class Translator:
                 if value is not None and value != '':
                     entry[field] = value
         self.finish(entry, row)
+        entry['id'] = self.entry_uuid(entry, row)
         return entry
 
     def value(self, field: str, value: str) -> Any:
@@ -144,11 +147,17 @@ class Translator:
         it = map(self.parse_date, PAT_SPACES.split(value))
         return list(filter(None, it))
 
+    def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
+        src = entry.get('report_id') or json.dumps(list(row.values()))
+        return uuid.uuid5(self.namespace, src)
+
     def __init_subclass__(cls, state: str|None = None) -> None:
         cls.rewrites = Translator.rewrites | cls.rewrites
         if state:
-            cls.tz = zoneinfos[state.upper()]
-            translators[state.upper()] = cls
+            state = state.upper()
+            cls.tz = zoneinfos[state]
+            cls.namespace = uuid.uuid5(NAMESPACE, state)
+            translators[state] = cls
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
 REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')
@@ -1045,78 +1054,3 @@ class ReviewTable:
         yield self.state
         yield self.translator.entry(row).get(self.field)
         yield from map(row.get, self.columns)
-
-class Command(utils.BaseCommand):
-    """
-    Print values & translations for given field/header.
-    """
-
-    @classmethod
-    def add_arguments(cls, parser):
-        parser.add_argument(
-            'field',
-            help='The field name')
-        parser.add_argument(
-            'states',
-            nargs='*',
-            metavar='states',
-            choices=translators)
-        parser.add_argument(
-            '--empty', '-e',
-            action='store_true',
-            help='Include empty values')
-        parser.add_argument(
-            '--sort', '-o',
-            action='store_true',
-            help='Sort')
-        parser.add_argument(
-            '--reverse', '-r',
-            action='store_true',
-            help='Reverse')
-        parser.add_argument(
-            '--limit', '-l',
-            type=int,
-            default=None,
-            help='Limit')
-
-    def setup(self, opts):
-        self.states = list(opts.states or translators)
-        if self.opts.field == 'entries':
-            if self.opts.limit is None:
-                self.opts.limit = 10
-        if self.opts.limit and self.opts.limit < 0 :
-            self.opts.limit = None
-
-    def run(self):
-        if self.opts.field == 'entries':
-            self.run_entries()
-        else:
-            self.run_tables()
-
-    def run_tables(self):
-        import tabulate
-        for state in self.states:
-            table = ReviewTable(state, self.opts.field, self.opts.empty)
-            it = table.rows(limit=self.opts.limit)
-            if self.opts.sort:
-                it = sorted(it, key=tuple, reverse=self.opts.reverse)
-            print(tabulate.tabulate(it, table.headers()))
-
-    def run_entries(self):
-        from .scrapers import scrapers
-        for state in self.states:
-            scraper = scrapers[state]()
-            translator = translators[state]()
-            with scraper.extract() as it:
-                if self.opts.reverse:
-                    it = reversed(list(it))
-                it = [
-                    dict(state=state) | translator.entry(row) | dict(row=row)
-                    for row in itertools.islice(it, self.opts.limit)]
-            print(json.dumps(it, indent=2, default=utils.json_default))
-
-if __name__ == '__main__':
-    try:
-        Command.main()
-    except BrokenPipeError:
-        pass

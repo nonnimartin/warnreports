@@ -9,7 +9,6 @@ from typing import (Any, AsyncIterable, ClassVar, Generic, Iterable, Sequence,
 from fastapi import HTTPException, status
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorCursor, AsyncIOMotorDatabase)
-from pymongo.operations import IndexModel
 
 from . import settings, utils
 from .models import *
@@ -172,44 +171,6 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
         if self.employees_gt is not None:
             yield {'employees': {'$gt': self.employees_gt}}
 
-class SqlReportsFilter(ReportsFilter, SqlSearch[ReportData]):
-    sql_model_class: ClassVar = Report
-    order_fieldmap: ClassVar = {
-        'reported': Report.reported,
-        'starting': Report.starting,
-        'employees': Report.employees,
-        'state': Report.state,
-        'company': Report.company,
-        'action': Report.action,
-    }
-
-    def get_filters(self):
-        if self.id:
-            yield Report.id == self.id
-        if self.state:
-            yield Report.state == self.state
-        if self.company:
-            yield Report.company.ilike(self.wc_contains(self.company))
-        if self.action:
-            yield Report.action.ilike(self.wc_contains(self.action))
-        if self.location:
-            yield Report.location.ilike(self.wc_contains(self.location))
-        if self.text:
-            wc = self.wc_contains(self.text)
-            yield Report.company.ilike(wc) | Report.location.ilike(wc)
-        if self.reported_before:
-            yield Report.reported < self.reported_before
-        if self.reported_after:
-            yield Report.reported > self.reported_after
-        if self.starting_before:
-            yield Report.starting < self.starting_before
-        if self.starting_after:
-            yield Report.starting > self.starting_after
-        if self.employees_lt is not None:
-            yield Report.employees < self.employees_lt
-        if self.employees_gt is not None:
-            yield Report.employees > self.employees_gt
-
 class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
     sql_model_class: ClassVar = Report
     sql_group_by: ClassVar = [Report.state]
@@ -217,10 +178,13 @@ class SqlStatesFilter(StatesFilter, SqlSearch[StateDetail]):
         'reports_count': orm.fn.Count(Report.id).alias('reports_count'),
         'last_reported': orm.fn.Max(Report.reported).alias('last_reported'),
     }
-    order_fieldmap: ClassVar = SqlReportsFilter.order_fieldmap
+    order_fieldmap: ClassVar = {
+        'state': Report.state,
+    }
 
     def get_filters(self):
-        yield from SqlReportsFilter(**self.model_dump()).get_filters()
+        if self.state:
+            yield Report.state == self.state
         if self.reports_count_lt:
             alias = self.alias_fieldmap['reports_count']
             yield alias < self.reports_count_lt
@@ -274,12 +238,9 @@ class NotFoundError(Exception):
     pass
 
 filters: dict[type[DataModel], type[BaseSearch]] = {
-    ReportData: SqlReportsFilter,
+    ReportData: MongoReportsFilter,
     StateDetail: SqlStatesFilter,
     NaicsDetail: SqlNaicsFilter}
-
-if settings.SEARCH_BACKEND == 'mongo':
-    filters[ReportData] = MongoReportsFilter
 
 async def search(
     model: type[DM],
@@ -305,17 +266,8 @@ mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='stan
 mongo = mongo_client.active
 
 async def mongo_init(mongo: AsyncIOMotorDatabase = mongo) -> None:
-    indexes = [
-        IndexModel({'company': 'text', 'location': 'text'}),
-        IndexModel({'reported': 1}),
-        IndexModel({'reported': -1}),
-        IndexModel({'employees': 1}),
-        IndexModel({'employees': -1}),
-        IndexModel({'naics.code': 1}),
-        IndexModel({'naics.id': 1}),
-        IndexModel({'state': 'hashed'}),
-    ]
-    await mongo.reports.create_indexes(indexes)
+    from .backends.etl import MongoIndex
+    await mongo.reports.create_indexes(MongoIndex.indexes)
 
 async def mongo_clean(mongo: AsyncIOMotorDatabase = mongo) -> None:
     await mongo.reports.drop()

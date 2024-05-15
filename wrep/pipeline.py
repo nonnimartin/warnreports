@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from itertools import batched
 from typing import Any, Iterable
 
-from . import search, settings, utils
+
+from . import utils
 from .backends.etl import *
 from .models import *
 from .models import db
 from .scrapers import scrapers
+from .search import mongo
 from .translators import translators
 
 logger = utils.get_logger('pipeline')
@@ -53,11 +54,10 @@ class Pipeline:
         self.state = state.upper()
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
-        self.namespace = uuid.uuid5(Report.NAMESPACE, self.state)
-        self.is_mongo = settings.MONGODB_ENABLED
-        self.mongo = search.mongo if self.is_mongo else None
-        self.extraction_backend = self._extraction_backend()
-        self.translation_backend = self._translation_backend()
+        self.backends: dict[Stage, StageBackend] = {
+            Stage.Extract: MongoExtraction(self.state, mongo.extractions),
+            Stage.Translate: MongoTranslation(self.state, mongo.translations),
+            Stage.Index: MongoIndex(self.state, mongo.reports)}
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -69,17 +69,12 @@ class Pipeline:
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'{self.state}:{stage}:clean')
-        if stage is stage.Scrape:
+        if stage in self.backends:
+            await self.backends[stage].clean()
+        elif stage is stage.Scrape:
             await self.scraper.clean()
-        elif stage is stage.Extract:
-            await self.extraction_backend.clean()
-        elif stage is stage.Translate:
-            await self.translation_backend.clean()
         elif stage is stage.Load:
             Report.delete().where(Report.state == self.state).execute()
-        elif stage is stage.Index:
-            if self.is_mongo:
-                await self.mongo.reports.delete_many(dict(state=self.state))
 
     async def scrape(self, clean: bool = False) -> dict:
         prev = await self.scraper.stat()
@@ -92,33 +87,33 @@ class Pipeline:
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
-        prev = await self.extraction_backend.stat()
+        backend: ExtractionBackend = self.backends[stage]
+        prev = await backend.stat()
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
-        count = await self.extraction_backend.run()
-        cur = await self.extraction_backend.stat()
+        with self.scraper.extract() as source:
+            count = await backend.update(source)
+        cur = await backend.stat()
         nochange = cur == prev if cur else None
         return dict(count=count, prev=prev, cur=cur, nochange=nochange)
 
     async def translate(self, clean: bool = False) -> dict:
-        prev = await self.translation_backend.stat()
+        stage = Stage.Translate
+        backend: TranslationBackend = self.backends[stage]
+        source = self.backends[Stage.Extract]
+        prev = await backend.stat()
         if clean:
             await self.clean(Stage.Translate)
-        async with self.translation_backend.runctx() as (reader, writer):
-            count = 0
-            async for row in reader:
-                count += 1
-                entry = self.translator.entry(row)
-                entry.update(id=self.entry_uuid(entry, row), state=self.state, row=row)
-                await writer.write(entry)
-        cur = await self.translation_backend.stat()
+        async with source.reader() as reader:
+            count = await backend.run(self.translator, reader)
+        cur = await backend.stat()
         nochange = cur == prev if cur else None
         return dict(count=count, prev=prev, cur=cur, nochange=nochange)
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
-        async with self.translation_backend.reader() as reader:
+        async with self.backends[Stage.Translate].reader() as reader:
             with db.atomic():
                 if clean:
                     await self.clean(Stage.Load)
@@ -129,27 +124,15 @@ class Pipeline:
         return dict(count=count, counts=counts, nochange=nochange)
 
     async def index(self, clean: bool = False) -> dict:
-        if not self.is_mongo:
-            logger.warning('mongo not enabled, nothing to do.')
-            return dict(skip=True)
+        stage = Stage.Index
         if clean:
-            await self.clean(Stage.Index)
-        counts = dict.fromkeys(map(str, SaveType), 0)
-        q = Report.select_for_reduce()
-        q = q.where(Report.state == self.state)
-        docs = map(ReportData.as_doc, ReportData.map_reduce(q))
-        it = utils.CountingIter(docs)
-        for doc in it:
-            filt = dict(_id=doc['_id'])
-            res = await self.mongo.reports.replace_one(filt, doc, True)
-            if res.upserted_id:
-                counts[SaveType.Create] += 1
-            elif res.modified_count:
-                counts[SaveType.Update] += 1
-            else:
-                counts[SaveType.Nochange] += 1
-        count = sum(counts.values())
-        nochange = count == counts[SaveType.Nochange]
+            await self.clean(stage)
+        backend: IndexBackend = self.backends[stage]
+        q = Report.select_for_reduce().where(Report.state == self.state)
+        reports = ReportData.map_reduce(q)
+        count, created, updated = await backend.update(reports)
+        nochange = created + updated == 0
+        counts = dict(created=created, updated=updated)
         return dict(count=count, counts=counts, nochange=nochange)
 
     def save(self, entry: dict) -> SaveType:
@@ -167,6 +150,7 @@ class Pipeline:
             save = save.Create
         naics = set(record.pop('naics', ()))
         industry = record.pop('industry', None)
+        self.truncate_fields(record)
         for field, value in record.items():
             if save is save.Create or getattr(report, field) != value:
                 setattr(report, field, value)
@@ -178,6 +162,16 @@ class Pipeline:
         if save is save.Nochange:
             save = naics_save
         return save
+
+    def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
+        trims = {}
+        for field in ('action', 'location', 'company'):
+            value = record.get(field)
+            limit = getattr(Report, field).max_length
+            if value and len(value) > limit:
+                trims[field] = len(value) - limit
+                record[field] = value[:limit]
+        return trims
 
     def save_naics(self, report: Report, codes: set[int], industry: str|None) -> SaveType:
         save = SaveType.Nochange
@@ -204,33 +198,11 @@ class Pipeline:
             NaicsReport.insert_many(add).execute()
         return save
 
-    def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
-        src = entry.get('report_id') or json.dumps(list(row.values()))
-        return uuid.uuid5(self.namespace, src)
-
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:
             if isinstance(value, str):
                 value = self.json_types[field](value)
         return value
-
-    def _extraction_backend(self) -> ExtractionBackend:
-        if self.is_mongo:
-            cls = MongoExtraction
-            dest = self.mongo.extractions
-        else:
-            cls = FileExtraction
-            dest = settings.BUILD_DIR/'extract'/f'{self.state.lower()}.log'
-        return cls(self.scraper, dest)
-
-    def _translation_backend(self) -> TranslationBackend:
-        if self.is_mongo:
-            cls = MongoTranslation
-            dest = self.mongo.translations
-        else:
-            cls = FileTranslation
-            dest = settings.BUILD_DIR/'translate'/f'{self.state.lower()}.log'
-        return cls(self.extraction_backend, dest)
 
 class PipelineRunner:
 

@@ -13,7 +13,6 @@ python_dotenv
 python-dateutil
 requests
 sentry-sdk[fastapi]
-tabulate
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper

@@ -23,7 +23,11 @@ __all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'orm']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
-class Report(orm.Model):
+class OrmModel(orm.Model):
+    class Meta:
+        database = db
+
+class Report(OrmModel):
     NAMESPACE = uuid5(settings.NAMESPACE, 'Report')
     id = orm.UUIDField(primary_key=True)
     company = orm.CharField(max_length=512, index=True)
@@ -36,9 +40,6 @@ class Report(orm.Model):
     action = orm.CharField(max_length=64, null=True, index=True)
     url = orm.CharField(max_length=2083, null=True)
 
-    class Meta:
-        database = db
-
     @classmethod
     def select_for_reduce(cls) -> orm.ModelSelect[Self]:
         q = cls.select(NaicsReport, Naics, cls)
@@ -47,28 +48,21 @@ class Report(orm.Model):
         q = q.order_by(cls.id, Naics.code)
         return q
 
-class StateStat(orm.Model):
+class StateStat(OrmModel):
     id = orm.CharField(max_length=2, primary_key=True)
     last_reported = orm.DateTimeField(null=True, index=True)
     reports_count = orm.IntegerField(index=True, default=0)
 
-    class Meta:
-        database = db
-
-class Naics(orm.Model):
+class Naics(OrmModel):
     id = orm.IntegerField(primary_key=True)
     code = orm.CharField(max_length=32, index=True)
     title = orm.CharField(max_length=255, index=True)
 
-    class Meta:
-        database = db
-
-class NaicsReport(orm.Model):
+class NaicsReport(OrmModel):
     naics = orm.ForeignKeyField(Naics, on_delete='CASCADE')
     report = orm.ForeignKeyField(Report, on_delete='CASCADE')
 
     class Meta:
-        database = db
         indexes = [(('naics', 'report'), True)]
 
 # ----------------------------
@@ -242,10 +236,7 @@ def load_naics() -> None:
     with db.atomic():
         Naics.insert_many(records).on_conflict('IGNORE').execute()
 
-actions = dict(
-    migrate=migrate,
-    naics=load_naics,
-    load_naics=load_naics)
+actions = dict(migrate=migrate, naics=load_naics)
 
 class Command(utils.BaseCommand):
 
