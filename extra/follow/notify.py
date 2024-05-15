@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from . import utils
-from .models import Follow, Report
+from wrep import utils
+from wrep.models import *
+
+from .models import *
 
 logger = utils.get_logger('notify')
 template = 'email/notify.jinja'
