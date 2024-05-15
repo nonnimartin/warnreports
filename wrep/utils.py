@@ -128,7 +128,7 @@ from .backends.email import instances as email_backends
 
 def send_email(recipient: str, subject: str, body: str) -> bool:
     backend = email_backends[settings.EMAIL_BACKEND]
-    sender = settings.EMAIL_ACCOUNT
+    sender = settings.EMAIL_FROM_ADDRESS
     logger.info(f'Sending email {recipient=} {backend=} {subject=}')
     success = backend.send(sender, recipient, subject, body)
     if success:
