@@ -1,13 +1,12 @@
 from __future__ import annotations
-
+from wrep import utils
+from wrep.models import *
+from .models import *
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-
-from .. import utils
-from ..models import *
 
 router = APIRouter()
 templates = Jinja2Templates(env=utils.jinja_env())
@@ -49,4 +48,3 @@ def auth(email: EmailStr, token: Token) -> Follow:
         return Follow.get(email=email, token=token)
     except Follow.DoesNotExist:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
-

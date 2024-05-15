@@ -20,7 +20,6 @@ templates = Jinja2Templates(env=utils.jinja_env())
 
 app.include_router(prefix='/api/v0', router=api.router)
 app.include_router(prefix='/feed', router=feed.router)
-app.include_router(prefix='/follow', router=follow.router, include_in_schema=False)
 app.mount('/static', static, name='static')
 
 @app.get('/', include_in_schema=False)
