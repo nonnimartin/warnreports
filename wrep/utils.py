@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import enum
-import hashlib
 import logging
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
-from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
                     Iterator, TypeVar)
 from uuid import UUID
@@ -32,37 +30,6 @@ def now(**kw) -> datetime:
     if kw:
         dt += timedelta(**kw)
     return dt
-
-def hashfile(path: Path, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
-    return hashobjects((path,), alg=alg, missing_ok=missing_ok)
-
-def hashfiles(paths: Iterable[Path], alg: str = 'sha1', missing_ok: bool = False) -> str|None:
-    return hashobjects(paths, alg=alg, missing_ok=missing_ok)
-
-def hashstrings(strings: Iterable[str], alg: str = 'sha1') -> str|None:
-    return hashobjects(strings, alg=alg)
-
-def hashobjects(objs, alg: str = 'sha1', missing_ok: bool = False) -> str|None:
-    h = hashlib.new(alg)
-    found = False
-    for obj in objs:
-        if isinstance(obj, Path):
-            try:
-                h.update(obj.read_bytes())
-            except FileNotFoundError:
-                if not missing_ok:
-                    raise
-            else:
-                found = True
-        elif isinstance(obj, str):
-            if obj:
-                h.update(obj.encode())
-                found = True
-        elif obj:
-            h.update(obj)
-            found = True
-    if found:
-        return h.hexdigest()
 
 def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):

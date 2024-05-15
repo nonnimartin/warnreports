@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import hashlib
 import json
 import re
 from contextlib import contextmanager
@@ -16,6 +17,7 @@ import pdfplumber
 import requests
 from bs4 import BeautifulSoup as Soup
 from bs4.element import PageElement, ResultSet, Tag
+from typing_extensions import Buffer
 
 import warn.cache
 import warn.runner
@@ -108,15 +110,11 @@ class AK(Scraper, state='AK'):
         self.cache.delete('latest.html')
 
     async def stat(self):
-        try:
+        objs = []
+        if self.cache.exists('latest.html'):
             page = bs(self.cache.read('latest.html'))
-        except FileNotFoundError:
-            strings = []
-        else:
-            strings = [page.find('table').text]
-        return dict(
-            hash=utils.hashstrings(strings),
-            size=sum(map(len, strings)))
+            objs.append(page.find('table').text)
+        return hashstat(objs)
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
@@ -168,9 +166,7 @@ class CA(Scraper, state='CA'):
     async def stat(self):
         files = self.list_record_files()
         files += [self.cache.topath('index.json')]
-        return dict(
-            hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files if file.exists()))
+        return hashstat(files)
 
     @contextmanager
     def extract(self):
@@ -216,10 +212,8 @@ class CO(Scraper, state='CO'):
         self.cache.delete('normalized.csv')
 
     async def stat(self):
-        file = self.cache.topath('normalized.csv')
-        return dict(
-            hash=utils.hashfile(file, missing_ok=True),
-            size=file.stat().st_size if file.exists() else 0)
+        files = [self.cache.topath('normalized.csv')]
+        return hashstat(files)
 
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
@@ -272,9 +266,7 @@ class DE(Scraper, state='DE'):
     async def stat(self):
         files = [self.cache.topath('index.json')]
         files += self.list_record_files()
-        return dict(
-            hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files if file.exists()))
+        return hashstat(files)
 
     @contextmanager
     def extract(self):
@@ -378,9 +370,7 @@ class GA(Scraper, state='GA'):
     async def stat(self):
         files = [self.cache.topath('index.json')]
         files += self.list_record_files()
-        return dict(
-            hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files if file.exists()))
+        return hashstat(files)
 
     @contextmanager
     def extract(self):
@@ -481,15 +471,11 @@ class IN(Scraper, state='IN'):
         return cell.text.strip()
 
     async def stat(self):
-        try:
+        it = ()
+        if self.cache.exists('latest.html'):
             page = bs(self.cache.read('latest.html'))
-        except FileNotFoundError:
-            strings = []
-        else:
-            strings = [table.text for table in page.find_all('table')]
-        return dict(
-            hash=utils.hashstrings(strings),
-            size=sum(map(len, strings)))
+            it = (table.text for table in page.find_all('table'))
+        return hashstat(it)
 
 class MO(Scraper, state='MO'):
     start_year = 2019
@@ -523,10 +509,8 @@ class MO(Scraper, state='MO'):
     async def stat(self):
         it = self.list_page_files()
         it = (bs(file.read_bytes()) for file in it)
-        strings = [page.find('table').text for page in it]
-        return dict(
-            hash=utils.hashstrings(strings),
-            size=sum(map(len, strings)))
+        it = (page.find('table').text for page in it)
+        return hashstat(it)
 
     @contextmanager
     def extract(self):
@@ -577,13 +561,10 @@ class NY(Scraper, state='NY'):
 
     async def stat(self):
         objs = list(map(self.cache.topath, self.past_urls))
-        size = sum(obj.stat().st_size for obj in objs if obj.exists())
         if self.cache.exists('latest.html'):
             table = self.find_table(bs(self.cache.read('latest.html')))
-            text = table.text
-            objs.append(text)
-            size += len(text)
-        return dict(hash=utils.hashobjects(objs, missing_ok=True), size=size)
+            objs.append(table.text)
+        return hashstat(objs)
 
     @contextmanager
     def extract(self):
@@ -663,9 +644,7 @@ class SC(Scraper, state='SC'):
     async def stat(self):
         files = [self.cache.topath('index.json')]
         files += self.list_record_files()
-        return dict(
-            hash=utils.hashfiles(files, missing_ok=True),
-            size=sum(file.stat().st_size for file in files if file.exists()))
+        return hashstat(files)
 
     @contextmanager
     def extract(self):
@@ -852,14 +831,33 @@ class Runner(warn.Runner):
         super().scrape(self.state.lower())
 
     def stat(self) -> dict[str, Any]:
-        file = self.file
-        return dict(
-            hash=utils.hashfile(file, missing_ok=True),
-            size=file.stat().st_size if file.exists() else 0)
+        return hashstat([self.file], missing_ok=True)
 
 def bs(markup, features='html.parser', **kw):
     return Soup(markup, features, **kw)
-    
+
+def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
+    h = hashlib.sha1()
+    size = 0
+    for obj in it:
+        if isinstance(obj, Path):
+            try:
+                with obj.open() as f:
+                    h.update(f)
+                size += obj.stat().st_size
+            except FileNotFoundError:
+                pass
+        elif isinstance(obj, str):
+            if obj:
+                h.update(obj.encode())
+                size += len(obj)
+        elif obj:
+            h.update(obj)
+            size += len(obj)
+    hash = h.hexdigest() if size else None
+    return dict(hash=hash, size=size)
+
+
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
         pass
