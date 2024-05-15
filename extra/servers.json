@@ -1,0 +1,12 @@
+{
+    "Servers": {
+        "1": {
+            "Group": "Servers",
+            "Name": "wrep",
+            "Host": "postgres",
+            "Port": 5432,
+            "Username": "wrep",
+            "MaintenanceDB": "postgres"
+        }
+    }
+}

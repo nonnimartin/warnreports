@@ -8,6 +8,7 @@ motor
 openpyxl
 peewee
 pdfplumber
+psycopg2-binary
 pydantic[email]
 python_dotenv
 python-dateutil

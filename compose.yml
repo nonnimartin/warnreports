@@ -1,7 +1,7 @@
 services:
 
   mongo:
-    image: mongo
+    image: docker.io/mongo
     volumes:
       - mongo:/data/db
       - mongoconfig:/data/configdb
@@ -9,14 +9,16 @@ services:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: wrep
 
-  mongo-express:
-    image: mongo-express
-    ports: [127.0.0.1:8081:8081]
+  postgres:
+    image: docker.io/postgres:alpine
+    tmpfs: /tmp
+    volumes:
+      - postgres:/var/lib/postgresql/data
     environment:
-      ME_CONFIG_MONGODB_ADMINUSERNAME: root
-      ME_CONFIG_MONGODB_ADMINPASSWORD: wrep
-      ME_CONFIG_MONGODB_URL: mongodb://root:wrep@mongo:27017/
-      ME_CONFIG_BASICAUTH: false
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: wrep
+      POSTGRES_USER: wrep
+    command: postgres -F -c logging_collector=off -c listen_addresses='*'
 
   app:
     image: localhost/warn-reporter:dev
@@ -29,8 +31,37 @@ services:
     environment:
       UVICORN_RELOAD: 'true'
       MONGODB_URL: mongodb://root:wrep@mongo:27017/
-    depends_on: [mongo]
+      DB_URL: ${DB_URL:-postgresql://wrep@postgres/wrep}
+    command: ./scripts/wait-for-it.sh -h postgres -p 5432 -t 0 -- wrep main
+    depends_on:
+      - mongo
+      - postgres
+
+  mongo-express:
+    image: docker.io/mongo-express
+    ports: [127.0.0.1:8081:8081]
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: wrep
+      ME_CONFIG_MONGODB_URL: mongodb://root:wrep@mongo:27017/
+      ME_CONFIG_BASICAUTH: false
+
+  pgadmin:
+    image: docker.io/dpage/pgadmin4
+    ports: [127.0.0.1:8082:80]
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+      - ./extra/servers.json:/pgadmin4/servers.json
+    environment:
+      PGADMIN_DEFAULT_EMAIL: pgadmin@localhost.example
+      PGADMIN_DEFAULT_PASSWORD: pgadmin
+      PGADMIN_DISABLE_POSTFIX: 1
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
 
 volumes:
   mongo:
   mongoconfig:
+  postgres:
+  pgadmin:
+

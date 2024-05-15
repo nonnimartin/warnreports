@@ -44,7 +44,7 @@ class Report(OrmModel):
         q = cls.select(NaicsReport, Naics, cls)
         q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
         q = q.join_from(NaicsReport, Naics, orm.JOIN['LEFT_OUTER'])
-        q = q.order_by(cls.id, Naics.code)
+        q = q.order_by(cls.id, Naics.id)
         return q
 
 class StateStat(OrmModel):
@@ -298,6 +298,8 @@ class NaicsFilter(FilterModel[NaicsDetail]):
 
 def migrate() -> None:
     db.create_tables([Report, Company, StateStat, Naics, NaicsReport])
+    if not Naics.select().count():
+        load_naics()
 
 def load_naics() -> None:
     import requests
