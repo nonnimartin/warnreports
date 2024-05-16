@@ -770,13 +770,27 @@ class NY(Translator, state='NY'):
         'Company': 'company',
         'notice_dated': 'reported',
         'Notice Date' : 'reported',
-        'City': 'location',
-        'date_posted': 'location',
+        'Date of Notice': 'reported',
         'Number Affected': 'employees',
+        'Total Number of Affected Workers': 'employees',
+        'Closure Start Date': 'starting',
+        'Layoff Date': 'starting',
+        'City': 'location',
+        'Region': 'location',
+        'date_posted': 'location',
+        'Address': 'location',
+        'Counties': 'location',
+        'Addresses': 'location',
         'Dislocation Type': 'action',
+        'Reason For Layoff': 'action',
         'notice_url': 'url',
         'NAISC': 'naics', # sic
-        'NAICS': 'naics' # in case it's fixed
+        'NAICS': 'naics', # in case it's fixed
+        'Industry Type': ['naics', 'industry'],
+        'NAICS Description': 'industry',
+        'Event Number': 'report_id',
+        'Event Numbers': 'report_id',
+        'Event #': 'report_id',
     }
     rewrites = dict(
         naics=[
@@ -784,6 +798,10 @@ class NY(Translator, state='NY'):
         ],
         url=[
             (_r(r'^(/.*)$'), r'https://dol.ny.gov\1')
+        ],
+        report_id=[
+            (_r(r' and '), ','),
+            (_r(r'^.*[^\d,-].*$'), ''),
         ]
     )
 

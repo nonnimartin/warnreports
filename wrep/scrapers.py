@@ -98,6 +98,24 @@ class Scraper:
             cls.state = state.upper()
             scrapers[cls.state] = cls
 
+def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
+    worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
+    it = ([cell.value for cell in row] for row in worksheet.rows)
+    headers = next(it)
+    for values in it:
+        row = {}
+        for k, v in zip(headers, values):
+            if not (k or v):
+                continue
+            if v is None:
+                v = ''
+            elif isinstance(v, datetime):
+                v = v.strftime(f'%Y-%m-%d')
+            else:
+                v = str(v)
+            row[k] = v
+        yield row
+
 class AK(Scraper, state='AK'):
     base_url = 'https://jobs.alaska.gov'
     index_url = '/RR/WARN_notices.htm'
@@ -428,7 +446,27 @@ class GA(Scraper, state='GA'):
         setUrlOnSearch=True,
         shortcode_atts=dict(id=77460))
 
+class IL(Scraper, state='IL'):
+    # Scrape time: ~20s
+    # Extract time: ~7s
+    source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export?search=&layoffTypes=&trade=0&dateReportedStart=Invalid%20Date&dateReportedEnd=Invalid%20Date&statuses=4&reasons=&eventCauses=&naicsCodes=1&naicIndustries=&naics=&unionsInvolved=0&geolocation=1&cities=&counties=&lwias=&includeAdditionalLwias=false&edrs=&lat=0&lng=0&distance=.5&memberType=1&users=&accessList=&bookmarked=false'
+
+    async def scrape(self):
+        await self.cache_download('export.xlsx', self.source_url)
+
+    async def stat(self):
+        return hashstat([self.cache.topath('export.xlsx')])
+
+    async def clean(self):
+        self.cache.delete('export.xlsx')
+
+    @contextmanager
+    def extract(self):
+        yield extract_xlsx(self.cache.topath('export.xlsx'))
+
 class IN(Scraper, state='IN'):
+    # Scrape time: < 2s
+    # Extract time: < 2s
     base_url = 'https://www.in.gov'
     index_url = '/dwd/warn-notices/current-warn-notices/'
 
@@ -437,6 +475,13 @@ class IN(Scraper, state='IN'):
 
     async def clean(self) -> None:
         self.cache.delete('latest.html')
+
+    async def stat(self):
+        if self.cache.exists('latest.html'):
+            it = bs(self.cache.read('latest.html')).find_all('table')
+        else:
+            it = ()
+        return hashstat(it)
 
     @contextmanager
     def extract(self):
@@ -470,12 +515,54 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
+class MD(Scraper, state='MD'):
+    # Scrape time: 3s
+    # Extract time: 2s
+    base_url = 'https://www.dllr.state.md.us/employment'
+    index_url = '/warn.shtml'
+
+    async def scrape(self):
+        page = bs(await self.cache_fetch('latest.html', self.index_url))
+        for a in page.find_all('a', {'class': 'sub'}):
+            href = a['href'].lstrip('/')
+            key = f'{href}.html'
+            url = f'/{href}'
+            year = int(href[4:8])
+            if not self.cache.exists(key) or year >= utils.now().year - 1:
+                await self.cache_download(key, url)
+
+    async def clean(self):
+        for file in self.list_page_files():
+            file.unlink()
+
     async def stat(self):
-        it = ()
-        if self.cache.exists('latest.html'):
-            page = bs(self.cache.read('latest.html'))
-            it = (table.text for table in page.find_all('table'))
-        return hashstat(it)
+        return hashstat(self.get_tables())
+
+    @contextmanager
+    def extract(self):
+        it = chain.from_iterable(map(self.read_table, self.get_tables()))
+        headers = next(it)
+        yield (dict(zip(headers, values)) for values in it)
+
+    def read_table(self, table: Soup) -> Iterator[list[str]]:
+        for tr in table.find_all('tr'):
+            values = list(self.read_tr(tr))
+            if any(values):
+                yield values
+
+    def read_tr(self, tr: Soup) -> Iterator[str]:
+        for td in tr.find_all('td'):
+            text = td.text.replace('\n', ' ')
+            yield re.sub(r'\s+', ' ', text).strip()
+
+    def get_tables(self) -> Iterator[Soup]:
+        for file in self.list_page_files():
+            yield bs(file.read_bytes(), 'html5lib').find('table')
+
+    def list_page_files(self) -> list[Path]:
+        it = self.cache.files('.', '*.html')
+        it = map(self.cache.topath, it)
+        return sorted(it, reverse=True)
 
 class MO(Scraper, state='MO'):
     start_year = 2019
@@ -549,12 +636,24 @@ class NY(Scraper, state='NY'):
         '2022.html': '/2022-warn-notices',
         '2021.html': '/warn-notices-2021',
         'ny_historical.xlsx': 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/NY/ny_historical.xlsx'}
+    pdf_keytrans = {
+        'L ayoff End Date': 'Layoff End Date',
+    }
 
     async def scrape(self) -> None:
         await self.cache_download('latest.html', self.index_url)
         for key, url in self.past_urls.items():
             if not self.cache.exists(key):
                 await self.cache_download(key, url)
+        for key in ('latest.html', *self.past_urls):
+            if not key.endswith('.html'):
+                continue
+            table = self.find_table(bs(self.cache.read(key)))
+            for a in table.select('tbody > tr > td:nth-of-type(1) > a'):
+                key, url = self.parse_record_key_url(a['href'])
+                if not self.cache.exists(key):
+                    await self.cache_download(key, url)
+                    await asyncio.sleep(1)
 
     async def clean(self):
         self.cache.delete('latest.html', *self.past_urls)
@@ -576,38 +675,45 @@ class NY(Scraper, state='NY'):
     def read_record_file(self, file: Path) -> Iterator[dict[str, str]]:
         return getattr(self, f'read_{file.name[-4:]}_file')(file)
 
-    def read_xlsx_file(self, file: Path) -> Iterator[dict[str, str]]:
-        worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
-        it = ([cell.value for cell in row] for row in worksheet.rows)
-        headers = next(it)
-        for values in it:
-            row = {}
-            for k, v in zip(headers, values):
-                if not (k or v):
-                    continue
-                if v is None:
-                    v = ''
-                elif isinstance(v, datetime):
-                    v = v.strftime(f'%Y-%m-%d')
-                else:
-                    v = str(v)
-                row[k] = v
-            yield row
+    read_xlsx_file = staticmethod(extract_xlsx)
 
     def read_html_file(self, file: Path) -> Iterator[dict[str, str]]:
         table = self.find_table(bs(file.read_bytes()))
         it = iter(table.find_all('tr'))
         next(it)
         for tr in it:
+            record = {}
             tds = tr.find_all('td')
-            yield dict(
-                company_name=tds[0].a.text,
-                notice_url=tds[0].a['href'],
+            a = tds[0].a
+            key, url = self.parse_record_key_url(a['href'])
+            if self.cache.exists(key):
+                record.update(self.read_record_pdf(self.cache.topath(key)))
+            record.update(
+                company_name=a.text,
+                notice_url=url,
                 date_posted=tds[1].text,
                 notice_dated=tds[2].text)
+            yield record
 
     def find_table(self, page: Soup) -> Soup:
          return page.find('div', {'class': 'landing-paragraphs'}).find('table')
+
+    def parse_record_key_url(self, href: str) -> tuple[str, str]:
+        url = self.absurl(href)
+        filename = Path(urlparse(url).path).name
+        key = f'records/{filename}.pdf'
+        return key, url
+
+    def read_record_pdf(self, file: Path) -> Iterator[tuple[str, str]]:
+        with pdfplumber.open(file, [1]) as pdf:
+            text = pdf.pages[0].extract_text()
+        for line in text.splitlines():
+            item = line.split(': ', 1)
+            if len(item) == 1:
+                continue
+            key, value = item
+            key = self.pdf_keytrans.get(key, key)
+            yield key, value
 
 class SC(Scraper, state='SC'):
     base_url = 'https://scworks.org'
@@ -843,17 +949,17 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
         if isinstance(obj, Path):
             try:
                 buf = obj.read_bytes()
-                h.update(buf)
-                size += len(buf)
             except FileNotFoundError:
-                pass
+                continue
         elif isinstance(obj, str):
-            if obj:
-                h.update(obj.encode())
-                size += len(obj)
-        elif obj:
-            h.update(obj)
-            size += len(obj)
+            buf = obj.encode()
+        elif isinstance(obj, PageElement):
+            buf = obj.text.encode()
+        else:
+            buf = obj
+        if buf:
+            h.update(buf)
+            size += len(buf)
     hash = h.hexdigest() if size else None
     return dict(hash=hash, size=size)
 
