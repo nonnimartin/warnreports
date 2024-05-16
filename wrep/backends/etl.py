@@ -17,16 +17,21 @@ from ..models import *
 from ..translators import Translator
 
 __all__ = [
-    'PipelineLogBackend',
     'ExtractionBackend',
-    'TranslationBackend',
+    'MongoExtraction',
+    'MongoPipelineLog',
+    'MongoSearchIndex',
+    'MongoTranslation',
+    'PipelineLogBackend',
     'SearchIndexBackend',
     'StageBackend',
+    'TranslationBackend',
 ]
 
 T = TypeVar('T')
 
 logger = utils.get_logger('backends.etl')
+mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
 
 
 class PipelineLogBackend:
@@ -73,18 +78,10 @@ class SearchIndexBackend(StageBackend):
     @abstractmethod
     async def update_naics(self, source: Iterable[NaicsDetail]) -> tuple[int, int, int]: ...
 
-__all__ += [
-    'MongoPipelineLog',
-    'MongoExtraction',
-    'MongoTranslation',
-    'MongoSearchIndex',
-]
-
-mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
-
 
 class MongoPipelineLog(PipelineLogBackend):
-    mongo = mongo_client.active
+
+    mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
 
     async def save(self, runs):
         coll = self.mongo.pipelines
@@ -99,7 +96,7 @@ class MongoPipelineLog(PipelineLogBackend):
     ]
 
 class MongoBackend(StageBackend):
-    mongo = mongo_client.active
+    mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
     collname: str|None = None
     reader_sort = []
     clean_keys = []

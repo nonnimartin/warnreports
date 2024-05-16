@@ -51,7 +51,6 @@ class BaseSearch(FilterModel[DM], Generic[QS, DM]):
         return [obj async for obj in self.iter_queryset(qs)]
 
 class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
-
     collection_name: ClassVar[str]
 
     def get_queryset(self):
@@ -192,7 +191,7 @@ async def retrieve404(model: type[DM], **params) -> DM:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
-mongo = mongo_client.active
+mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
 
 search_indexes = dict(
     reports=[
