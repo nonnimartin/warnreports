@@ -7,13 +7,11 @@ from datetime import datetime
 from itertools import batched
 from typing import Any, Iterable
 
-
 from . import utils
 from .backends.etl import *
 from .models import *
 from .models import db
 from .scrapers import scrapers
-from .search import mongo
 from .translators import translators
 
 logger = utils.get_logger('pipeline')
@@ -55,11 +53,9 @@ class Pipeline:
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
         self.backends: dict[Stage, StageBackend] = {
-            stage: cls(self.state, mongo)
-            for stage, cls in dict.items({
-                Stage.Extract: MongoExtraction,
-                Stage.Translate: MongoTranslation,
-                Stage.Index: MongoSearchIndex})}
+            Stage.Extract: MongoExtraction(self.state),
+            Stage.Translate: MongoTranslation(self.state),
+            Stage.Index: MongoSearchIndex(self.state)}
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -140,9 +136,8 @@ class Pipeline:
         count, created, updated = await backend.update_reports(reports)
         nochange = created + updated == 0
         counts = dict(created=created, updated=updated)
-        q = StateStat.select().where(StateStat.id == self.state)
-        detail = StateDetail.model_validate(q.get())
-        await backend.update_states(detail)
+        detail = StateDetail.model_validate(StateStat.get_by_id(self.state))
+        await backend.update_states([detail])
         q = Company.select_for_reduce().where(Report.state == self.state)
         await backend.update_companies(CompanyDetail.map_reduce(q))
         await backend.update_naics(NaicsDetail.map_reduce())
@@ -290,6 +285,7 @@ class PipelineRunner:
             self.incremental and
             (runs := self.runs[state]) and
             runs[-1].get('nochange'))
+
 
 class Command(utils.BaseCommand):
     'Run a pipeline'

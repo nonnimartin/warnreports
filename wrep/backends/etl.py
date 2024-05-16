@@ -5,15 +5,15 @@ import hashlib
 import json
 from abc import abstractmethod
 from contextlib import asynccontextmanager
-from typing import (Any, AsyncGenerator, AsyncIterable, Generic, Iterable,
+from typing import (Any, AsyncGenerator, AsyncIterable, Callable, Iterable,
                     TypeVar)
 
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.operations import IndexModel
 
 from wrep.models import ReportData, StateDetail
 
-from .. import search, utils
+from .. import search, settings, utils
 from ..models import *
 from ..translators import Translator
 
@@ -30,7 +30,8 @@ logger = utils.get_logger('backends.etl')
 
 class StageBackend:
 
-    state: StateCode
+    def __init__(self, state: StateCode):
+        self.state = state.upper()
 
     @abstractmethod
     async def clean(self) -> None: ...
@@ -42,35 +43,23 @@ class StageBackend:
     @asynccontextmanager
     async def reader(self) -> AsyncGenerator[AsyncIterable[dict[str, Any]]]: ...
 
-class ExtractionBackend(StageBackend, Generic[T]):
-
-    def __init__(self, state: StateCode, dest: T):
-        self.state = state.upper()
-        self.dest = dest
+class ExtractionBackend(StageBackend):
 
     @abstractmethod
     async def update(self, source: Iterable[dict[str, str]]) -> int: ...
 
-class TranslationBackend(StageBackend, Generic[T]):
-
-    def __init__(self, state: StateCode, dest: T):
-        self.state = state.upper()
-        self.dest = dest
+class TranslationBackend(StageBackend):
     
     @abstractmethod
     async def run(self, translator: Translator, source: AsyncIterable[dict[str, str]]) -> int: ...
 
-class IndexBackend(StageBackend, Generic[T]):
-
-    def __init__(self, state: StateCode, dest: T):
-        self.state = state.upper()
-        self.dest = dest
+class IndexBackend(StageBackend):
 
     @abstractmethod
     async def update_reports(self, source: Iterable[ReportData]) -> tuple[int, int, int]: ...
 
     @abstractmethod
-    async def update_states(self, detail: StateDetail) -> None: ...
+    async def update_states(self, detail: Iterable[StateDetail]) -> tuple[int, int, int]: ...
 
     @abstractmethod
     async def update_companies(self, source: Iterable[CompanyDetail]) -> tuple[int, int, int]: ...
@@ -84,50 +73,42 @@ __all__ += [
     'MongoSearchIndex',
 ]
 
-class MongoMixin(StageBackend):
+mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
 
-    dest: AsyncIOMotorDatabase
+
+class MongoBackend(StageBackend):
+    mongo = mongo_client.active
+    collname: str|None = None
     reader_sort = []
     clean_keys = []
     stat_sort = []
-    collname: str
 
     def getcoll(self, name: str|None = None):
-        return self.dest.get_collection(name or self.collname)
+        return self.mongo.get_collection(name or self.collname)
     
-    async def clean(self) -> None:
-        await self.getcoll().delete_many(dict(state=self.state))
+    async def clean(self, *, name: str|None = None) -> None:
+        await self.getcoll(name).delete_many(dict(state=self.state))
 
     @asynccontextmanager
-    async def reader(self, *, order=None):
-        it = self.getcoll().find(dict(state=self.state))
+    async def reader(self, *, name: str|None = None, order: Any|None = None):
+        it = self.getcoll(name).find(dict(state=self.state))
         if order is None:
             order = self.reader_sort
         if order:
             it = it.sort(order)
         yield (self.clean_doc(doc) async for doc in it)
 
-    async def stat(self):
-        h = hashlib.sha1()
-        order = self.stat_sort or self.reader_sort
-        size, count = 0, 0
-        async with self.reader(order=order) as reader:
-            async for doc in reader:
-                buf = json.dumps(doc, default=str).encode()
-                h.update(buf)
-                size += len(buf)
-                count += 1
-        return dict(
-            hash=h.hexdigest() if count else None,
-            size=size,
-            count=count)
+    async def stat(self, *, name: str|None = None, order: Any|None = None):
+        order = order or self.stat_sort or self.reader_sort
+        async with self.reader(name=name, order=order) as reader:
+            return await collstat(reader)
 
     def clean_doc(self, doc: dict) -> dict:
         for key in self.clean_keys:
             doc.pop(key, None)
         return doc
 
-class MongoExtraction(MongoMixin, ExtractionBackend[AsyncIOMotorDatabase]):
+class MongoExtraction(MongoBackend, ExtractionBackend):
     collname = 'extractions'
     reader_sort = ['_i']
     clean_keys = ['_id', '_i', 'state']
@@ -148,7 +129,7 @@ class MongoExtraction(MongoMixin, ExtractionBackend[AsyncIOMotorDatabase]):
         IndexModel({'_i': 1}),
     ]
 
-class MongoTranslation(MongoMixin, TranslationBackend[AsyncIOMotorDatabase]):
+class MongoTranslation(MongoBackend, TranslationBackend):
     collname = 'translations'
     stat_sort = ['id']
     clean_keys = ['_id', 'row']
@@ -170,61 +151,47 @@ class MongoTranslation(MongoMixin, TranslationBackend[AsyncIOMotorDatabase]):
         IndexModel({'state': 'hashed'}),
     ]
 
-class MongoSearchIndex(MongoMixin, IndexBackend[AsyncIOMotorDatabase]):
-    stat_sort = ['id']
+class MongoSearchIndex(MongoBackend, IndexBackend):
+    mongo = search.mongo
     collname = 'reports'
+    stat_sort = ['id']
 
     async def clean(self) -> None:
-        filt = dict(state=self.state)
         for name in search.search_indexes:
-            coll = self.getcoll(name)
             if name == 'naics':
-                coro = coll.drop()
+                coro = self.getcoll(name).drop()
             else:
-                coro = coll.delete_many(filt)
+                coro = super().clean(name=name)
             await coro
 
     async def update_reports(self, source):
-        coll = self.getcoll('reports')
-        await coll.create_indexes(search.search_indexes['reports'])
-        count, created, updated = 0, 0, 0
-        for report in source:
-            filt = dict(_id=report.id)
-            res = await coll.replace_one(filt, report.as_doc(), True)
-            if res.upserted_id:
-                created += 1
-            elif res.modified_count:
-                updated += 1
-            count += 1
-        return count, created, updated
+        def get_filter(inst: ReportData):
+            return dict(_id=inst.id)
+        return await self._update_collection('reports', source, get_filter)
 
-    async def update_states(self, detail: StateDetail) -> None:
-        coll = self.getcoll('states')
-        await coll.create_indexes(search.search_indexes['states'])
-        filt = dict(state=self.state)
-        await coll.replace_one(filt, detail.as_doc(), True)
+    async def update_states(self, source):
+        def get_filter(inst: StateDetail):
+            return dict(state=inst.state)
+        return await self._update_collection('states', source, get_filter)
 
     async def update_companies(self, source):
-        coll = self.getcoll('companies')
-        await coll.create_indexes(search.search_indexes['companies'])
-        count, created, updated = 0, 0, 0
-        for company in source:
-            filt = dict(state=self.state, company=company.company)
-            res = await coll.replace_one(filt, company.as_doc(), True)
-            if res.upserted_id:
-                created += 1
-            elif res.modified_count:
-                updated += 1
-            count += 1
-        return count, created, updated
+        def get_filter(inst: CompanyDetail):
+            return dict(state=inst.state, company=inst.company)
+        return await self._update_collection('companies', source, get_filter)
 
     async def update_naics(self, source):
-        coll = self.getcoll('naics')
-        await coll.create_indexes(search.search_indexes['naics'])
+        def get_filter(inst: NaicsDetail):
+            return dict(id=inst.id)
+        return await self._update_collection('naics', source, get_filter)
+
+    async def _update_collection(self, name: str, source: Iterable[DM], get_filter: Callable[[DM], dict[str, Any]]) -> tuple[int, int, int]:
+        coll = self.getcoll(name)
+        indexes = search.search_indexes[name]
+        await coll.create_indexes(indexes)
         count, created, updated = 0, 0, 0
-        for naics in source:
-            filt = dict(id=naics.id)
-            res = await coll.replace_one(filt, naics.as_doc(), True)
+        for inst in source:
+            filt = get_filter(inst)
+            res = await coll.replace_one(filt, inst.as_doc(), True)
             if res.upserted_id:
                 created += 1
             elif res.modified_count:
@@ -232,3 +199,16 @@ class MongoSearchIndex(MongoMixin, IndexBackend[AsyncIOMotorDatabase]):
             count += 1
         return count, created, updated
 
+
+async def collstat(it: AsyncIterable[dict[str, Any]]):
+    h = hashlib.sha1()
+    size, count = 0, 0
+    async for doc in it:
+        buf = json.dumps(doc, default=str).encode()
+        h.update(buf)
+        size += len(buf)
+        count += 1
+    return dict(
+        hash=h.hexdigest() if count else None,
+        size=size,
+        count=count)

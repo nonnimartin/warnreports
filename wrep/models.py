@@ -95,6 +95,7 @@ __all__ += [
     'CompanyDetail',
     'CompanyName',
     'DataModel',
+    'DM',
     'Limit',
     'NaicsData',
     'NaicsDetail',
@@ -105,7 +106,7 @@ __all__ += [
     'StateDetail',
     'ValidationError']
 
-DM = TypeVar('DM', bound=DataModel)
+DM = TypeVar('DM', bound='DataModel')
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
