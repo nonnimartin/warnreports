@@ -3,12 +3,12 @@
 <table>
     <tbody>
         <tr>
-            <th scope="row">Company</th>
-            <td>{{ report.company }}</td>
-        </tr>
-        <tr>
             <th scope="row">State</th>
             <td>{{ report.state }}</td>
+        </tr>
+        <tr>
+            <th scope="row">Reported</th>
+            <td>{{ report.reported.date() }}</td>
         </tr>
         {%- if report.location %}
         <tr>
@@ -34,14 +34,10 @@
             <td>{{ report.starting.date() }}</td>
         </tr>
         {%- endif %}
-        <tr>
-            <th scope="row">Reported</th>
-            <td>{{ report.reported.date() }}</td>
-        </tr>
         {%- if report.url %}
         <tr>
             <th scope="row">URL</th>
-            <td><a href="{{ report.url }}">{{ report.url }}</a></td>
+            <td><a href="{{ report.url }}" target="_blank">{{ report.url }}</a></td>
         </tr>
         {%- endif %}
     </tbody>

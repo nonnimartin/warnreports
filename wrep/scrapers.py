@@ -887,6 +887,36 @@ class SC(Scraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
+class UT(Scraper, state='UT'):
+    base_url = 'https://jobs.utah.gov'
+    index_url = '/employer/business/warnnotices.html'
+
+    async def scrape(self):
+        await self.cache_download('latest.html', self.index_url)
+
+    async def stat(self):
+        if self.cache.exists('latest.html'):
+            it = bs(self.cache.read('latest.html')).find_all('table')
+        else:
+            it = ()
+        return hashstat(it)
+
+    async def clean(self):
+        self.cache.delete('latest.html')
+
+    @contextmanager
+    def extract(self):
+        it = bs(self.cache.read('latest.html')).find_all('table')
+        yield chain.from_iterable(map(self.read_table, it))
+
+    def read_table(self, table: Soup) -> Iterator[dict[str, str]]:
+        it = (
+            [td.text.strip() for td in tr.find_all(('td', 'th'))]
+            for tr in table.find_all('tr'))
+        headers = next(it)
+        for values in it:
+            yield dict(zip(headers, values))
+
 class VA(Scraper, state='VA'):
     # TODO: detail url: https://www.vec.virginia.gov/warn-notice-detail/18595
     base_url = 'https://www.vec.virginia.gov'

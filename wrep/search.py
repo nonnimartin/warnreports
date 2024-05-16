@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import re
 from abc import abstractmethod
 from typing import Any, AsyncIterable, ClassVar, Generic, Iterable, TypeVar
 
 from fastapi import HTTPException, status
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
-                                 AsyncIOMotorCursor, AsyncIOMotorDatabase)
+                                 AsyncIOMotorCursor)
 from pymongo.operations import IndexModel
 
 from . import settings, utils

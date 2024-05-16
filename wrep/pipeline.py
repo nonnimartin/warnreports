@@ -130,7 +130,7 @@ class Pipeline:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: IndexBackend = self.backends[stage]
+        backend: SearchIndexBackend = self.backends[stage]
         q = Report.select_for_reduce().where(Report.state == self.state)
         reports = ReportData.map_reduce(q)
         count, created, updated = await backend.update_reports(reports)
@@ -233,6 +233,7 @@ class PipelineRunner:
     ):
         if clean_only and (clean or incremental):
             raise ValueError(f'Cannot specify clean_only with clean or incremental')
+        self.id = uuid.uuid4()
         self.clean = clean
         self.clean_only = clean_only
         self.incremental = incremental
@@ -246,6 +247,7 @@ class PipelineRunner:
             self.grouping[self.GROUPING[stage]].append(stage)
 
     async def run(self) -> None:
+        start = utils.now()
         it = iter(self.grouping)
         if self.concurrent:
             run_concurrently = self._run_concurrently
@@ -254,6 +256,17 @@ class PipelineRunner:
         await run_concurrently(*next(it))
         await self._run_consecutively(*next(it))
         await run_concurrently(*next(it))
+        end = utils.now()
+        duration = (end - start).total_seconds()
+        extra = dict(
+            runner=dict(
+                id=self.id,
+                size=len(self.pipelines) * len(self.stages),
+                duration=duration,
+                start=start,
+                end=end))
+        await MongoPipelineLog().save(
+            run|extra for runs in self.runs.values() for run in runs)
 
     async def _run_consecutively(self, *stages: Stage) -> None:
         for pipeline in self.pipelines:
@@ -267,6 +280,7 @@ class PipelineRunner:
 
     async def _run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
         for stage in stages:
+            start = utils.now()
             state = pipeline.state
             res = dict(state=state, stage=stage)
             if self._should_skip(state):
@@ -276,8 +290,11 @@ class PipelineRunner:
                 await pipeline.clean(stage)
                 res.update(clean_only=True)
             else:
-                res = await pipeline.run(stage, clean=self.clean)
+                res.update(await pipeline.run(stage, clean=self.clean))
                 res.update(clean=self.clean)
+            end = utils.now()
+            duration = (end - start).total_seconds()
+            res.update(duration=duration, start=start, end=end)
             self.runs[pipeline.state].append(res)
 
     def _should_skip(self, state: StateCode) -> bool:

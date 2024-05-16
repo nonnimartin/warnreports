@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from abc import abstractmethod
@@ -18,15 +17,22 @@ from ..models import *
 from ..translators import Translator
 
 __all__ = [
+    'PipelineLogBackend',
     'ExtractionBackend',
     'TranslationBackend',
-    'IndexBackend',
+    'SearchIndexBackend',
     'StageBackend',
 ]
 
 T = TypeVar('T')
 
 logger = utils.get_logger('backends.etl')
+
+
+class PipelineLogBackend:
+
+    @abstractmethod
+    async def save(self, runs: Iterable[dict]) -> None: ...
 
 class StageBackend:
 
@@ -53,7 +59,7 @@ class TranslationBackend(StageBackend):
     @abstractmethod
     async def run(self, translator: Translator, source: AsyncIterable[dict[str, str]]) -> int: ...
 
-class IndexBackend(StageBackend):
+class SearchIndexBackend(StageBackend):
 
     @abstractmethod
     async def update_reports(self, source: Iterable[ReportData]) -> tuple[int, int, int]: ...
@@ -68,6 +74,7 @@ class IndexBackend(StageBackend):
     async def update_naics(self, source: Iterable[NaicsDetail]) -> tuple[int, int, int]: ...
 
 __all__ += [
+    'MongoPipelineLog',
     'MongoExtraction',
     'MongoTranslation',
     'MongoSearchIndex',
@@ -75,6 +82,21 @@ __all__ += [
 
 mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
 
+
+class MongoPipelineLog(PipelineLogBackend):
+    mongo = mongo_client.active
+
+    async def save(self, runs):
+        coll = self.mongo.pipelines
+        await coll.create_indexes(self.indexes)
+        await coll.insert_many(runs)
+
+    indexes = [
+        IndexModel({'runner_id': 'hashed'}),
+        IndexModel({'stage': 'hashed'}),
+        IndexModel({'state': 'hashed'}),
+        IndexModel({'start': -1}),
+    ]
 
 class MongoBackend(StageBackend):
     mongo = mongo_client.active
@@ -121,7 +143,7 @@ class MongoExtraction(MongoBackend, ExtractionBackend):
         docs = (
             dict(state=self.state, _i=i) | doc
             for i, doc in enumerate(it))
-        await coll.insert_many(docs, ordered=False)
+        await coll.insert_many(docs)
         return it.count
 
     indexes = [
@@ -151,7 +173,7 @@ class MongoTranslation(MongoBackend, TranslationBackend):
         IndexModel({'state': 'hashed'}),
     ]
 
-class MongoSearchIndex(MongoBackend, IndexBackend):
+class MongoSearchIndex(MongoBackend, SearchIndexBackend):
     mongo = search.mongo
     collname = 'reports'
     stat_sort = ['id']
@@ -198,7 +220,6 @@ class MongoSearchIndex(MongoBackend, IndexBackend):
                 updated += 1
             count += 1
         return count, created, updated
-
 
 async def collstat(it: AsyncIterable[dict[str, Any]]):
     h = hashlib.sha1()
