@@ -196,7 +196,7 @@ class MongoSearchIndex(SearchIndexBackend):
 
     async def update_states(self, source):
         def get_filter(inst: StateDetail):
-            return dict(state=inst.state)
+            return dict(id=inst.state)
         return await self.update_collection('states', source, get_filter)
 
     async def update_companies(self, source):
