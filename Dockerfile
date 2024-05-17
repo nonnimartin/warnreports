@@ -1,8 +1,10 @@
 FROM python:3.12-alpine
 VOLUME /build
+VOLUME /srv/artifacts
 WORKDIR /code
 CMD python -m wrep.main
 ENV BUILD_DIR=/build
+ENV ARTIFACTS_DIR=/srv/artifacts
 ENV UVICORN_HOST=0.0.0.0
 RUN apk --no-cache -q add bash curl &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep

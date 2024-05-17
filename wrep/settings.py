@@ -6,11 +6,13 @@ BASEDIR = Path(__file__).parent
 REPODIR = BASEDIR.parent
 STATIC_DIR = BASEDIR/'static'
 TEMPLATES_DIR = BASEDIR/'templates'
-NAICS_DOWNLOAD = 'https://github.com/owings1/naics/raw/2022-1/build/2022.min.json'
 BUILD_DIR = Path(getenv('BUILD_DIR', REPODIR/'build'))
+ARTIFACTS_DIR = Path(getenv('ARTIFACTS_DIR', BUILD_DIR/'artifacts'))
+NAICS_DOWNLOAD = 'https://github.com/owings1/naics/raw/2022-1/build/2022.min.json'
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
 NAMESPACE = UUID(getenv('NAMESPACE', 'b98ba54b-c67b-4bce-b609-b2a236e33b14'))
 DB_URL = getenv('DB_URL', f'sqlite:///{REPODIR}/db.sqlite')
+DB_AUTO_MIGRATE = getenv('DB_AUTO_MIGRATE', 'true').lower() == 'true'
 MONGODB_URL = getenv('MONGODB_URL', 'mongodb://localhost:27017/')
 MONGODB_DBNAME = getenv('MONGODB_DBNAME', 'active')
 ETL_MONGODB_URL = getenv('ETL_MONGODB_URL', MONGODB_URL)

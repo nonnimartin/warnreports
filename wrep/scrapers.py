@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import re
+import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from itertools import chain
@@ -38,6 +39,7 @@ class Scraper:
         self.runner = Runner(self.state)
         self.session = requests.session()
         self.cache = Cache(self.state)
+        self.artifacts = Artifacts(self.state)
         self.request_count = 0
 
     async def clean(self) -> None:
@@ -174,9 +176,10 @@ class CA(Scraper, state='CA'):
                 key = Path(urlparse(href).path).name
                 if not key.endswith('.pdf') or not self.cache.exists(key):
                     await self.cache_download(key, href)
-                index.append(key)
+                self.artifacts.add(key, self.cache.topath(key))
+                index.append((key, self.absurl(href)))
         index.sort()
-        self.cache.write_json('index.json', index, indent=2)
+        self.cache.write_json('index.json', dict(index), indent=2)
 
     async def clean(self):
         self.cache.delete('latest.html', 'index.json')
@@ -207,7 +210,7 @@ class CA(Scraper, state='CA'):
         files += self.cache.files('.', '*.xlsx')
         return sorted(map(Path, files))
 
-    def load_index(self) -> list[str]:
+    def load_index(self) -> dict[str, str]:
         return self.cache.read_json('index.json')
 
 class CO(Scraper, state='CO'):
@@ -453,6 +456,7 @@ class IL(Scraper, state='IL'):
 
     async def scrape(self):
         await self.cache_download('export.xlsx', self.source_url)
+        self.artifacts.add('export.xlsx', self.cache.topath('export.xlsx'))
 
     async def stat(self):
         return hashstat([self.cache.topath('export.xlsx')])
@@ -462,7 +466,9 @@ class IL(Scraper, state='IL'):
 
     @contextmanager
     def extract(self):
-        yield extract_xlsx(self.cache.topath('export.xlsx'))
+        extra = dict(artifacts_json=json.dumps({'export.xlsx': self.source_url}))
+        it = extract_xlsx(self.cache.topath('export.xlsx'))
+        yield (row|extra for row in it)
 
 class IN(Scraper, state='IN'):
     # Scrape time: < 2s
@@ -645,6 +651,7 @@ class NY(Scraper, state='NY'):
         for key, url in self.past_urls.items():
             if not self.cache.exists(key):
                 await self.cache_download(key, url)
+        artifacts = {}
         for key in ('latest.html', *self.past_urls):
             if not key.endswith('.html'):
                 continue
@@ -654,9 +661,12 @@ class NY(Scraper, state='NY'):
                 if not self.cache.exists(key):
                     await self.cache_download(key, url)
                     await asyncio.sleep(1)
+                self.artifacts.add(key, self.cache.topath(key))
+                artifacts[key] = url
+        self.cache.write_json('artifacts.json', artifacts)
 
     async def clean(self):
-        self.cache.delete('latest.html', *self.past_urls)
+        self.cache.delete('latest.html', 'artifacts.json', *self.past_urls)
 
     async def stat(self):
         objs = list(map(self.cache.topath, self.past_urls))
@@ -678,6 +688,7 @@ class NY(Scraper, state='NY'):
     read_xlsx_file = staticmethod(extract_xlsx)
 
     def read_html_file(self, file: Path) -> Iterator[dict[str, str]]:
+        artifacts = self.cache.read_json('artifacts.json')
         table = self.find_table(bs(file.read_bytes()))
         it = iter(table.find_all('tr'))
         next(it)
@@ -688,6 +699,7 @@ class NY(Scraper, state='NY'):
             key, url = self.parse_record_key_url(a['href'])
             if self.cache.exists(key):
                 record.update(self.read_record_pdf(self.cache.topath(key)))
+                record.update(artifacts_json=json.dumps({key: artifacts[key]}))
             record.update(
                 company_name=a.text,
                 notice_url=url,
@@ -741,6 +753,7 @@ class SC(Scraper, state='SC'):
                 key = f'{year}.pdf'
                 if not self.cache.exists(key) or year >= utils.now().year - 1:
                     await self.cache_download(key, href)
+                self.artifacts.add(key, self.cache.topath(key))
         index.sort()
         self.cache.write_json('index.json', index, indent=2)
 
@@ -935,13 +948,14 @@ class Cache(warn.cache.Cache):
     def __init__(self, state: str):
         data_dir = settings.BUILD_DIR/'scrape'
         super().__init__(data_dir/state.lower())
+        self.dir = Path(self.path)
 
     def delete(self, *keys: str):
         for path in map(self.topath, keys):
             path.unlink(missing_ok=True)
     
     def topath(self, key: str):
-        return Path(self.path, key)
+        return Path(self.dir, key)
 
     def open(self, key: str, *args, **kw):
         return self.topath(key).open(*args, **kw)
@@ -953,6 +967,21 @@ class Cache(warn.cache.Cache):
     def read_json(self, key: str, **kw) -> Any:
         with self.open(key) as file:
             return json.load(file, **kw)
+
+class Artifacts:
+
+    def __init__(self, state: str):
+        self.dir = settings.ARTIFACTS_DIR/state.lower()
+
+    def add(self, key: str, file: Path):
+        dest = self.dir/key
+        if dest.exists():
+            sta, stb = file.stat(), dest.stat()
+            if (sta.st_mtime, sta.st_size) == (stb.st_mtime, stb.st_size):
+                return
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(file, dest)
 
 class Runner(warn.Runner):
 
@@ -978,10 +1007,13 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
     for obj in it:
         if isinstance(obj, Path):
             try:
-                buf = obj.read_bytes()
+                with obj.open('rb') as file:
+                    hashlib.file_digest(file, lambda: h)
+                size += obj.stat().st_size
             except FileNotFoundError:
-                continue
-        elif isinstance(obj, str):
+                pass
+            continue
+        if isinstance(obj, str):
             buf = obj.encode()
         elif isinstance(obj, PageElement):
             buf = obj.text.encode()

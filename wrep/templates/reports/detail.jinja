@@ -1,19 +1,11 @@
 {%- for report in reports|default([report]) %}
-<h2>{{ report.company }}</h2>
+<h2>{{ report.company }} - {{ report.state }}</h2>
 <table>
     <tbody>
+        {%- if report.employees %}
         <tr>
-            <th scope="row">State</th>
-            <td>{{ report.state }}</td>
-        </tr>
-        <tr>
-            <th scope="row">Reported</th>
-            <td>{{ report.reported.date() }}</td>
-        </tr>
-        {%- if report.location %}
-        <tr>
-            <th scope="row">Location</th>
-            <td>{{ report.location }}</td>
+            <th scope="row">Employees</th>
+            <td>{{ report.employees }}</td>
         </tr>
         {%- endif %}
         {%- if report.action %}
@@ -22,22 +14,54 @@
             <td>{{ report.action }}</td>
         </tr>
         {%- endif %}
-        {%- if report.employees %}
-        <tr>
-            <th scope="row">Employees</th>
-            <td>{{ report.employees }}</td>
-        </tr>
-        {%- endif %}
         {%- if report.starting %}
         <tr>
             <th scope="row">Starting</th>
             <td>{{ report.starting.date() }}</td>
         </tr>
         {%- endif %}
+        <tr>
+            <th scope="row">State</th>
+            <td>{{ report.state }}</td>
+        </tr>
+        {%- if report.location %}
+        <tr>
+            <th scope="row">Location</th>
+            <td>{{ report.location }}</td>
+        </tr>
+        {%- endif %}
+        {%- if report.naics %}
+        <tr>
+            <th scope="row">NAICS</th>
+            <td>
+                {%- with br=joiner ('<br>') %}
+                {%- for naics in report.naics %}
+                {{ br() }}{{ naics.title }} ({{ naics.id }})
+                {%- endfor %}
+                {%- endwith %}
+            </td>
+        </tr>
+        {%- endif %}
+        <tr>
+            <th scope="row">Reported</th>
+            <td>{{ report.reported.date() }}</td>
+        </tr>
         {%- if report.url %}
         <tr>
             <th scope="row">URL</th>
             <td><a href="{{ report.url }}" target="_blank">{{ report.url }}</a></td>
+        </tr>
+        {%- endif %}
+        {%- if report.artifacts %}
+        <tr>
+            <th scope="row">Artifcts</th>
+            <td>
+                {%- with br=joiner ('<br>') %}
+                {%- for artifact in report.artifacts %}
+                {{ br() }}<a href="/d/{{ artifact.id }}">{{ artifact.name }}</a>
+                {%- endfor %}
+                {%- endwith %}
+            </td>
         </tr>
         {%- endif %}
     </tbody>

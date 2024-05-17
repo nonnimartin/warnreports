@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from itertools import batched
+from pathlib import Path
 from typing import Any, Iterable
 
-from . import utils
+from . import settings, utils
 from .backends.etl import *
 from .models import *
 from .models import db
@@ -41,7 +43,8 @@ class Pipeline:
         'action',
         'url',
         'naics',
-        'industry']
+        'industry',
+        'artifacts']
     required_fields = {'company', 'reported'}
     json_types = {
         'id': uuid.UUID,
@@ -75,6 +78,7 @@ class Pipeline:
             for model in Report, Company:
                 model.delete().where(model.state == self.state).execute()
             StateStat.delete().where(StateStat.id == self.state).execute()
+        logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
         prev = await self.scraper.stat()
@@ -158,6 +162,7 @@ class Pipeline:
             save = save.Create
         naics = set(record.pop('naics', ()))
         industry = record.pop('industry', None)
+        artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
         for field, value in record.items():
             if save is save.Create or getattr(report, field) != value:
@@ -169,6 +174,9 @@ class Pipeline:
         naics_save = self.save_naics(report, naics, industry)
         if save is save.Nochange:
             save = naics_save
+        artifacts_save = self.save_artifacts(report, artifacts)
+        if save is save.Nochange:
+            save = artifacts_save
         Company.get_or_create(company=report.company, state=report.state)
         return save
 
@@ -205,6 +213,37 @@ class Pipeline:
         if add:
             save = save.Update
             NaicsReport.insert_many(add).execute()
+        return save
+
+    def save_artifacts(self, report: Report, artifacts: dict[str, str]) -> SaveType:
+        save = SaveType.Nochange
+        q = Artifact.delete()
+        artifacts = {f'{self.state.lower()}/{key}': value for key, value in artifacts.items()}
+        q = q.where(Artifact.report == report, Artifact.path.not_in(list(artifacts)))
+        if q.execute():
+            save = save.Update
+        q = Artifact.select().where(Artifact.report == report)
+        cur = set(a.path for a in q)
+        add = [
+            dict(path=path, url=url, report=report)
+            for path, url in artifacts.items()
+            if path not in cur]
+        if not add:
+            return save
+        save = save.Update
+        for art in add:
+            file = Path(settings.ARTIFACTS_DIR, art['path'])
+            with file.open('rb') as f:
+                digest = hashlib.file_digest(f, 'sha1')
+            stat = file.stat()
+            uid = uuid.uuid5(report.id, f'Artifact {art['path']} {art['url']}')
+            art.update(
+                id=uid,
+                size=stat.st_size,
+                modified=datetime.fromtimestamp(stat.st_mtime),
+                mimetype=utils.get_mimetype(file),
+                sha1=digest.hexdigest())
+        Artifact.insert_many(add).execute()
         return save
 
     def from_json(self, field: str, value: Any) -> Any:

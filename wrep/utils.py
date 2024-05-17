@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import mimetypes
 import time
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
+from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
                     Iterator, Self, TypeVar)
 from uuid import UUID
@@ -68,6 +70,17 @@ def parse_int(value: str) -> int|None:
         return int(value)
     except ValueError:
         pass
+
+def get_mimetype(value: Any) -> str:
+    res = mimetypes.guess_type(value)[0]
+    if res:
+        return res
+    if isinstance(value, Path):
+        value = value.name
+    if isinstance(value, str):
+        if value.endswith('.xlsx'):
+            return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    return 'application/octet-stream'
 
 def render(template: str, *args, **kw) -> str:
     return get_template(template).render(*args, **kw)
