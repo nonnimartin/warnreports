@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
-                    Iterator, Self, TypeVar)
+                    Iterator, TypeVar)
 from uuid import UUID
 
 import dateutil.parser
@@ -33,6 +33,10 @@ def now(**kw) -> datetime:
     if kw:
         dt += timedelta(**kw)
     return dt
+
+def nowms() -> int:
+    'Current time in milliseconds'
+    return int(round(time.time() * 1000))
 
 def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):
@@ -169,50 +173,3 @@ class BaseCommand:
 
     async def run(self):
         pass
-
-class Timer:
-
-    def __init__(self, started = False):
-        self.start_time = None
-        self.accum = 0
-        self.running = False
-        if started:
-            self.start()
-
-    def start(self) -> None:
-        if self.running:
-            raise Exception('Timer already started.')
-        self.running = True
-        self.start_time = nowms()
-
-    def stop(self) -> None:
-        if not self.running:
-            raise Exception('Timer already stopped.')
-        self.running = False
-        self.accum += nowms() - self.start_time
-
-    def elapsed(self):
-        return self.elapsed() / 1000
-
-    def elapsed_ms(self):
-        if self.running:
-            return self.accum + (nowms() - self.start_time)
-        return self.accum
-
-    def __float__(self):
-        return float(self.elapsed())
-
-    def __int__(self):
-        return self.elapsed()
-
-    def __enter__(self) -> Self:
-        self.start()
-        return self
-
-    def __exit__(self, type, value, traceback):
-        if self.running:
-            self.stop()
-
-def nowms() -> int:
-    'Current time in milliseconds'
-    return int(round(time.time() * 1000))
