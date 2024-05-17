@@ -900,6 +900,50 @@ class SC(Scraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
+class TX(Scraper, state='TX'):
+    base_url = 'https://www.twc.texas.gov'
+    index_url = '/data-reports/warn-notice'
+    href_pat = re.compile(r'^/sites/default/files/oei/docs/warn-act-listings-')
+    year_pat = re.compile(r'.*-(\d{4})-')
+    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/TX/tx_historical.xlsx'
+
+    async def scrape(self):
+        page = bs(await self.cache_fetch('latest.html', self.index_url))
+        for a in page.find_all('a', href=self.href_pat):
+            href = a['href']
+            key = Path(href).name
+            year = int(self.year_pat.match(key)[1])
+            if not self.cache.exists(key) or year >= utils.now().year - 1:
+                await self.cache_download(key, href)
+            self.artifacts.add(key, self.cache.topath(key))
+        key = self.archive_url.split('/')[-1]
+        if not self.cache.exists(key):
+            await self.cache_download(key, self.archive_url)
+
+    async def clean(self):
+        self.cache.delete('latest.html')
+        for file in self.list_record_files():
+            file.unlink()
+
+    async def stat(self):
+        return hashstat(self.list_record_files())
+
+    @contextmanager
+    def extract(self):
+        yield chain.from_iterable(map(self.extract_xlsx, self.list_record_files()))
+
+    def extract_xlsx(self, file: Path) -> Iterator[dict[str, str]]:
+        extra = {}
+        if self.year_pat.match(file.name):
+            extra.update(artifact_url=self.absurl(file.name))
+        for row in extract_xlsx(file):
+            row.update(extra)
+            yield row
+
+    def list_record_files(self) -> list[Path]:
+        return sorted(map(Path, self.cache.files('.', '*.xlsx')), reverse=True)
+
+    
 class UT(Scraper, state='UT'):
     base_url = 'https://jobs.utah.gov'
     index_url = '/employer/business/warnnotices.html'

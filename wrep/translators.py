@@ -981,6 +981,7 @@ class TX(Translator, state='TX'):
         'TOTAL_LAYOFF_NUMBER': 'employees',
         'Layoff Type': 'action',
         'LayOff_Date': 'starting',
+        'artifact_url': 'artifacts',
     }
     rewrites = dict(
         company=[

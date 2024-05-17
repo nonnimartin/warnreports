@@ -256,6 +256,8 @@ class ArtifactData(DataModel):
 class ArtifactDetail(ArtifactData, MapReducingModel[Artifact]):
     path: str
     reports_count: int = 0
+    created: datetime
+    modified: datetime
     orm_model: ClassVar = Artifact
 
     def reduce_obj(self, obj, memo) -> None:
