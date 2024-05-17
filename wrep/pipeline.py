@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from itertools import batched
+from pathlib import Path
 from typing import Any, Iterable
 
-from . import utils
+from . import settings, utils
 from .backends.etl import *
 from .models import *
 from .models import db
@@ -41,7 +43,8 @@ class Pipeline:
         'action',
         'url',
         'naics',
-        'industry']
+        'industry',
+        'artifacts']
     required_fields = {'company', 'reported'}
     json_types = {
         'id': uuid.UUID,
@@ -75,6 +78,7 @@ class Pipeline:
             for model in Report, Company:
                 model.delete().where(model.state == self.state).execute()
             StateStat.delete().where(StateStat.id == self.state).execute()
+        logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
         prev = await self.scraper.stat()
@@ -130,7 +134,7 @@ class Pipeline:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: IndexBackend = self.backends[stage]
+        backend: SearchIndexBackend = self.backends[stage]
         q = Report.select_for_reduce().where(Report.state == self.state)
         reports = ReportData.map_reduce(q)
         count, created, updated = await backend.update_reports(reports)
@@ -158,6 +162,7 @@ class Pipeline:
             save = save.Create
         naics = set(record.pop('naics', ()))
         industry = record.pop('industry', None)
+        artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
         for field, value in record.items():
             if save is save.Create or getattr(report, field) != value:
@@ -169,6 +174,9 @@ class Pipeline:
         naics_save = self.save_naics(report, naics, industry)
         if save is save.Nochange:
             save = naics_save
+        artifacts_save = self.save_artifacts(report, artifacts)
+        if save is save.Nochange:
+            save = artifacts_save
         Company.get_or_create(company=report.company, state=report.state)
         return save
 
@@ -207,6 +215,37 @@ class Pipeline:
             NaicsReport.insert_many(add).execute()
         return save
 
+    def save_artifacts(self, report: Report, artifacts: dict[str, str]) -> SaveType:
+        save = SaveType.Nochange
+        q = Artifact.delete()
+        artifacts = {f'{self.state.lower()}/{key}': value for key, value in artifacts.items()}
+        q = q.where(Artifact.report == report, Artifact.path.not_in(list(artifacts)))
+        if q.execute():
+            save = save.Update
+        q = Artifact.select().where(Artifact.report == report)
+        cur = set(a.path for a in q)
+        add = [
+            dict(path=path, url=url, report=report)
+            for path, url in artifacts.items()
+            if path not in cur]
+        if not add:
+            return save
+        save = save.Update
+        for art in add:
+            file = Path(settings.ARTIFACTS_DIR, art['path'])
+            with file.open('rb') as f:
+                digest = hashlib.file_digest(f, 'sha1')
+            stat = file.stat()
+            uid = uuid.uuid5(report.id, f'Artifact {art['path']} {art['url']}')
+            art.update(
+                id=uid,
+                size=stat.st_size,
+                modified=datetime.fromtimestamp(stat.st_mtime),
+                mimetype=utils.get_mimetype(file),
+                sha1=digest.hexdigest())
+        Artifact.insert_many(add).execute()
+        return save
+
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:
             if isinstance(value, str):
@@ -233,6 +272,7 @@ class PipelineRunner:
     ):
         if clean_only and (clean or incremental):
             raise ValueError(f'Cannot specify clean_only with clean or incremental')
+        self.id = uuid.uuid4()
         self.clean = clean
         self.clean_only = clean_only
         self.incremental = incremental
@@ -240,35 +280,52 @@ class PipelineRunner:
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
         self.pipelines = list(map(Pipeline, self.states))
+        self.size = len(self.pipelines) * len(self.stages)
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
         self.grouping: tuple[list[Stage], ...] = [], [], []
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
+        self.logbackend = MongoPipelineLog()
 
     async def run(self) -> None:
+        self.start = utils.now()
+        self.jobseq = 0
         it = iter(self.grouping)
         if self.concurrent:
-            run_concurrently = self._run_concurrently
+            run_concurrently = self.run_concurrently
         else:
-            run_concurrently = self._run_consecutively
+            run_concurrently = self.run_consecutively
         await run_concurrently(*next(it))
-        await self._run_consecutively(*next(it))
+        await self.run_consecutively(*next(it))
         await run_concurrently(*next(it))
 
-    async def _run_consecutively(self, *stages: Stage) -> None:
+    async def run_consecutively(self, *stages: Stage) -> None:
         for pipeline in self.pipelines:
-            await self._run_pipeline(pipeline, *stages)
+            await self.run_pipeline(pipeline, *stages)
 
-    async def _run_concurrently(self, *stages: Stage) -> None:
+    async def run_concurrently(self, *stages: Stage) -> None:
         for pipelines in batched(self.pipelines, 4):
             async with asyncio.TaskGroup() as group:
                 for pipeline in pipelines:
-                    group.create_task(self._run_pipeline(pipeline, *stages))
+                    group.create_task(self.run_pipeline(pipeline, *stages))
 
-    async def _run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
+    async def run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
         for stage in stages:
+            start = utils.now()
             state = pipeline.state
-            res = dict(state=state, stage=stage)
+            res = dict(
+                state=state,
+                stage=stage,
+                jobseq=self.jobseq,
+                start=start)
+            self.jobseq += 1
+            res['runner'] = dict(
+                id=self.id,
+                start=self.start,
+                elapsed=(start - self.start).total_seconds(),
+                incremental=self.incremental,
+                concurrent=self.concurrent,
+                clean=self.clean or self.clean_only)
             if self._should_skip(state):
                 logger.info(f'{state}:{stage}:skip')
                 res.update(skip=True, nochange=True)
@@ -276,9 +333,11 @@ class PipelineRunner:
                 await pipeline.clean(stage)
                 res.update(clean_only=True)
             else:
-                res = await pipeline.run(stage, clean=self.clean)
-                res.update(clean=self.clean)
+                res.update(await pipeline.run(stage, clean=self.clean))
+            end = utils.now()
+            res.update(end=end, elapsed=(end - start).total_seconds())
             self.runs[pipeline.state].append(res)
+            await self.logbackend.save([res])
 
     def _should_skip(self, state: StateCode) -> bool:
         return bool(

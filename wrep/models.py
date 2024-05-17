@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from typing import (Annotated, Any, ClassVar, Generic, Iterable, Iterator,
                     Literal, Self, TypeAlias, TypeVar)
 from uuid import UUID
@@ -19,7 +21,17 @@ from pydantic_core import ValidationError as ValidationError
 from . import settings, utils
 from .ref.tz import zoneinfos
 
-__all__ = ['IntegrityError', 'Naics', 'NaicsReport', 'Report', 'StateStat', 'Company', 'orm']
+logger = utils.get_logger('models')
+
+__all__ = [
+    'Artifact',
+    'Company',
+    'IntegrityError',
+    'Naics',
+    'NaicsReport',
+    'orm',
+    'Report',
+    'StateStat']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
 
@@ -32,25 +44,44 @@ class Report(OrmModel):
     company = orm.CharField(max_length=512, index=True)
     state = orm.CharField(max_length=2, index=True)
     created = orm.DateTimeField(index=True, default=utils.now)
-    location = orm.CharField(max_length=255, null=True, index=True)
+    location = orm.CharField(max_length=255, null=True)
     reported = orm.DateTimeField(index=True)
-    starting = orm.DateTimeField(null=True, index=True)
+    starting = orm.DateTimeField(null=True)
     employees = orm.IntegerField(null=True)
-    action = orm.CharField(max_length=64, null=True, index=True)
+    action = orm.CharField(max_length=64, null=True)
     url = orm.CharField(max_length=2083, null=True)
 
     @classmethod
     def select_for_reduce(cls) -> orm.ModelSelect[Self]:
-        q = cls.select(NaicsReport, Naics, cls)
+        q = cls.select(NaicsReport, Naics, Artifact, cls)
         q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
         q = q.join_from(NaicsReport, Naics, orm.JOIN['LEFT_OUTER'])
-        q = q.order_by(cls.id, Naics.id)
+        q = q.join_from(cls, Artifact, orm.JOIN['LEFT_OUTER'])
+        q = q.order_by(cls.id, Naics.id, Artifact.id)
         return q
+
+class Artifact(OrmModel):
+    id = orm.UUIDField(primary_key=True)
+    report = orm.ForeignKeyField(Report, on_delete='CASCADE')
+    path = orm.CharField(max_length=2083)
+    url = orm.CharField(max_length=2083)
+    created = orm.DateTimeField(index=True, default=utils.now)
+    modified = orm.DateTimeField(index=True, default=utils.now)
+    mimetype = orm.CharField(max_length=255)
+    size = orm.BigIntegerField()
+    sha1 = orm.CharField(max_length=40)
+
+    @property
+    def name(self):
+        return Path(self.path).name
+
+    class Meta:
+        indexes = [(('path', 'report'), True)]
 
 class StateStat(OrmModel):
     id = orm.CharField(max_length=2, primary_key=True)
-    last_reported = orm.DateTimeField(null=True, index=True)
-    reports_count = orm.IntegerField(index=True, default=0)
+    last_reported = orm.DateTimeField(null=True)
+    reports_count = orm.IntegerField(default=0)
 
     def self_update(self):
         q = Report.select(Report.reported).where(Report.state==self.id)
@@ -101,6 +132,7 @@ __all__ += [
     'NaicsDetail',
     'Offset',
     'PageNumber',
+    'ReportArtifact',
     'ReportData',
     'StateCode',
     'StateDetail',
@@ -132,7 +164,8 @@ class ReportData(DataModel):
     action: str|None
     url: str|None
     naics: list[NaicsData] = Field(default_factory=list)
-    model_config = ConfigDict(populate_by_name=True,from_attributes=True)
+    artifacts: list[ReportArtifact] = Field(default_factory=list)
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     @classmethod
     def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
@@ -144,20 +177,36 @@ class ReportData(DataModel):
                 if inst:
                     yield inst
                 inst = cls.model_validate(report)
-            inst.reduce_obj(report)
+                memo = defaultdict(set)
+            inst.reduce_obj(report, memo)
         if inst:
             yield inst
 
-    def reduce_obj(self, report: Report) -> None:
-        nr = getattr(report, 'naicsreport', None)
-        if isinstance(nr, NaicsReport):
+    def reduce_obj(self, report: Report, memo: dict[str, set]) -> None:
+        nr: NaicsReport|None = getattr(report, 'naicsreport', None)
+        if nr and nr.naics not in memo['naics']:
             naics = NaicsData.model_validate(nr.naics)
             self.naics.append(naics)
+            memo['naics'].add(nr.naics)
+        art: Artifact|None = getattr(report, 'artifact', None)
+        if art and art.id not in memo['artifacts']:
+            artifact = ReportArtifact.model_validate(art)
+            self.artifacts.append(artifact)
+            memo['artifacts'].add(art.id)
 
     @field_serializer('reported', 'starting')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
         return tzreplace(dt, zoneinfos[self.state])
-   
+
+class ReportArtifact(DataModel):
+    id: UUID = Field(alias='_id')
+    url: str
+    name: str
+    size: int
+    media_type: str = Field(alias='mimetype')
+    sha1: str
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
 class NaicsData(DataModel):
     id: int
     code: str
@@ -298,11 +347,13 @@ class NaicsFilter(FilterModel[NaicsDetail]):
 # ----------------------------
 
 def migrate() -> None:
-    db.create_tables([Report, Company, StateStat, Naics, NaicsReport])
+    with db.atomic():
+        db.create_tables([Report, Company, StateStat, Naics, NaicsReport, Artifact])
     if not Naics.select().count():
         load_naics()
 
 def load_naics() -> None:
+    logger.info(f'Loading NAICS')
     import requests
     rep = requests.get(settings.NAICS_DOWNLOAD)
     rep.raise_for_status()

@@ -26,6 +26,7 @@ services:
       context: .
     volumes:
       - ./build:/build
+      - ./build/artifacts:/srv/artifacts
       - .:/code
     ports: [127.0.0.1:8000:8000]
     environment:
@@ -64,4 +65,3 @@ volumes:
   mongoconfig:
   postgres:
   pgadmin:
-

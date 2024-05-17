@@ -6,11 +6,12 @@ import re
 import uuid
 from datetime import datetime, timezone
 from html import unescape as html_unescape
+from pathlib import Path
 from typing import Any
 
 from pydantic import HttpUrl
 
-from . import utils, settings
+from . import settings, utils
 from .models import ValidationError
 from .ref.tz import zoneinfos
 
@@ -61,6 +62,7 @@ class Translator:
                     entry[field] = value
         self.finish(entry, row)
         entry['id'] = self.entry_uuid(entry, row)
+        entry['values_id'] = self.values_hash_uuid(row)
         return entry
 
     def value(self, field: str, value: str) -> Any:
@@ -112,6 +114,24 @@ class Translator:
                 values.add(value)
         return sorted(values)
 
+    def value_artifacts(self, value: str) -> dict[str, str]:
+        try:
+            data = dict(json.loads(value))
+        except json.JSONDecodeError:
+            if value.endswith('.pdf') or value.endswith('.xslx'):
+                data = {Path(value).name: value}
+            else:
+                data = {}
+        artifacts = {}
+        for path, url in data.items():
+            try:
+                HttpUrl(url)
+                Path(path)
+            except (ValidationError, ValueError):
+                continue
+            artifacts[path] = url
+        return artifacts
+
     def sanitize(self, value: str) -> str:
         return value.translate(ASCII_TRANS).strip()
 
@@ -148,8 +168,13 @@ class Translator:
         return list(filter(None, it))
 
     def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
-        src = entry.get('report_id') or json.dumps(list(row.values()))
-        return uuid.uuid5(self.namespace, src)
+        src = entry.get('report_id')
+        if src:
+            return uuid.uuid5(self.namespace, src)
+        return self.values_hash_uuid(row)
+
+    def values_hash_uuid(self, row: dict[str, str]) -> uuid.UUID:
+        return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
 
     def __init_subclass__(cls, state: str|None = None) -> None:
         cls.rewrites = Translator.rewrites | cls.rewrites
@@ -239,6 +264,9 @@ class AZ(Translator, state='AZ'):
 
 class CA(Translator, state='CA'):
     default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
+    rewrite_url = (
+        _r(r'^(.+)$'),
+        r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1')
     headermap = {
         'company': 'company',
         'notice_date': 'reported',
@@ -246,7 +274,7 @@ class CA(Translator, state='CA'):
         'num_employees': 'employees',
         'layoff_or_closure': 'action',
         'effective_date': 'starting',
-        'source_file': 'url',
+        'source_file': ['url', 'artifacts'],
     }
     rewrites = dict(
         company=[
@@ -262,8 +290,11 @@ class CA(Translator, state='CA'):
             ('03/09/2121', '2021-03-09'),
         ],
         url=[
-            (_r(r'^(.+)$'), r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1'),
-        ]
+            rewrite_url,
+        ],
+        artifacts=[
+            rewrite_url,
+        ],
     )
 
 class CO(Translator, state='CO'):
@@ -526,6 +557,7 @@ class IL(Translator, state='IL'):
         'Reason': 'action',
         'NAICS Codes': 'naics',
         'IEBS Id': 'report_id',
+        'artifacts_json': 'artifacts',
     }
     rewrites = dict(
         company=[
@@ -791,6 +823,7 @@ class NY(Translator, state='NY'):
         'Event Number': 'report_id',
         'Event Numbers': 'report_id',
         'Event #': 'report_id',
+        'artifacts_json': 'artifacts',
     }
     rewrites = dict(
         naics=[
@@ -895,7 +928,7 @@ class SC(Translator, state='SC'):
         'Closure or Layoff': 'action',
         'Layoff/Closure': 'action',
         'NAICS Code': 'naics',
-        'url': 'url',
+        'url': ['url', 'artifacts'],
     }
     rewrites = dict(
         company=[
@@ -910,8 +943,12 @@ class SC(Translator, state='SC'):
         ],
         url=[
             (_r(r'^(/.*)$'), f'{base_url}\\1')
-        ]
+        ],
     )
+
+    def value_artifacts(self, value):
+        year = int(value.split('/')[-1][:4])
+        return {f'{year}.pdf': value}
 
     def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
         """
