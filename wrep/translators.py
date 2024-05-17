@@ -118,7 +118,7 @@ class Translator:
         try:
             data = dict(json.loads(value))
         except json.JSONDecodeError:
-            if value.endswith('.pdf') or value.endswith('.xslx'):
+            if value.endswith('.pdf') or value.endswith('.xlsx'):
                 data = {Path(value).name: value}
             else:
                 data = {}

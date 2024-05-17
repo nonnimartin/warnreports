@@ -3,9 +3,10 @@ from __future__ import annotations
 import base64
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Request
 from fastapi.responses import HTMLResponse
 from feedgen.feed import FeedGenerator
+from fastapi.templating import Jinja2Templates
 
 from .. import settings, utils
 from ..models import *
@@ -13,6 +14,7 @@ from ..search import *
 
 logger = utils.get_logger('feed')
 router = APIRouter()
+templates = Jinja2Templates(env=utils.jinja_env())
 
 def feed_query(fmt: str):
     async def query(
@@ -24,15 +26,15 @@ def feed_query(fmt: str):
         naics: int|None = None,
         employees: int|None = None,
     ) -> HTMLResponse:
-        params = dict(
+        form = dict(
             text=text,
             company=company,
             state=state,
             action=action,
             location=location,
             naics=naics,
-            employees_gt=employees - 1 if employees else None)
-        content = await build_feed(fmt, **params)
+            employees=employees)
+        content = await build_feed(fmt, **form)
         return HTMLResponse(content=content, media_type='text/xml')
     query.__name__ = fmt
     return query
@@ -63,7 +65,11 @@ async def build_feed(fmt: str, **kw) -> bytes:
     feed.language('en')
     feed.title(title)
     feed.description(title)
-    params = kw | dict(order='-reported')
+    params = dict(kw)
+    employees = params.pop('employees', None)
+    params.update(
+        order='-reported',
+        employees_gt=employees - 1 if employees else None)
     template = utils.get_template('reports/feed.jinja')
     for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
         entry = feed.add_entry(order='append')
@@ -74,6 +80,37 @@ async def build_feed(fmt: str, **kw) -> bytes:
         entry.updated(entry.published())
         entry.description(template.render(report=report))
     return getattr(feed, f'{fmt}_str')(pretty=True)
+
+@router.get('/', include_in_schema=False)
+async def feed_index(
+    req: Request,
+    text: str|None = None,
+    company: str|None = None,
+    state: StateCode|None = None,
+    location: str|None = None,
+    action: str|None = None,
+    naics: int|None = None,
+    employees: int|None = None,
+    limit: Limit = 50,
+    offset: Offset = 0) -> HTMLResponse:
+    form = dict(
+        text=text,
+        company=company,
+        state=state,
+        action=action,
+        location=location,
+        naics=naics,
+        employees=employees)
+    id = id_encode(**form)
+    params = dict(form)
+    params.pop('employees')
+    params.update(
+        order='-reported',
+        employees_gt=employees - 1 if employees else None)
+    permalinks = {fmt: id_permalink(id, fmt) for fmt in ('rss', 'atom')}
+    reports = await search(ReportData, params, limit, offset)
+    context = dict(reports=reports, permalinks=permalinks, form=form)
+    return templates.TemplateResponse(req, 'feed.jinja', context)
 
 def query_description(**kw) -> str:
     params = {k: v for k, v in kw.items() if v}

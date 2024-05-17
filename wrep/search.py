@@ -161,6 +161,17 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
         if self.reports_count_gt is not None:
             yield {'reports_count': {'$gt': self.reports_count_gt}}
 
+class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
+    collection_name: ClassVar = 'artifacts'
+
+    def get_filters(self):
+        if self.id:
+            yield {'_id': self.id}
+        for field in ('name', 'sha1'):
+            value = getattr(self, field)
+            if value:
+                yield {field: value}
+
 class NotFoundError(Exception):
     pass
 
@@ -168,7 +179,8 @@ filters: dict[type[DataModel], type[BaseSearch]] = {
     ReportData: MongoReportsFilter,
     StateDetail: MongoStatesFilter,
     CompanyDetail: MongoCompaniesFilter,
-    NaicsDetail: MongoNaicsFilter}
+    NaicsDetail: MongoNaicsFilter,
+    ArtifactDetail: MongoArtifactsFilter}
 
 async def search(
     model: type[DM],
@@ -224,6 +236,9 @@ search_indexes = dict(
         IndexModel({'title': 1}),
         IndexModel({'reports_count': 1}),
         IndexModel({'reports_count': -1}),
+    ],
+    artifacts=[
+        IndexModel({'name': 1}),
     ])
 
 async def search_init() -> None:
@@ -246,6 +261,7 @@ async def search_build() -> None:
     await mongo.companies.insert_many(it)
     it = map(NaicsDetail.as_doc, NaicsDetail.map_reduce())
     await mongo.naics.insert_many(it)
+    it = map(ArtifactDetail.as_doc, ArtifactDetail.map_reduce())
 
 actions = dict(
     init=search_init,
