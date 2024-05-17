@@ -1,6 +1,6 @@
 {%- for report in reports|default([report]) %}
 <div class="report-detail">
-    <h2>{{ report.company }} - {{ report.state }}</h2>
+    <h2>{{ report.company }}</h2>
     <table>
         <tbody>
             {%- if report.employees %}
@@ -55,7 +55,7 @@
             {%- endif %}
             {%- if report.artifacts %}
             <tr>
-                <th scope="row">Artifcts</th>
+                <th scope="row">Artifacts</th>
                 <td>
                     {%- with br=joiner ('<br>') %}
                     {%- for artifact in report.artifacts %}
