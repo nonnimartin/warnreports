@@ -241,48 +241,52 @@ class PipelineRunner:
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
         self.pipelines = list(map(Pipeline, self.states))
+        self.size = len(self.pipelines) * len(self.stages)
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
         self.grouping: tuple[list[Stage], ...] = [], [], []
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
+        self.logbackend = MongoPipelineLog()
 
     async def run(self) -> None:
-        start = utils.now()
+        self.start = utils.now()
+        self.jobseq = 0
         it = iter(self.grouping)
         if self.concurrent:
-            run_concurrently = self._run_concurrently
+            run_concurrently = self.run_concurrently
         else:
-            run_concurrently = self._run_consecutively
+            run_concurrently = self.run_consecutively
         await run_concurrently(*next(it))
-        await self._run_consecutively(*next(it))
+        await self.run_consecutively(*next(it))
         await run_concurrently(*next(it))
-        end = utils.now()
-        duration = (end - start).total_seconds()
-        extra = dict(
-            runner=dict(
-                id=self.id,
-                size=len(self.pipelines) * len(self.stages),
-                duration=duration,
-                start=start,
-                end=end))
-        await MongoPipelineLog().save(
-            run|extra for runs in self.runs.values() for run in runs)
 
-    async def _run_consecutively(self, *stages: Stage) -> None:
+    async def run_consecutively(self, *stages: Stage) -> None:
         for pipeline in self.pipelines:
-            await self._run_pipeline(pipeline, *stages)
+            await self.run_pipeline(pipeline, *stages)
 
-    async def _run_concurrently(self, *stages: Stage) -> None:
+    async def run_concurrently(self, *stages: Stage) -> None:
         for pipelines in batched(self.pipelines, 4):
             async with asyncio.TaskGroup() as group:
                 for pipeline in pipelines:
-                    group.create_task(self._run_pipeline(pipeline, *stages))
+                    group.create_task(self.run_pipeline(pipeline, *stages))
 
-    async def _run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
+    async def run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
         for stage in stages:
             start = utils.now()
             state = pipeline.state
-            res = dict(state=state, stage=stage)
+            res = dict(
+                state=state,
+                stage=stage,
+                jobseq=self.jobseq,
+                start=start)
+            self.jobseq += 1
+            res['runner'] = dict(
+                id=self.id,
+                start=self.start,
+                elapsed=(start - self.start).total_seconds(),
+                incremental=self.incremental,
+                concurrent=self.concurrent,
+                clean=self.clean or self.clean_only)
             if self._should_skip(state):
                 logger.info(f'{state}:{stage}:skip')
                 res.update(skip=True, nochange=True)
@@ -291,11 +295,10 @@ class PipelineRunner:
                 res.update(clean_only=True)
             else:
                 res.update(await pipeline.run(stage, clean=self.clean))
-                res.update(clean=self.clean)
             end = utils.now()
-            duration = (end - start).total_seconds()
-            res.update(duration=duration, start=start, end=end)
+            res.update(end=end, elapsed=(end - start).total_seconds())
             self.runs[pipeline.state].append(res)
+            await self.logbackend.save([res])
 
     def _should_skip(self, state: StateCode) -> bool:
         return bool(

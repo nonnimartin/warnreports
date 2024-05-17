@@ -61,6 +61,7 @@ class Translator:
                     entry[field] = value
         self.finish(entry, row)
         entry['id'] = self.entry_uuid(entry, row)
+        entry['values_id'] = self.values_hash_uuid(row)
         return entry
 
     def value(self, field: str, value: str) -> Any:
@@ -148,8 +149,13 @@ class Translator:
         return list(filter(None, it))
 
     def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
-        src = entry.get('report_id') or json.dumps(list(row.values()))
-        return uuid.uuid5(self.namespace, src)
+        src = entry.get('report_id')
+        if src:
+            return uuid.uuid5(self.namespace, src)
+        return self.values_hash_uuid(row)
+
+    def values_hash_uuid(self, row: dict[str, str]) -> uuid.UUID:
+        return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
 
     def __init_subclass__(cls, state: str|None = None) -> None:
         cls.rewrites = Translator.rewrites | cls.rewrites
