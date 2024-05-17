@@ -5,7 +5,7 @@ from uuid import UUID
 
 import click
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -35,13 +35,11 @@ async def report_view(req: Request, id: UUID) -> HTMLResponse:
     return templates.TemplateResponse(req, 'report.jinja', context)
 
 @app.get('/d/{id}', include_in_schema=False)
+@app.head('/d/{id}', include_in_schema=False)
 async def artifact_download(id: UUID) -> FileResponse:
-    try:
-        artifact: Artifact = Artifact.get_by_id(id)
-    except Artifact.DoesNotExist:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    artifact = await retrieve404(ArtifactDetail, id=id)
     path = Path(settings.ARTIFACTS_DIR, artifact.path)
-    return FileResponse(path, media_type=artifact.mimetype, filename=artifact.name)
+    return FileResponse(path, media_type=artifact.media_type, filename=artifact.name)
 
 def cmd(*args, **kw):
     if settings.DB_AUTO_MIGRATE:

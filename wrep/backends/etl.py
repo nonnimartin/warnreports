@@ -76,6 +76,9 @@ class SearchIndexBackend(StageBackend):
     @abstractmethod
     async def update_naics(self, source: Iterable[NaicsDetail]) -> tuple[int, int, int]: ...
 
+    @abstractmethod
+    async def update_artifacts(self, source: Iterable[ArtifactDetail]) -> tuple[int, int, int]: ...
+
 
 class MongoPipelineLog(PipelineLogBackend):
     mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
@@ -176,6 +179,8 @@ class MongoSearchIndex(SearchIndexBackend):
             coll = self.mongo.get_collection(name)
             if name == 'naics':
                 coro = coll.drop()
+            elif name == 'artifacts':
+                coro = coll.delete_many(dict(path={'$regex': f'^{self.state.lower()}/'}))
             else:
                 coro = coll.delete_many(dict(state=self.state))
             await coro
@@ -203,6 +208,11 @@ class MongoSearchIndex(SearchIndexBackend):
         def get_filter(inst: NaicsDetail):
             return dict(id=inst.id)
         return await self.update_collection('naics', source, get_filter)
+
+    async def update_artifacts(self, source):
+        def get_filter(inst: ArtifactDetail):
+            return dict(_id=inst.id)
+        return await self.update_collection('artifacts', source, get_filter)
 
     async def update_collection(self, name: str, source: Iterable[DM], get_filter: Callable[[DM], dict[str, Any]]) -> tuple[int, int, int]:
         coll = self.mongo.get_collection(name)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import re
+from abc import abstractmethod
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +27,7 @@ logger = utils.get_logger('models')
 
 __all__ = [
     'Artifact',
+    'ArtifactReport',
     'Company',
     'IntegrityError',
     'Naics',
@@ -39,6 +42,10 @@ class OrmModel(orm.Model):
     class Meta:
         database = db
 
+    @classmethod
+    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+        return cls.select()
+
 class Report(OrmModel):
     id = orm.UUIDField(primary_key=True)
     company = orm.CharField(max_length=512, index=True)
@@ -52,31 +59,14 @@ class Report(OrmModel):
     url = orm.CharField(max_length=2083, null=True)
 
     @classmethod
-    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
-        q = cls.select(NaicsReport, Naics, Artifact, cls)
+    def select_for_reduce(cls):
+        q = cls.select(NaicsReport, Naics, ArtifactReport, Artifact, cls)
         q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
         q = q.join_from(NaicsReport, Naics, orm.JOIN['LEFT_OUTER'])
-        q = q.join_from(cls, Artifact, orm.JOIN['LEFT_OUTER'])
+        q = q.join_from(cls, ArtifactReport, orm.JOIN['LEFT_OUTER'])
+        q = q.join_from(ArtifactReport, Artifact, orm.JOIN['LEFT_OUTER'])
         q = q.order_by(cls.id, Naics.id, Artifact.id)
         return q
-
-class Artifact(OrmModel):
-    id = orm.UUIDField(primary_key=True)
-    report = orm.ForeignKeyField(Report, on_delete='CASCADE')
-    path = orm.CharField(max_length=2083)
-    url = orm.CharField(max_length=2083)
-    created = orm.DateTimeField(index=True, default=utils.now)
-    modified = orm.DateTimeField(index=True, default=utils.now)
-    mimetype = orm.CharField(max_length=255)
-    size = orm.BigIntegerField()
-    sha1 = orm.CharField(max_length=40)
-
-    @property
-    def name(self):
-        return Path(self.path).name
-
-    class Meta:
-        indexes = [(('path', 'report'), True)]
 
 class StateStat(OrmModel):
     id = orm.CharField(max_length=2, primary_key=True)
@@ -94,8 +84,13 @@ class Company(OrmModel):
     state = orm.CharField(max_length=2, index=True)
 
     @classmethod
-    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
-        return Report.select().order_by(Report.state, Report.company)
+    def select_for_reduce(cls):
+        q = cls.select(Report, cls)
+        q = q.join_from(cls, Report, orm.JOIN['LEFT_OUTER'], on=(
+            (cls.company == Report.company) &
+            (cls.state == Report.state)))
+        q = q.order_by(cls.state, cls.company)
+        return q
 
     class Meta:
         indexes = [(('company', 'state'), True)]
@@ -106,7 +101,7 @@ class Naics(OrmModel):
     title = orm.CharField(max_length=255, index=True)
 
     @classmethod
-    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+    def select_for_reduce(cls):
         q = cls.select(NaicsReport, Report, cls)
         q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
         q = q.join_from(NaicsReport, Report, orm.JOIN['LEFT_OUTER'])
@@ -120,9 +115,50 @@ class NaicsReport(OrmModel):
     class Meta:
         indexes = [(('naics', 'report'), True)]
 
+class Artifact(OrmModel):
+    id = orm.UUIDField(primary_key=True)
+    path = orm.CharField(max_length=2083, unique=True)
+    url = orm.CharField(max_length=2083)
+    created = orm.DateTimeField(index=True, default=utils.now)
+    modified = orm.DateTimeField(index=True, default=utils.now)
+    mimetype = orm.CharField(max_length=255)
+    size = orm.BigIntegerField()
+    sha1 = orm.CharField(max_length=40)
+
+    @property
+    def name(self):
+        return Path(self.path).name
+
+    @classmethod
+    def select_for_reduce(cls):
+        q = cls.select(ArtifactReport, Report, cls)
+        q = q.join_from(cls, ArtifactReport, orm.JOIN['LEFT_OUTER'])
+        q = q.join_from(ArtifactReport, Report, orm.JOIN['LEFT_OUTER'])
+        q = q.order_by(cls.id)
+        return q
+
+    def self_update(self) -> None:
+        file = Path(settings.ARTIFACTS_DIR, self.path)
+        with file.open('rb') as f:
+            digest = hashlib.file_digest(f, 'sha1')
+        stat = file.stat()
+        self.size = stat.st_size
+        self.modified = datetime.fromtimestamp(stat.st_mtime)
+        self.mimetype = utils.get_mimetype(file)
+        self.sha1 = digest.hexdigest()
+
+class ArtifactReport(OrmModel):
+    artifact = orm.ForeignKeyField(Artifact, on_delete='CASCADE')
+    report = orm.ForeignKeyField(Report, on_delete='CASCADE')
+
+    class Meta:
+        indexes = [(('artifact', 'report'), True)]
+
 # ----------------------------
 
 __all__ += [
+    'ArtifactData',
+    'ArtifactDetail',
     'CompanyDetail',
     'CompanyName',
     'DataModel',
@@ -132,13 +168,13 @@ __all__ += [
     'NaicsDetail',
     'Offset',
     'PageNumber',
-    'ReportArtifact',
     'ReportData',
     'StateCode',
     'StateDetail',
     'ValidationError']
 
 DM = TypeVar('DM', bound='DataModel')
+OM = TypeVar('OM', bound=OrmModel)
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
@@ -153,7 +189,31 @@ class DataModel(DataModel):
     def as_doc(self) -> dict[str, Any]:
         return self.model_dump(by_alias=True)
 
-class ReportData(DataModel):
+class MapReducingModel(DataModel, Generic[OM]):
+    orm_model: ClassVar[type[OM]]
+
+    @classmethod
+    def map_reduce(cls, it: Iterable[OM]|None = None) -> Iterator[Self]:
+        if it is None:
+            it = cls.orm_model.select_for_reduce()
+        inst: Self|None = None
+        for obj in it:
+            if inst is None or not inst.equals_obj(obj):
+                if inst:
+                    yield inst
+                inst = cls.model_validate(obj)
+                memo = defaultdict(set)
+            inst.reduce_obj(obj, memo)
+        if inst:
+            yield inst
+
+    def equals_obj(self, obj: OM) -> bool:
+        return self.id == obj.id
+
+    @abstractmethod
+    def reduce_obj(self, obj: OM, memo: dict[str, set]) -> None: ...
+
+class ReportData(MapReducingModel[Report]):
     id: UUID = Field(alias='_id')
     company: CompanyName
     state: StateCode
@@ -164,41 +224,27 @@ class ReportData(DataModel):
     action: str|None
     url: str|None
     naics: list[NaicsData] = Field(default_factory=list)
-    artifacts: list[ReportArtifact] = Field(default_factory=list)
+    artifacts: list[ArtifactData] = Field(default_factory=list)
+    orm_model: ClassVar = Report
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
-    @classmethod
-    def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
-        if it is None:
-            it = Report.select_for_reduce()
-        inst: Self|None = None
-        for report in it:
-            if inst is None or inst.id != report.id:
-                if inst:
-                    yield inst
-                inst = cls.model_validate(report)
-                memo = defaultdict(set)
-            inst.reduce_obj(report, memo)
-        if inst:
-            yield inst
-
-    def reduce_obj(self, report: Report, memo: dict[str, set]) -> None:
-        nr: NaicsReport|None = getattr(report, 'naicsreport', None)
+    def reduce_obj(self, obj: Report, memo: dict[str, set]) -> None:
+        nr: NaicsReport|None = getattr(obj, 'naicsreport', None)
         if nr and nr.naics not in memo['naics']:
             naics = NaicsData.model_validate(nr.naics)
             self.naics.append(naics)
             memo['naics'].add(nr.naics)
-        art: Artifact|None = getattr(report, 'artifact', None)
-        if art and art.id not in memo['artifacts']:
-            artifact = ReportArtifact.model_validate(art)
+        ar: ArtifactReport|None = getattr(obj, 'artifactreport', None)
+        if ar and ar.artifact not in memo['artifacts']:
+            artifact = ArtifactData.model_validate(ar.artifact)
             self.artifacts.append(artifact)
-            memo['artifacts'].add(art.id)
+            memo['artifacts'].add(ar.artifact)
 
     @field_serializer('reported', 'starting')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
         return tzreplace(dt, zoneinfos[self.state])
 
-class ReportArtifact(DataModel):
+class ArtifactData(DataModel):
     id: UUID = Field(alias='_id')
     url: str
     name: str
@@ -207,68 +253,69 @@ class ReportArtifact(DataModel):
     sha1: str
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
+class ArtifactDetail(ArtifactData, MapReducingModel[Artifact]):
+    path: str
+    reports_count: int = 0
+    orm_model: ClassVar = Artifact
+
+    def reduce_obj(self, obj, memo) -> None:
+        ar: ArtifactReport|None = getattr(obj, 'artifactreport', None)
+        if ar and ar.report not in memo['reports']:
+            self.reports_count += 1
+            memo['reports'].add(ar.report)
+
 class NaicsData(DataModel):
     id: int
     code: str
     title: str
     model_config = ConfigDict(from_attributes=True)
 
-class NaicsDetail(NaicsData):
+class NaicsDetail(NaicsData, MapReducingModel[Naics]):
     reports_count: int = 0
+    orm_model: ClassVar = Naics
 
-    @classmethod
-    def map_reduce(cls) -> Iterator[Self]:
-        inst: Self|None = None
-        for naics in Naics.select_for_reduce():
-            if inst is None or inst.id != naics.id:
-                if inst:
-                    yield inst
-                inst = cls.model_validate(naics)
-            inst.reduce_obj(naics)
-        if inst:
-            yield inst
-
-    def reduce_obj(self, naics: Naics) -> None:
-        self.reports_count += 1
+    def reduce_obj(self, obj, memo) -> None:
+        nr: NaicsReport|None = getattr(obj, 'naicsreport', None)
+        if nr and nr.report not in memo['reports']:
+            self.reports_count += 1
+            memo['reports'].add(nr.report)
 
 class StateDetail(DataModel):
     state: StateCode = Field(alias='id')
     last_reported: datetime|None = None
     reports_count: int = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+    tzreplace = field_serializer('last_reported')(ReportData.tzreplace)
 
-    @field_serializer('last_reported')
-    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
-        return tzreplace(dt, zoneinfos[self.state])
-
-class CompanyDetail(DataModel):
+class CompanyDetail(MapReducingModel[Company]):
     company: str
     state: StateCode
     reports_count: int = 0
     last_reported: datetime|None = None
+    orm_model: ClassVar = Company
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+    tzreplace = field_serializer('last_reported')(ReportData.tzreplace)
 
-    @classmethod
-    def map_reduce(cls, it: Iterable[Report]|None = None) -> Iterator[Self]:
-        if it is None:
-            it = Company.select_for_reduce()
-        inst: Self|None = None
-        for report in it:
-            if inst is None or inst.state != report.state or inst.company != report.company:
-                if inst:
-                    yield inst
-                inst = cls.model_validate(report)
-            inst.reduce_obj(report)
-        if inst:
-            yield inst
+    def reduce_obj(self, obj, memo):
+        report: Report = getattr(obj, 'report', None)
+        if report and report not in memo['reports']:
+            self.reports_count += 1
+            self.last_reported = max(filter(None, (self.last_reported, report.reported)))
+            memo['reports'].add(report)
 
-    def reduce_obj(self, report: Report) -> None:
-        self.reports_count += 1
-        self.last_reported = max(filter(None, (self.last_reported, report.reported)))
+    def equals_obj(self, obj):
+        return self.state == obj.state and self.company == obj.company
+
 
 # ----------------------------
 
-__all__ += ['FilterModel', 'ReportsFilter', 'NaicsFilter', 'StatesFilter', 'CompaniesFilter']
+__all__ += [
+    'FilterModel',
+    'ReportsFilter',
+    'NaicsFilter',
+    'StatesFilter',
+    'CompaniesFilter',
+    'ArtifactsFilter']
 
 class FilterModel(DataModel, Generic[DM]):
     order: str|None = None
@@ -344,11 +391,19 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     order_fields: ClassVar = {'id', 'code', 'title', 'reports_count'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
+class ArtifactsFilter(FilterModel[ArtifactDetail]):
+    id: UUID|None = None
+    sha1: str|None = None
+    name: str|None = None
+    result_model: ClassVar = ArtifactDetail
+    order_fields: ClassVar = {'name'}
+    default_ordering: ClassVar = [('name', 1)]
+
 # ----------------------------
 
 def migrate() -> None:
     with db.atomic():
-        db.create_tables([Report, Company, StateStat, Naics, NaicsReport, Artifact])
+        db.create_tables([Report, Company, StateStat, Naics, NaicsReport, Artifact, ArtifactReport])
     if not Naics.select().count():
         load_naics()
 
