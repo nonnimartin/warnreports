@@ -162,11 +162,13 @@ class MongoTranslation(MongoETBase, TranslationBackend):
             count += 1
             entry = translator.entry(row)
             entry.update(state=self.state, row=row)
-            await self.collection.replace_one(dict(id=entry['id']), entry, True)
+            filt = {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
+            await self.collection.replace_one(filt, entry, True)
         return count
 
     indexes = [
         IndexModel({'id': 'hashed'}),
+        IndexModel({'values_id': 'hashed'}),
         IndexModel({'id': 1}),
         IndexModel({'state': 'hashed'}),
     ]
