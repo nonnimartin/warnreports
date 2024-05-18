@@ -11,6 +11,7 @@ from . import settings, utils
 from .backends.etl import *
 from .models import *
 from .models import db
+from .ref import normls
 from .scrapers import scrapers
 from .translators import translators
 
@@ -76,16 +77,7 @@ class Pipeline:
             Report.delete().where(Report.state == self.state).execute()
             StateStat.delete().where(StateStat.id == self.state).execute()
             Artifact.delete().where(Artifact.path.startswith(f'{self.state.lower()}/')).execute()
-            q = (
-                Company
-                .delete()
-                .where(
-                    Company.id.in_(
-                        Company
-                        .select(Company.id)
-                        .join(Report, on=(Report.company == Company.name))
-                        .where(Report.state == self.state))))
-            q.execute()
+            Company.delete().where(self.get_companies_pred()).execute()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
@@ -157,12 +149,7 @@ class Pipeline:
         companies = CompanyDetail.map_reduce((
             Company
             .select_for_reduce()
-            .where(
-                Company.name.in_((
-                    Company
-                    .select(Company.name)
-                    .join(Report, on=(Company.name == Report.company))
-                    .where(Report.state == self.state))))))
+            .where(self.get_companies_pred())))
         await backend.update_companies(companies)
         await backend.update_naics(NaicsDetail.map_reduce())
         artifacts = ArtifactDetail.map_reduce((
@@ -189,6 +176,7 @@ class Pipeline:
         industry = record.pop('industry', None)
         artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
+        record['company_norm'] = normls.company_name(record['company'])
         for field, value in record.items():
             if save is save.Create or getattr(report, field) != value:
                 setattr(report, field, value)
@@ -202,7 +190,9 @@ class Pipeline:
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
             save = artifacts_save
-        Company.get_or_create(name=report.company)
+        Company.get_or_create(
+            name_norm=record['company_norm'],
+            defaults=dict(name=record['company']))
         return save
 
     def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
@@ -277,6 +267,13 @@ class Pipeline:
             save = save.Update
             ArtifactReport.insert_many(add).execute()
         return save
+
+    def get_companies_pred(self):
+        return Company.id.in_(
+            Company
+            .select(Company.id)
+            .join(Report, on=(Report.company_norm == Company.name_norm))
+            .where(Report.state == self.state))
 
     def from_json(self, field: str, value: Any) -> Any:
         if field in self.json_types:

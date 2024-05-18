@@ -46,6 +46,7 @@ services:
       ME_CONFIG_MONGODB_ADMINPASSWORD: wrep
       ME_CONFIG_MONGODB_URL: mongodb://root:wrep@mongo:27017/
       ME_CONFIG_BASICAUTH: false
+      ME_CONFIG_OPTIONS_FULLWIDTH_LAYOUT: true
 
   pgadmin:
     image: docker.io/dpage/pgadmin4

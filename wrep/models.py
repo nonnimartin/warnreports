@@ -5,6 +5,7 @@ import re
 from abc import abstractmethod
 from collections import defaultdict
 from datetime import datetime
+from itertools import batched
 from pathlib import Path
 from typing import (Annotated, Any, ClassVar, Generic, Iterable, Iterator,
                     Literal, Self, TypeAlias, TypeVar)
@@ -22,7 +23,7 @@ from pydantic_core import ValidationError as ValidationError
 
 from . import settings, utils
 from .ref.tz import zoneinfos
-
+from .ref import normls
 logger = utils.get_logger('models')
 
 __all__ = [
@@ -60,6 +61,7 @@ class Report(OrmModel):
     employees = orm.IntegerField(null=True)
     action = orm.CharField(max_length=64, null=True)
     url = orm.CharField(max_length=2083, null=True)
+    company_norm = orm.CharField(max_length=512, index=True)
 
     @classmethod
     def select_for_reduce(cls):
@@ -86,12 +88,13 @@ class StateStat(OrmModel):
 class Company(OrmModel):
     id = orm.UUIDField(primary_key=True, default=uuid4)
     name = orm.CharField(max_length=512, unique=True)
+    name_norm = orm.CharField(max_length=512, unique=True)
 
     @classmethod
     def select_for_reduce(cls):
         return (cls
             .select(Report, NaicsReport, Naics, cls)
-            .join(Report, LEFT_OUTER, on=(cls.name == Report.company))
+            .join(Report, LEFT_OUTER, on=(Report.company_norm == cls.name_norm))
             .join(NaicsReport, LEFT_OUTER)
             .join(Naics, LEFT_OUTER)
             .order_by(cls.name, Report.state, Naics.id))
@@ -107,7 +110,7 @@ class Naics(OrmModel):
             .select(NaicsReport, Report, cls)
             .join(NaicsReport, LEFT_OUTER)
             .join(Report, LEFT_OUTER)
-            .join(Company, LEFT_OUTER, on=(Report.company == Company.name))
+            .join(Company, LEFT_OUTER, on=(Report.company_norm == Company.name_norm))
             .order_by(cls.id))
 
 class NaicsReport(OrmModel):
@@ -306,6 +309,7 @@ class CompanyDetail(MapReducingModel[Company]):
     naics: list[NaicsData] = Field(default_factory=list)
     reports_count: int = 0
     last_reported: datetime|None = None
+    employees_sum: int = 0
     orm_model: ClassVar = Company
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
@@ -313,6 +317,8 @@ class CompanyDetail(MapReducingModel[Company]):
         report: Report = getattr(obj, 'report', None)
         if report and report not in memo['reports']:
             self.reports_count += 1
+            if report.employees:
+                self.employees_sum += report.employees
             self.last_reported = max(filter(None, (self.last_reported, report.reported)))
             memo['reports'].add(report)
             if report.state not in memo['states']:
@@ -392,10 +398,12 @@ class CompaniesFilter(FilterModel[CompanyDetail]):
     naics: int|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
+    employees_sum_gt: int|None = None
+    employees_sum_lt: int|None = None
     last_reported_after: datetime|None = None
     last_reported_before: datetime|None = None
     result_model: ClassVar = CompanyDetail
-    order_fields: ClassVar = {'name', 'reports_count', 'last_reported'}
+    order_fields: ClassVar = {'name', 'reports_count', 'last_reported', 'employees_sum'}
     default_ordering: ClassVar = [('name', 1)]
 
 class NaicsFilter(FilterModel[NaicsDetail]):
@@ -422,12 +430,21 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
 # ----------------------------
 
 def migrate() -> None:
+    import playhouse.migrate
+    if isinstance(db, orm.SqliteDatabase):
+        migrator = playhouse.migrate.SqliteMigrator(db)
+    else:
+        migrator = playhouse.migrate.PostgresqlMigrator(db)
     with db.atomic():
-        if 'company' in db.get_tables():
+
+        tables = set(db.get_tables())
+
+        if 'company' in tables:
             cols = {col.name: col for col in db.get_columns('company')}
             needed = (
                 'state' in cols or
                 'company' in cols or
+                'name_norm' not in cols or
                 cols['id'].data_type != 'uuid')
             if needed:
                 db.execute_sql('DROP TABLE IF EXISTS company_tmp')
@@ -435,11 +452,25 @@ def migrate() -> None:
                 db.create_tables([Company])
                 col = 'company' if 'company' in cols else 'name'
                 cur = db.execute_sql(f'SELECT {col} FROM company_tmp')
-                try:
-                    Company.insert_from(cur, ['name']).on_conflict('IGNORE').execute()
-                except orm.Insert.DefaultValuesException:
-                    pass
+                if cur.rowcount:
+                    it = (x[0] for x in cur)
+                    it = ((name, normls.company_name(name)) for name in it)
+                    Company.insert_from(it, ['name', 'name_norm']).on_conflict('IGNORE').execute()
                 db.execute_sql('DROP TABLE company_tmp')
+
+        if 'report' in tables:
+            cols = {col.name: col for col in db.get_columns('report')}
+            needed = 'company_norm' not in cols
+            if needed:
+                field = orm.CharField(max_length=512, default='', index=True)
+                op = migrator.add_column('report', 'company_norm', field)
+                playhouse.migrate.migrate(op)
+                for batch in batched(Report.select(Report.id, Report.company), 1000):
+                    reports = list(batch)
+                    for report in reports:
+                        report.company_norm = normls.company_name(report.company).lower()
+                    Report.bulk_update(reports, ['company_norm'])
+
         db.create_tables([
             Company,
             Report,

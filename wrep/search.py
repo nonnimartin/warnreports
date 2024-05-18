@@ -150,6 +150,10 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
             yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:
             yield {'reports_count': {'$gt': self.reports_count_gt}}
+        if self.employees_sum_lt is not None:
+            yield {'employees_sum': {'$lt': self.employees_sum_lt}}
+        if self.employees_sum_gt is not None:
+            yield {'employees_sum': {'$gt': self.employees_sum_gt}}
         if self.last_reported_before:
             yield {'last_reported': {'$lt': self.last_reported_before}}
         if self.last_reported_after:
