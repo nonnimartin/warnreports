@@ -762,8 +762,15 @@ class ME(Translator, state='ME'):
     }
 
 class MI(Translator, state='MI'):
-    # TODO
-    headermap = {}
+    default_url = 'https://milmi.org/warn/'
+
+    headermap = {
+        'Company Name': 'company',
+        'City': 'location',
+        'Date Received': 'reported',
+        'Incident Type': 'action',
+        'Number of Layoffs': 'empoloyees'
+    }
 
 class MO(Translator, state='MO'):
     default_url = 'https://jobs.mo.gov/warn/'
@@ -780,20 +787,47 @@ class MO(Translator, state='MO'):
     }
 
 class MT(Translator, state='MT'):
-    # TODO
-    headermap = {}
+    default_url = 'https://wsd.dli.mt.gov/wioa/related-links/warn-notice-page'
+    headermap = {
+        'Date of Notice' : 'reported',
+        'Name of Company': 'company',
+        'County': 'location',
+        'Date of Impact': 'starting',
+        'Number of Employees Affected': 'employees',
+    }
 
 class NE(Translator, state='NE'):
-    # TODO
-    headermap = {}
+    default_url = 'https://dol.nebraska.gov/ReemploymentServices/LayoffServices/LayoffsAndDownsizingWARN'
+    headermap = {
+        'Date': 'reported',
+        'Company': 'company',
+        'Type': 'action',
+        'Jobs Affected': 'employees',
+        'City' : 'location',
+        'Location' : 'location',
+    }
 
 class NJ(Translator, state='NJ'):
-    # TODO
-    headermap = {}
+    default_url = 'https://www.nj.gov/labor/assets/PDFs/WARN/2024_WARN_Notice_Archive.pdf'
+    headermap = {
+        'Company': 'company',
+        'City': 'location',
+        'Month Posted': 'reported',
+        'Effective Date': 'starting',
+        'Workforce Affected': 'employees',
+    }
 
 class NM(Translator, state='NM'):
-    # TODO
-    headermap = {}
+    default_url = 'https://www.dws.state.nm.us/Portals/0/DM/Business/2024_WARN.pdf'
+    headermap = {
+        'NOTICE DATE' : 'reported',
+        'JOB SITE NAME' : 'company',
+        'COUNTY NAME' : 'location',
+        'TOTAL LAYOFF NUMBER' : 'employees',
+        'LAYOFF DATE': 'starting',
+        'LAYOFF DATE': 'reported',
+        'CITY NAME': 'location',
+    }
 
 class NY(Translator, state='NY'):
     default_url = 'https://dol.ny.gov/warn-notices'
@@ -839,18 +873,26 @@ class NY(Translator, state='NY'):
     )
 
 class OH(Translator, state='OH'):
-    # TODO
-    headermap = {}
+    default_url = ''
+    headermap = {
+        'Company' : 'company',
+        'Potential Number Affected' : 'employees',
+        'Date Received' : 'reported',
+        'URL' : 'url',
+        'City/County' : 'location',
+        'Layoff Date(s)': 'starting',
+        'Notice ID' : 'report_id',
+    }
 
 class OK(Translator, state='OK'):
     default_url = 'https://okjobmatch.com/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': 'reported',
-        'city': 'location',
+        'city' : 'location',
         'number_of_employees_affected': 'employees',
-        'warn_type': 'action',
-        'detail_page_url': 'url'
+        'warn_type' : 'action',
+        'detail_page_url' : 'url'
     }
     rewrites = dict(
         company=[
@@ -965,12 +1007,29 @@ class SC(Translator, state='SC'):
         super().finish(entry, row)
 
 class SD(Translator, state='SD'):
-    # TODO
-    headermap = {}
+    default_url = 'https://dlr.sd.gov/workforce_services/businesses/warn_notices.aspx'
+    headermap = {
+        'Company' : 'company',
+        'Location' : 'location',
+        'Date Received' : 'reported',
+        'Employees Affected' : 'employees',
+
+    }
 
 class TN(Translator, state='TN'):
-    # TODO
-    headermap = {}
+    default_url = 'https://www.tn.gov/workforce/general-resources/major-publications0/major-publications-redirect/reports.html'
+    headermap = {
+        'Notice Date': 'reported',
+        'Company' : 'company',
+        'City' : 'location',
+        'Effective Date' : 'starting',
+        'Received Date' : 'reported',
+        'Notice Date' : 'reported',
+        'County' : 'location',
+        'No. Of Employees': 'affected',
+        'Layoff/Closure': 'action',
+        'WARN#': 'report_id',
+    }
 
 class TX(Translator, state='TX'):
     default_url = 'https://www.twc.texas.gov/data-reports/warn-notice'
@@ -1055,8 +1114,16 @@ class VT(Translator, state='VT'):
     }
 
 class WA(Translator, state='WA'):
-    # TODO
-    headermap = {}
+    headermap = {
+        'Company' : 'company',
+        '# of Workers' : 'employees',
+        'Layoff Start Date' : 'starting',
+        'Closure Layoff' : 'action',
+        'Type of Layoff' : 'action',
+        'Location' : 'location',
+        'Received Date' : 'reported'
+
+    }
 
 class WI(Translator, state='WI'):
     default_url = 'https://dwd.wisconsin.gov/dislocatedworker/warn/'
