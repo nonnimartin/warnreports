@@ -315,9 +315,15 @@ class PipelineRunner:
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
         self.logbackend = MongoPipelineLog()
+        self.info = dict(
+            id=self.id,
+            incremental=self.incremental,
+            concurrent=self.concurrent,
+            clean=self.clean or self.clean_only)
 
     async def run(self) -> None:
         self.start = utils.now()
+        self.info.update(start=self.start)
         self.jobseq = 0
         it = iter(self.grouping)
         if self.concurrent:
@@ -342,19 +348,9 @@ class PipelineRunner:
         for stage in stages:
             start = utils.now()
             state = pipeline.state
-            res = dict(
-                state=state,
-                stage=stage,
-                jobseq=self.jobseq,
-                start=start)
+            res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
             self.jobseq += 1
-            res['runner'] = dict(
-                id=self.id,
-                start=self.start,
-                elapsed=(start - self.start).total_seconds(),
-                incremental=self.incremental,
-                concurrent=self.concurrent,
-                clean=self.clean or self.clean_only)
+            res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
             if self._should_skip(state):
                 logger.info(f'{state}:{stage}:skip')
                 res.update(skip=True, nochange=True)

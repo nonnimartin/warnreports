@@ -31,7 +31,7 @@ services:
     ports: [127.0.0.1:8000:8000]
     environment:
       UVICORN_RELOAD: 'true'
-      MONGODB_URL: mongodb://root:wrep@mongo:27017/
+      MONGODB_URL: &mongourl mongodb://root:wrep@mongo:27017/
       DB_URL: ${DB_URL:-postgresql://wrep@postgres/wrep}
     command: ./scripts/wait-for-it.sh -h postgres -p 5432 -t 0 -- wrep main
     depends_on:
@@ -44,7 +44,7 @@ services:
     environment:
       ME_CONFIG_MONGODB_ADMINUSERNAME: root
       ME_CONFIG_MONGODB_ADMINPASSWORD: wrep
-      ME_CONFIG_MONGODB_URL: mongodb://root:wrep@mongo:27017/
+      ME_CONFIG_MONGODB_URL: *mongourl
       ME_CONFIG_BASICAUTH: false
       ME_CONFIG_OPTIONS_FULLWIDTH_LAYOUT: true
 

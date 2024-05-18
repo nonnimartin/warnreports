@@ -284,6 +284,7 @@ async def search_build() -> None:
     it = map(NaicsDetail.as_doc, NaicsDetail.map_reduce())
     await mongo.naics.insert_many(it)
     it = map(ArtifactDetail.as_doc, ArtifactDetail.map_reduce())
+    await mongo.artifacts.insert_many(it)
 
 actions = dict(
     init=search_init,
