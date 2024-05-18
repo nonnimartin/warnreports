@@ -167,11 +167,6 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
             yield self.get_naics_filter(self.prefix, prefix='')
         if self.title:
             yield {'title': {'$regex': self.wc_contains(self.title)}}
-        if self.text:
-            yield {
-                '$or': [
-                    {'code': {'$regex': self.wc_startswith(str(self.text))}},
-                    {'title': {'$regex': self.wc_contains(self.text)}}]}
         if self.reports_count_lt is not None:
             yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:

@@ -403,7 +403,6 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     code: int|None = None
     prefix: int|None = None
     title: str|None = None
-    text: str|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
     companies_count_gt: int|None = None
