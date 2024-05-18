@@ -123,8 +123,8 @@ class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
     collection_name: ClassVar = 'states'
 
     def get_filters(self):
-        if self.state:
-            yield {'state': self.state.upper()}
+        if self.id:
+            yield {'id': self.id.upper()}
         if self.reports_count_lt is not None:
             yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:
@@ -146,8 +146,6 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
             yield {'states': self.state.upper()}
         if self.naics:
             yield self.get_naics_filter(self.naics)
-        if self.text:
-            yield {'$text': {'$search': self.text}}
         if self.reports_count_lt is not None:
             yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:
@@ -249,7 +247,7 @@ search_indexes = dict(
         IndexModel({'reports_count': -1}),
     ],
     states=[
-        IndexModel({'state': 'hashed'}),
+        IndexModel({'id': 'hashed'}),
         IndexModel({'last_reported': -1}),
         IndexModel({'reports_count': -1}),
     ],

@@ -294,11 +294,10 @@ class NaicsDetail(NaicsData, MapReducingModel[Naics]):
                 memo['companies'].add(company)
 
 class StateDetail(DataModel):
-    state: StateCode = Field(alias='id')
+    id: StateCode
     last_reported: datetime|None = None
     reports_count: int = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
-    tzreplace = field_serializer('last_reported')(ReportData.tzreplace)
 
 class CompanyDetail(MapReducingModel[Company]):
     id: UUID = Field(alias='_id')
@@ -377,18 +376,17 @@ class ReportsFilter(FilterModel[ReportData]):
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
 
 class StatesFilter(FilterModel[StateDetail]):
-    state: StateCode|None = None
+    id: StateCode|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
     last_reported_after: datetime|None = None
     last_reported_before: datetime|None = None
     result_model: ClassVar = StateDetail
-    order_fields: ClassVar = {'state', 'reports_count', 'last_reported'}
-    default_ordering: ClassVar = [('state', 1)]
+    order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
+    default_ordering: ClassVar = [('id', 1)]
 
 class CompaniesFilter(FilterModel[CompanyDetail]):
     id: UUID|None = None
-    text: str|None = None
     name: CompanyName|None = None
     state: StateCode|None = None
     naics: int|None = None
