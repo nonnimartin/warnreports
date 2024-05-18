@@ -79,6 +79,15 @@ class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
     def wc_startswith(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
         return re.compile(f'^{re.escape(text)}.*', flags)
 
+    @classmethod
+    def get_naics_filter(cls, naics: int, prefix: str = 'naics'):
+        if prefix:
+            prefix = prefix.removesuffix('.') + '.'
+        return {
+                '$or': [
+                    {f'{prefix}code': {'$regex': cls.wc_startswith(str(naics))}},
+                    {f'{prefix}id': naics}]}
+
 class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
     collection_name: ClassVar = 'reports'
 
@@ -94,10 +103,7 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
         if self.location:
             yield {'location': {'$regex': self.wc_contains(self.location)}}
         if self.naics:
-            yield {
-                '$or': [
-                    {'naics.code': {'$regex': self.wc_startswith(str(self.naics))}},
-                    {'naics.id': self.naics}]}
+            yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
         if self.reported_before:
@@ -117,8 +123,8 @@ class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
     collection_name: ClassVar = 'states'
 
     def get_filters(self):
-        if self.state:
-            yield {'state': self.state.upper()}
+        if self.id:
+            yield {'id': self.id.upper()}
         if self.reports_count_lt is not None:
             yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:
@@ -132,9 +138,22 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
     collection_name: ClassVar = 'companies'
 
     def get_filters(self):
-        if self.company:
-            yield {'company': {'$regex': self.wc_contains(self.company)}}
-        yield from MongoStatesFilter.get_filters(self)
+        if self.id:
+            yield {'_id': self.id}
+        if self.name:
+            yield {'name': {'$regex': self.wc_contains(self.name)}}
+        if self.state:
+            yield {'states': self.state.upper()}
+        if self.naics:
+            yield self.get_naics_filter(self.naics)
+        if self.reports_count_lt is not None:
+            yield {'reports_count': {'$lt': self.reports_count_lt}}
+        if self.reports_count_gt is not None:
+            yield {'reports_count': {'$gt': self.reports_count_gt}}
+        if self.last_reported_before:
+            yield {'last_reported': {'$lt': self.last_reported_before}}
+        if self.last_reported_after:
+            yield {'last_reported': {'$gt': self.last_reported_after}}
 
 class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
     collection_name: ClassVar = 'naics'
@@ -145,21 +164,17 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
         if self.code is not None:
             yield {'code': self.code}
         if self.prefix:
-            yield {
-                '$or': [
-                    {'code': {'$regex': self.wc_startswith(str(self.prefix))}},
-                    {'id': self.prefix}]}
+            yield self.get_naics_filter(self.prefix, prefix='')
         if self.title:
             yield {'title': {'$regex': self.wc_contains(self.title)}}
-        if self.text:
-            yield {
-                '$or': [
-                    {'code': {'$regex': self.wc_startswith(str(self.text))}},
-                    {'title': {'$regex': self.wc_contains(self.text)}}]}
         if self.reports_count_lt is not None:
             yield {'reports_count': {'$lt': self.reports_count_lt}}
         if self.reports_count_gt is not None:
             yield {'reports_count': {'$gt': self.reports_count_gt}}
+        if self.companies_count_lt is not None:
+            yield {'companies_count': {'$lt': self.companies_count_lt}}
+        if self.companies_count_gt is not None:
+            yield {'companies_count': {'$gt': self.companies_count_gt}}
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
     collection_name: ClassVar = 'artifacts'
@@ -217,15 +232,17 @@ search_indexes = dict(
         IndexModel({'state': 'hashed'}),
     ],
     companies=[
-        IndexModel({'company': 1}),
-        IndexModel({'state': 'hashed'}),
+        IndexModel({'name': 1}),
+        IndexModel({'states': 1}),
+        IndexModel({'naics.code': 1}),
+        IndexModel({'naics.id': 1}),
         IndexModel({'last_reported': 1}),
         IndexModel({'last_reported': -1}),
         IndexModel({'reports_count': 1}),
         IndexModel({'reports_count': -1}),
     ],
     states=[
-        IndexModel({'state': 'hashed'}),
+        IndexModel({'id': 'hashed'}),
         IndexModel({'last_reported': -1}),
         IndexModel({'reports_count': -1}),
     ],
@@ -234,6 +251,7 @@ search_indexes = dict(
         IndexModel({'id': 1}),
         IndexModel({'code': 1}),
         IndexModel({'title': 1}),
+        IndexModel({'companies_count': 1}),
         IndexModel({'reports_count': 1}),
         IndexModel({'reports_count': -1}),
     ],

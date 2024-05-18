@@ -5,6 +5,7 @@ WORKDIR /code
 CMD python -m wrep.main
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
+ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
 RUN apk --no-cache -q add bash curl mailcap &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep

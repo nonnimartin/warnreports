@@ -15,7 +15,7 @@ router = APIRouter()
 @router.get('/reports', response_model_by_alias=False)
 async def reports_list(
     text: str|None = None,
-    company: str|None = None,
+    company: CompanyName|None = None,
     state: StateCode|None = None,
     location: str|None = None,
     action: str|None = None,
@@ -50,9 +50,8 @@ async def reports_list(
 async def report_get(id: UUID) -> ReportData:
     return await retrieve404(ReportData, id=id)
 
-@router.get('/states', response_model_by_alias=False)
+@router.get('/states')
 async def states_list(
-    state: StateCode|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
     last_reported_after: datetime|None = None,
@@ -60,7 +59,6 @@ async def states_list(
     order: str|None = None
 ) -> list[StateDetail]:
     params = dict(
-        state=state,
         reports_count_gt=reports_count_gt,
         reports_count_lt=reports_count_lt,
         last_reported_after=last_reported_after,
@@ -68,15 +66,15 @@ async def states_list(
         order=order)
     return await search(StateDetail, params)
 
-@router.get('/states/{state}', response_model_by_alias=False)
-async def state_get(state: StateCode) -> StateDetail:
-    return await retrieve404(StateDetail, state=state)
+@router.get('/states/{id}')
+async def state_get(id: StateCode) -> StateDetail:
+    return await retrieve404(StateDetail, id=id)
 
 @router.get('/companies')
 async def companies_list(
-    text: str|None = None,
-    company: str|None = None,
+    name: CompanyName|None = None,
     state: StateCode|None = None,
+    naics: int|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
     last_reported_after: datetime|None = None,
@@ -86,9 +84,9 @@ async def companies_list(
     page: PageNumber = 1
 ) -> list[CompanyDetail]:
     params = dict(
-        text=text,
-        company=company,
+        name=name,
         state=state,
+        naics=naics,
         reports_count_gt=reports_count_gt,
         reports_count_lt=reports_count_lt,
         last_reported_after=last_reported_after,
@@ -96,14 +94,19 @@ async def companies_list(
         order=order)
     return await search(CompanyDetail, params, limit, (page - 1) * limit)
 
+@router.get('/companies/{id}', response_model_by_alias=False)
+async def company_get(id: UUID) -> CompanyDetail:
+    return await retrieve404(CompanyDetail, id=id)
+
 @router.get('/naics')
 async def naics_list(
     code: int|None = None,
     prefix: int|None = None,
     title: str|None = None,
-    text: str|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
+    companies_count_gt: int|None = None,
+    companies_count_lt: int|None = None,
     order: str|None = None,
     limit: Limit = 50,
     page: PageNumber = 1
@@ -112,9 +115,10 @@ async def naics_list(
         code=code,
         prefix=prefix,
         title=title,
-        text=text,
         reports_count_gt=reports_count_gt,
         reports_count_lt=reports_count_lt,
+        companies_count_gt=companies_count_gt,
+        companies_count_lt=companies_count_lt,
         order=order)
     return await search(NaicsDetail, params, limit, (page - 1) * limit)
 
