@@ -10,10 +10,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import settings, utils
+from . import settings, utils, search
 from .models import *
 from .routers import *
-from .search import *
 
 logger = utils.get_logger('main')
 app = FastAPI(title='WARN Reporter')
@@ -26,18 +25,21 @@ app.mount('/static', static, name='static')
 
 @app.get('/', include_in_schema=False)
 async def index(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'index.jinja')
+    stats = await search.search_stats()
+    majors = await search.search(ReportData, dict(employees_gt=49), 10)
+    context = dict(stats=stats, majors=majors)
+    return templates.TemplateResponse(req, 'index.jinja', context)
 
 @app.get('/r/{id}', include_in_schema=False)
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
-    report = await retrieve404(ReportData, id=id)
+    report = await search.retrieve404(ReportData, id=id)
     context = dict(report=report)
     return templates.TemplateResponse(req, 'report.jinja', context)
 
 @app.get('/d/{id}', include_in_schema=False)
 @app.head('/d/{id}', include_in_schema=False)
 async def artifact_download(id: UUID) -> FileResponse:
-    artifact = await retrieve404(ArtifactDetail, id=id)
+    artifact = await search.retrieve404(ArtifactDetail, id=id)
     path = Path(settings.ARTIFACTS_DIR, artifact.path)
     return FileResponse(path, media_type=artifact.media_type, filename=artifact.name)
 

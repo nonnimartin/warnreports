@@ -2,20 +2,28 @@
 {%- block content %}
 <form>
     {%- for field, value in form.items() %}
-    <div class="input">
-        <input name="{{ field }}" placeholder="{{ field }}" value="{{ value|default('', true) }}">
+    <div class="form-group">
+        <input class="form-control" name="{{ field }}" placeholder="{{ field }}" value="{{ value|default('', true) }}">
     </div>
     {%- endfor %}
-    <input type="submit">
-    <button class="button form-reset">Reset</button>
+    <button type="submit" class="btn btn-primary">Submit</button>
+    <button class="btn btn-secondary form-reset">Reset</button>
 </form>
+
 <div>
-    <ul>
-        <li><a href="{{ permalinks.rss }}">RSS</a></li>
-        <li><a href="{{ permalinks.atom }}">Atom</a></li>
+    <ul class="list-group">
+        <li class="list-group-item"><a href="{{ permalinks.rss }}">RSS</a></li>
+        <li class="list-group-item"><a href="{{ permalinks.atom }}">Atom</a></li>
     </ul>
 </div>
-{%- include 'reports/detail.jinja' %}
+{%- set viewlink = true %}
+<ul class="list-group feed-list">
+    {%- for report in reports %}
+    <li class="list-group-item">
+        {%- include 'reports/detail.jinja' %}
+    </li>
+    {%- endfor %}
+</ul>
 {%- endblock %}
 {%- block scripts %}
 <script src="/static/js/feed.js"></script>

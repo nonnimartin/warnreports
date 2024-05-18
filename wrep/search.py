@@ -263,6 +263,12 @@ search_indexes = dict(
         IndexModel({'name': 1}),
     ])
 
+async def search_stats() -> dict[str, dict[str, Any]]:
+    stats = {}
+    for name in search_indexes:
+        stats[name] = await mongo.command('collstats', name)
+    return stats
+
 async def search_init() -> None:
     for name, indexes in search_indexes.items():
         await mongo.get_collection(name).create_indexes(indexes)
