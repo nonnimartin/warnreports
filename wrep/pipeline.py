@@ -73,10 +73,19 @@ class Pipeline:
         elif stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Load:
-            for model in Report, Company:
-                model.delete().where(model.state == self.state).execute()
+            Report.delete().where(Report.state == self.state).execute()
             StateStat.delete().where(StateStat.id == self.state).execute()
             Artifact.delete().where(Artifact.path.startswith(f'{self.state.lower()}/')).execute()
+            q = (
+                Company
+                .delete()
+                .where(
+                    Company.id.in_(
+                        Company
+                        .select(Company.id)
+                        .join(Report, on=(Report.company == Company.name))
+                        .where(Report.state == self.state))))
+            q.execute()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
@@ -116,6 +125,7 @@ class Pipeline:
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
+        self.artifact_cache = {}
         async with self.backends[Stage.Translate].reader() as reader:
             with db.atomic():
                 if clean:
@@ -125,6 +135,7 @@ class Pipeline:
                 stat = StateStat.get_or_create(id=self.state)[0]
                 stat.self_update()
                 stat.save()
+        del self.artifact_cache
         count = sum(counts.values())
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
         return dict(count=count, counts=counts, nochange=nochange)
@@ -134,18 +145,31 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         backend: SearchIndexBackend = self.backends[stage]
-        q = Report.select_for_reduce().where(Report.state == self.state)
-        reports = ReportData.map_reduce(q)
+        reports = ReportData.map_reduce((
+            Report
+            .select_for_reduce()
+            .where(Report.state == self.state)))
         count, created, updated = await backend.update_reports(reports)
         nochange = created + updated == 0
-        counts = dict(created=created, updated=updated)
-        detail = StateDetail.model_validate(StateStat.get_by_id(self.state))
-        await backend.update_states([detail])
-        q = Company.select_for_reduce().where(Report.state == self.state)
-        await backend.update_companies(CompanyDetail.map_reduce(q))
+        counts = dict(created=created, updated=updated, nochange=count-created-updated)
+        details = [StateDetail.model_validate(StateStat.get_by_id(self.state))]
+        await backend.update_states(details)
+        companies = CompanyDetail.map_reduce((
+            Company
+            .select_for_reduce()
+            .where(
+                Company.name.in_((
+                    Company
+                    .select(Company.name)
+                    .join(Report, on=(Company.name == Report.company))
+                    .where(Report.state == self.state))))))
+        await backend.update_companies(companies)
         await backend.update_naics(NaicsDetail.map_reduce())
-        q = Artifact.select_for_reduce().where(Artifact.path.startswith(f'{self.state.lower()}/'))
-        await backend.update_artifacts(ArtifactDetail.map_reduce(q))
+        artifacts = ArtifactDetail.map_reduce((
+            Artifact
+            .select_for_reduce()
+            .where(Artifact.path.startswith(f'{self.state.lower()}/'))))
+        await backend.update_artifacts(artifacts)
         return dict(count=count, counts=counts, nochange=nochange)
 
     def save(self, entry: dict) -> SaveType:
@@ -178,7 +202,7 @@ class Pipeline:
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
             save = artifacts_save
-        Company.get_or_create(company=report.company, state=report.state)
+        Company.get_or_create(name=report.company)
         return save
 
     def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
@@ -223,11 +247,17 @@ class Pipeline:
         for path, url in index.items():
             uid = uuid.uuid5(settings.NAMESPACE, f'artifact:{path}')
             try:
-                artifact = Artifact.get_by_id(uid)
+                artifact: Artifact = Artifact.get_by_id(uid)
             except Artifact.DoesNotExist:
                 artifact = Artifact(id=uid, path=path, url=url)
                 artifact.self_update()
                 artifact.save(force_insert=True)
+            else:
+                if path.endswith('.xlsx') and uid not in self.artifact_cache:
+                    artifact.self_update()
+                    if artifact.dirty_fields:
+                        artifact.save()
+                    self.artifact_cache[uid] = None
             artifacts.append(artifact)
         q = ArtifactReport.delete()
         q = q.where(

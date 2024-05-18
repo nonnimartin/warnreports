@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import (Annotated, Any, ClassVar, Generic, Iterable, Iterator,
                     Literal, Self, TypeAlias, TypeVar)
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import peewee as orm
@@ -29,6 +29,7 @@ __all__ = [
     'Artifact',
     'ArtifactReport',
     'Company',
+    'db',
     'IntegrityError',
     'Naics',
     'NaicsReport',
@@ -37,6 +38,8 @@ __all__ = [
     'StateStat']
 
 db: orm.Database = db_url.connect(settings.DB_URL)
+
+LEFT_OUTER = orm.JOIN['LEFT_OUTER']
 
 class OrmModel(orm.Model):
     class Meta:
@@ -60,13 +63,14 @@ class Report(OrmModel):
 
     @classmethod
     def select_for_reduce(cls):
-        q = cls.select(NaicsReport, Naics, ArtifactReport, Artifact, cls)
-        q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
-        q = q.join_from(NaicsReport, Naics, orm.JOIN['LEFT_OUTER'])
-        q = q.join_from(cls, ArtifactReport, orm.JOIN['LEFT_OUTER'])
-        q = q.join_from(ArtifactReport, Artifact, orm.JOIN['LEFT_OUTER'])
-        q = q.order_by(cls.id, Naics.id, Artifact.id)
-        return q
+        return (cls
+            .select(NaicsReport, Naics, ArtifactReport, Artifact, cls)
+            .join(NaicsReport, LEFT_OUTER)
+            .join(Naics, LEFT_OUTER)
+            .switch(cls)
+            .join(ArtifactReport, LEFT_OUTER)
+            .join(Artifact, LEFT_OUTER)
+            .order_by(cls.id, Naics.id, Artifact.id))
 
 class StateStat(OrmModel):
     id = orm.CharField(max_length=2, primary_key=True)
@@ -74,26 +78,23 @@ class StateStat(OrmModel):
     reports_count = orm.IntegerField(default=0)
 
     def self_update(self):
-        q = Report.select(Report.reported).where(Report.state==self.id)
+        q = Report.select(Report.reported).where(Report.state == self.id)
         self.reports_count = q.count()
         latest = q.order_by(Report.reported.desc()).limit(1).first()
         self.last_reported = latest and latest.reported
 
 class Company(OrmModel):
-    company = orm.CharField(max_length=512, index=True)
-    state = orm.CharField(max_length=2, index=True)
+    id = orm.UUIDField(primary_key=True, default=uuid4)
+    name = orm.CharField(max_length=512, unique=True)
 
     @classmethod
     def select_for_reduce(cls):
-        q = cls.select(Report, cls)
-        q = q.join_from(cls, Report, orm.JOIN['LEFT_OUTER'], on=(
-            (cls.company == Report.company) &
-            (cls.state == Report.state)))
-        q = q.order_by(cls.state, cls.company)
-        return q
-
-    class Meta:
-        indexes = [(('company', 'state'), True)]
+        return (cls
+            .select(Report, NaicsReport, Naics, cls)
+            .join(Report, LEFT_OUTER, on=(cls.name == Report.company))
+            .join(NaicsReport, LEFT_OUTER)
+            .join(Naics, LEFT_OUTER)
+            .order_by(cls.name, Report.state, Naics.id))
 
 class Naics(OrmModel):
     id = orm.IntegerField(primary_key=True)
@@ -102,11 +103,12 @@ class Naics(OrmModel):
 
     @classmethod
     def select_for_reduce(cls):
-        q = cls.select(NaicsReport, Report, cls)
-        q = q.join_from(cls, NaicsReport, orm.JOIN['LEFT_OUTER'])
-        q = q.join_from(NaicsReport, Report, orm.JOIN['LEFT_OUTER'])
-        q = q.order_by(cls.id)
-        return q
+        return (cls
+            .select(NaicsReport, Report, cls)
+            .join(NaicsReport, LEFT_OUTER)
+            .join(Report, LEFT_OUTER)
+            .join(Company, LEFT_OUTER, on=(Report.company == Company.name))
+            .order_by(cls.id))
 
 class NaicsReport(OrmModel):
     naics = orm.ForeignKeyField(Naics, on_delete='CASCADE')
@@ -131,21 +133,25 @@ class Artifact(OrmModel):
 
     @classmethod
     def select_for_reduce(cls):
-        q = cls.select(ArtifactReport, Report, cls)
-        q = q.join_from(cls, ArtifactReport, orm.JOIN['LEFT_OUTER'])
-        q = q.join_from(ArtifactReport, Report, orm.JOIN['LEFT_OUTER'])
-        q = q.order_by(cls.id)
-        return q
+        return (cls
+            .select(ArtifactReport, Report, cls)
+            .join(ArtifactReport, LEFT_OUTER)
+            .join(Report, LEFT_OUTER)
+            .order_by(cls.id))
 
     def self_update(self) -> None:
         file = Path(settings.ARTIFACTS_DIR, self.path)
         with file.open('rb') as f:
             digest = hashlib.file_digest(f, 'sha1')
         stat = file.stat()
-        self.size = stat.st_size
-        self.modified = datetime.fromtimestamp(stat.st_mtime)
-        self.mimetype = utils.get_mimetype(file)
-        self.sha1 = digest.hexdigest()
+        data = dict(
+            size=stat.st_size,
+            modified = datetime.fromtimestamp(stat.st_mtime),
+            mimetype = utils.get_mimetype(file),
+            sha1 = digest.hexdigest())
+        for field, value in data.items():
+            if getattr(self, field) != value:
+                setattr(self, field, value)
 
 class ArtifactReport(OrmModel):
     artifact = orm.ForeignKeyField(Artifact, on_delete='CASCADE')
@@ -274,6 +280,7 @@ class NaicsData(DataModel):
 
 class NaicsDetail(NaicsData, MapReducingModel[Naics]):
     reports_count: int = 0
+    companies_count: int = 0
     orm_model: ClassVar = Naics
 
     def reduce_obj(self, obj, memo) -> None:
@@ -281,6 +288,10 @@ class NaicsDetail(NaicsData, MapReducingModel[Naics]):
         if nr and nr.report not in memo['reports']:
             self.reports_count += 1
             memo['reports'].add(nr.report)
+            company: Company|None = getattr(nr.report, 'company', None)
+            if company and company not in memo['companies']:
+                self.companies_count += 1
+                memo['companies'].add(company)
 
 class StateDetail(DataModel):
     state: StateCode = Field(alias='id')
@@ -290,13 +301,14 @@ class StateDetail(DataModel):
     tzreplace = field_serializer('last_reported')(ReportData.tzreplace)
 
 class CompanyDetail(MapReducingModel[Company]):
-    company: str
-    state: StateCode
+    id: UUID = Field(alias='_id')
+    name: CompanyName
+    states: list[StateCode] = Field(default_factory=list)
+    naics: list[NaicsData] = Field(default_factory=list)
     reports_count: int = 0
     last_reported: datetime|None = None
     orm_model: ClassVar = Company
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
-    tzreplace = field_serializer('last_reported')(ReportData.tzreplace)
 
     def reduce_obj(self, obj, memo):
         report: Report = getattr(obj, 'report', None)
@@ -304,20 +316,25 @@ class CompanyDetail(MapReducingModel[Company]):
             self.reports_count += 1
             self.last_reported = max(filter(None, (self.last_reported, report.reported)))
             memo['reports'].add(report)
-
-    def equals_obj(self, obj):
-        return self.state == obj.state and self.company == obj.company
+            if report.state not in memo['states']:
+                self.states.append(report.state)
+                memo['states'].add(report.state)
+            nr: NaicsReport|None = getattr(report, 'naicsreport', None)
+            if nr and nr.naics not in memo['naics']:
+                naics = NaicsData.model_validate(nr.naics)
+                self.naics.append(naics)
+                memo['naics'].add(nr.naics)
 
 
 # ----------------------------
 
 __all__ += [
-    'FilterModel',
-    'ReportsFilter',
-    'NaicsFilter',
-    'StatesFilter',
+    'ArtifactsFilter',
     'CompaniesFilter',
-    'ArtifactsFilter']
+    'FilterModel',
+    'NaicsFilter',
+    'ReportsFilter',
+    'StatesFilter']
 
 class FilterModel(DataModel, Generic[DM]):
     order: str|None = None
@@ -370,16 +387,18 @@ class StatesFilter(FilterModel[StateDetail]):
     default_ordering: ClassVar = [('state', 1)]
 
 class CompaniesFilter(FilterModel[CompanyDetail]):
+    id: UUID|None = None
     text: str|None = None
-    company: CompanyName|None = None
+    name: CompanyName|None = None
     state: StateCode|None = None
+    naics: int|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
     last_reported_after: datetime|None = None
     last_reported_before: datetime|None = None
     result_model: ClassVar = CompanyDetail
-    order_fields: ClassVar = {'company', 'state', 'reports_count', 'last_reported'}
-    default_ordering: ClassVar = [('company', 1), ('state', 1)]
+    order_fields: ClassVar = {'name', 'reports_count', 'last_reported'}
+    default_ordering: ClassVar = [('name', 1)]
 
 class NaicsFilter(FilterModel[NaicsDetail]):
     id: int|None = None
@@ -389,8 +408,10 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     text: str|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None
+    companies_count_gt: int|None = None
+    companies_count_lt: int|None = None
     result_model: ClassVar = NaicsDetail
-    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count'}
+    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
@@ -405,7 +426,32 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
 
 def migrate() -> None:
     with db.atomic():
-        db.create_tables([Report, Company, StateStat, Naics, NaicsReport, Artifact, ArtifactReport])
+        if 'company' in db.get_tables():
+            cols = {col.name: col for col in db.get_columns('company')}
+            needed = (
+                'state' in cols or
+                'company' in cols or
+                cols['id'].data_type != 'uuid')
+            if needed:
+                db.execute_sql('DROP TABLE IF EXISTS company_tmp')
+                db.execute_sql('ALTER TABLE company RENAME to company_tmp')
+                db.create_tables([Company])
+                col = 'company' if 'company' in cols else 'name'
+                cur = db.execute_sql(f'SELECT {col} FROM company_tmp')
+                try:
+                    Company.insert_from(cur, ['name']).on_conflict('IGNORE').execute()
+                except orm.Insert.DefaultValuesException:
+                    pass
+                db.execute_sql('DROP TABLE company_tmp')
+        db.create_tables([
+            Company,
+            Report,
+            StateStat,
+            Naics,
+            NaicsReport,
+            Artifact,
+            ArtifactReport])
+
     if not Naics.select().count():
         load_naics()
 

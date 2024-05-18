@@ -58,7 +58,7 @@ class ExtractionBackend(StageBackend, ReaderMixin):
     async def update(self, source: Iterable[dict[str, str]]) -> int: ...
 
 class TranslationBackend(StageBackend, ReaderMixin):
-    
+
     @abstractmethod
     async def run(self, translator: Translator, source: AsyncIterable[dict[str, str]]) -> int: ...
 
@@ -183,6 +183,8 @@ class MongoSearchIndex(SearchIndexBackend):
                 coro = coll.drop()
             elif name == 'artifacts':
                 coro = coll.delete_many(dict(path={'$regex': f'^{self.state.lower()}/'}))
+            elif name == 'companies':
+                coro = coll.delete_many(dict(states=self.state))
             else:
                 coro = coll.delete_many(dict(state=self.state))
             await coro
@@ -203,7 +205,7 @@ class MongoSearchIndex(SearchIndexBackend):
 
     async def update_companies(self, source):
         def get_filter(inst: CompanyDetail):
-            return dict(state=inst.state, company=inst.company)
+            return dict(_id=inst.id)
         return await self.update_collection('companies', source, get_filter)
 
     async def update_naics(self, source):

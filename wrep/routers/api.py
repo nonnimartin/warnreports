@@ -15,7 +15,7 @@ router = APIRouter()
 @router.get('/reports', response_model_by_alias=False)
 async def reports_list(
     text: str|None = None,
-    company: str|None = None,
+    company: CompanyName|None = None,
     state: StateCode|None = None,
     location: str|None = None,
     action: str|None = None,
@@ -75,8 +75,9 @@ async def state_get(state: StateCode) -> StateDetail:
 @router.get('/companies')
 async def companies_list(
     text: str|None = None,
-    company: str|None = None,
+    name: CompanyName|None = None,
     state: StateCode|None = None,
+    naics: int|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
     last_reported_after: datetime|None = None,
@@ -87,14 +88,19 @@ async def companies_list(
 ) -> list[CompanyDetail]:
     params = dict(
         text=text,
-        company=company,
+        name=name,
         state=state,
+        naics=naics,
         reports_count_gt=reports_count_gt,
         reports_count_lt=reports_count_lt,
         last_reported_after=last_reported_after,
         last_reported_before=last_reported_before,
         order=order)
     return await search(CompanyDetail, params, limit, (page - 1) * limit)
+
+@router.get('/companies/{id}', response_model_by_alias=False)
+async def company_get(id: UUID) -> CompanyDetail:
+    return await retrieve404(CompanyDetail, id=id)
 
 @router.get('/naics')
 async def naics_list(
@@ -104,6 +110,8 @@ async def naics_list(
     text: str|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
+    companies_count_gt: int|None = None,
+    companies_count_lt: int|None = None,
     order: str|None = None,
     limit: Limit = 50,
     page: PageNumber = 1
@@ -115,6 +123,8 @@ async def naics_list(
         text=text,
         reports_count_gt=reports_count_gt,
         reports_count_lt=reports_count_lt,
+        companies_count_gt=companies_count_gt,
+        companies_count_lt=companies_count_lt,
         order=order)
     return await search(NaicsDetail, params, limit, (page - 1) * limit)
 
