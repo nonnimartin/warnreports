@@ -70,13 +70,15 @@ async def states_list(
 async def state_get(id: StateCode) -> StateDetail:
     return await retrieve404(StateDetail, id=id)
 
-@router.get('/companies')
+@router.get('/companies', response_model_by_alias=False)
 async def companies_list(
     name: CompanyName|None = None,
     state: StateCode|None = None,
     naics: int|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
+    employees_sum_gt: int|None = None,
+    employees_sum_lt: int|None = None,
     last_reported_after: datetime|None = None,
     last_reported_before: datetime|None = None,
     order: str|None = None,
@@ -89,6 +91,8 @@ async def companies_list(
         naics=naics,
         reports_count_gt=reports_count_gt,
         reports_count_lt=reports_count_lt,
+        employees_sum_gt=employees_sum_gt,
+        employees_sum_lt=employees_sum_lt,
         last_reported_after=last_reported_after,
         last_reported_before=last_reported_before,
         order=order)

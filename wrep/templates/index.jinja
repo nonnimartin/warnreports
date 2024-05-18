@@ -1,4 +1,35 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
-
+<h3>collections</h3>
+<dl>
+    {%- for name, stats in stats.items() %}
+    <dt>{{ name }}</dt>
+    <dd>{{ stats.count }}</dd>
+    {%- endfor %}
+</dl>
+{%- if majors %}
+<h3>recent major ones</h3>
+<table class="table table-dark table-striped">
+    <thead>
+        <tr>
+            <th>Employees</th>
+            <th>Company</th>
+            <th>State</th>
+            <th>Reported</th>
+            <th>Starting</th>
+        </tr>
+    </thead>
+    <tbody>
+        {%- for report in majors %}
+        <tr>
+            <td>{{ report.employees }}</td>
+            <td><a href="/r/{{ report.id }}">{{ report.company }}</a></td>
+            <td>{{ report.state }}</td>
+            <td>{{ report.reported.date() }}</td>
+            <td>{{ report.starting.date() if report.starting else '' }}</td>
+        </tr>
+        {%- endfor %}
+    </tbody>
+</table>
+{%- endif %}
 {%- endblock %}

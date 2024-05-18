@@ -1,6 +1,11 @@
-{%- for report in reports|default([report]) %}
 <div class="report-detail">
-    <h2>{{ report.company }}</h2>
+    <h2>
+        {%- if viewlink|default(false) -%}
+        <a href="/r/{{ report.id }}">{{ report.company }}</a>
+        {%- else -%}
+        {{ report.company }}
+        {%- endif -%}
+    </h2>
     <table>
         <tbody>
             {%- if report.employees %}
@@ -67,5 +72,4 @@
             {%- endif %}
         </tbody>
     </table>
-    {%- endfor %}
 </div>
