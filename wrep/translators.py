@@ -1056,6 +1056,9 @@ class TN(Translator, state='TN'):
         'Notice ID': 'report_id',
     }
     rewrites = dict(
+        reported=[
+            ('2018/4/ 27', '2018/4/27'),
+        ],
         report_id=[
             (_r(r'^#'), ''),
         ]
