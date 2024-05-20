@@ -4,7 +4,7 @@ import itertools
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import unescape as html_unescape
 from pathlib import Path
 from typing import Any
@@ -210,6 +210,7 @@ class ReportedYearToUrl(Translator):
         super().finish(entry, row)
 
 class AK(Translator, state='AK'):
+    default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
@@ -248,6 +249,7 @@ class AL(Translator, state='AL'):
     )
 
 class AZ(Translator, state='AZ'):
+    default_url = 'https://www.azjobconnection.gov/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': ['reported', 'starting'],
@@ -354,6 +356,9 @@ class CT(ReportedYearToUrl, state='CT'):
         location=[
             ('Not Indicated', ''),
             ('CT', ''),
+        ],
+        action=[
+            (_r(r'^Yes.*'), 'Closing'),
         ]
     )
 
@@ -769,7 +774,7 @@ class MI(Translator, state='MI'):
         'City': 'location',
         'Date Received': 'reported',
         'Incident Type': 'action',
-        'Number of Layoffs': 'empoloyees'
+        'Number of Layoffs': 'employees'
     }
 
 class MO(Translator, state='MO'):
@@ -808,14 +813,31 @@ class NE(Translator, state='NE'):
     }
 
 class NJ(Translator, state='NJ'):
-    default_url = 'https://www.nj.gov/labor/assets/PDFs/WARN/2024_WARN_Notice_Archive.pdf'
+    default_url = 'https://www.nj.gov/labor/employer-services/warn/'
     headermap = {
         'Company': 'company',
         'City': 'location',
-        'Month Posted': 'reported',
         'Effective Date': 'starting',
         'Workforce Affected': 'employees',
     }
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        month: str|None = row.get('Month Posted')
+        if month:
+            year = int(row['worksheet_name'][:4])
+            datestr = f'{month} 1, {year}'
+            reported = self.parse_date(datestr)
+            if reported:
+                for days in reversed(range(28, 31)):
+                    dt = reported + timedelta(days=days)
+                    if dt.month == reported.month:
+                        reported = dt
+                        break
+            starting: datetime|None = entry.get('starting')
+            if starting and starting < reported:
+                reported = starting
+            entry['reported'] = reported
+        super().finish(entry, row)
 
 class NM(Translator, state='NM'):
     default_url = 'https://www.dws.state.nm.us/Portals/0/DM/Business/2024_WARN.pdf'
@@ -873,7 +895,7 @@ class NY(Translator, state='NY'):
     )
 
 class OH(Translator, state='OH'):
-    default_url = ''
+    default_url = 'https://jfs.ohio.gov/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa'
     headermap = {
         'Company' : 'company',
         'Potential Number Affected' : 'employees',
@@ -882,7 +904,13 @@ class OH(Translator, state='OH'):
         'City/County' : 'location',
         'Layoff Date(s)': 'starting',
         'Notice ID' : 'report_id',
+        'artifacts_json': 'artifacts',
     }
+    rewrites=dict(
+        starting=[
+            REWRITE_COMPACT_DATERANGE,
+        ]
+    )
 
 class OK(Translator, state='OK'):
     default_url = 'https://okjobmatch.com/search/warn_lookups/new'
@@ -1026,10 +1054,18 @@ class TN(Translator, state='TN'):
         'Received Date' : 'reported',
         'Notice Date' : 'reported',
         'County' : 'location',
-        'No. Of Employees': 'affected',
+        'No. Of Employees': 'employees',
         'Layoff/Closure': 'action',
-        'WARN#': 'report_id',
+        'Notice ID': 'report_id',
     }
+    rewrites = dict(
+        reported=[
+            ('2018/4/ 27', '2018/4/27'),
+        ],
+        report_id=[
+            (_r(r'^#'), ''),
+        ]
+    )
 
 class TX(Translator, state='TX'):
     default_url = 'https://www.twc.texas.gov/data-reports/warn-notice'
@@ -1114,6 +1150,7 @@ class VT(Translator, state='VT'):
     }
 
 class WA(Translator, state='WA'):
+    default_url = 'https://esd.wa.gov/about-employees/WARN'
     headermap = {
         'Company' : 'company',
         '# of Workers' : 'employees',
@@ -1122,7 +1159,6 @@ class WA(Translator, state='WA'):
         'Type of Layoff' : 'action',
         'Location' : 'location',
         'Received Date' : 'reported'
-
     }
 
 class WI(Translator, state='WI'):

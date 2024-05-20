@@ -64,7 +64,8 @@
                 <td>
                     {%- with br=joiner ('<br>') %}
                     {%- for artifact in report.artifacts %}
-                    {{ br() }}<a href="/d/{{ artifact.id }}">{{ artifact.name }}</a>
+                    {{ br() }}<a href="/v/{{ artifact.id }}" target="_blank">{{ artifact.name }}</a>
+                    (<a href="/d/{{ artifact.id }}" target="_blank">download</a>)
                     {%- endfor %}
                     {%- endwith %}
                 </td>

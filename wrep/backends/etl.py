@@ -185,6 +185,8 @@ class MongoSearchIndex(SearchIndexBackend):
                 coro = coll.delete_many(dict(path={'$regex': f'^{self.state.lower()}/'}))
             elif name == 'companies':
                 coro = coll.delete_many(dict(states=self.state))
+            elif name == 'states':
+                coro = coll.delete_one(dict(id=self.state))
             else:
                 coro = coll.delete_many(dict(state=self.state))
             await coro

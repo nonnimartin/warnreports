@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
-from typing import Any, AsyncIterable, ClassVar, Generic, Iterable, TypeVar
+from typing import Any, ClassVar, Iterable
 
 from fastapi import HTTPException, status
-from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
-                                 AsyncIOMotorCursor)
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.operations import IndexModel
 
 from . import settings, utils
@@ -14,62 +13,15 @@ from .models import *
 
 __all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
 
-QS = TypeVar('QS')
-ST = TypeVar('ST', bound='BaseSearch')
 logger = utils.get_logger('search')
 
 
-class BaseSearch(FilterModel[DM], Generic[QS, DM]):
-
-    async def search(self, limit: Limit|None = None, offset: Offset = 0):
-        qs = self.get_queryset()
-        qs = self.filter_queryset(qs)
-        qs = self.order_queryset(qs)
-        qs = self.paginate_queryset(qs, limit, offset)
-        return await self.queryset_to_list(qs)
-
-    def get_filters(self) -> Iterable[Any]:
-        yield from ()
-
-    @abstractmethod
-    def get_queryset(self) -> QS: ...
-
-    @abstractmethod
-    def filter_queryset(self, qs: QS) -> QS: ...
-
-    @abstractmethod
-    def order_queryset(self, qs: QS) -> QS: ...
-
-    @abstractmethod
-    def paginate_queryset(self, qs: QS, limit: Limit|None, offset: Offset) -> QS: ...
-
-    async def iter_queryset(self, qs: QS) -> AsyncIterable[DM]:
-        async for obj in qs:
-            yield self.result_model.model_validate(obj)
-
-    async def queryset_to_list(self, qs: QS) -> list[DM]:
-        return [obj async for obj in self.iter_queryset(qs)]
-
-class MongoSearch(BaseSearch[AsyncIOMotorCursor, DM]):
+class MongoSearch(FilterModel[DM]):
     collection_name: ClassVar[str]
 
-    def get_queryset(self):
-        return mongo.get_collection(self.collection_name)
-
-    def filter_queryset(self, qs: AsyncIOMotorCollection):
-        filters = tuple(self.get_filters())
-        return qs.find({'$and': filters} if filters else {})
-
-    def order_queryset(self, qs):
-        orders = tuple(self.get_ordering())
-        return qs.sort(orders) if orders else qs
-
-    def paginate_queryset(self, qs, limit, offset):
-        if offset:
-            qs = qs.skip(offset)
-        if limit:
-            qs = qs.limit(limit)
-        return qs
+    @abstractmethod
+    def get_filters(self) -> Iterable[Any]:
+        yield from ()
 
     @staticmethod
     def wc_contains(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
@@ -194,7 +146,7 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
 class NotFoundError(Exception):
     pass
 
-filters: dict[type[DataModel], type[BaseSearch]] = {
+filters: dict[type[DataModel], type[MongoSearch]] = {
     ReportData: MongoReportsFilter,
     StateDetail: MongoStatesFilter,
     CompanyDetail: MongoCompaniesFilter,
@@ -206,11 +158,24 @@ async def search(
     params: dict[str, Any]|None = None,
     limit: Limit|None = None,
     offset: Offset = 0
-) -> list[DM]:
-    return await filters[model](**params or {}).search(limit, offset)
+) -> tuple[list[DM], int]:
+    filt = filters[model](**params or {})
+    coll = mongo.get_collection(filt.collection_name)
+    filts = tuple(filt.get_filters())
+    q = {'$and': filts} if filts else {}
+    cur = coll.find(q)
+    orders = tuple(filt.get_ordering())
+    if orders:
+        cur = cur.sort(orders)
+    if offset:
+        cur = cur.skip(offset)
+    if limit:
+        cur = cur.limit(limit)
+    total = await coll.count_documents(q)
+    return await cur.to_list(None), total
 
 async def retrieve(model: type[DM], **params) -> DM:
-    results = await search(model, params, 1)
+    results = (await search(model, params, 1))[0]
     if results:
         return results[0]
     raise NotFoundError

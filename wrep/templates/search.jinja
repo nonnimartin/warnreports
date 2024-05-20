@@ -1,0 +1,43 @@
+{%- extends 'base.jinja' %}
+{%- block content %}
+<table class="table table-dark table-striped">
+    <thead>
+        <tr>
+            <th>State</th>
+            <th>Company</th>
+            <th>Reported</th>
+            <th>Starting</th>
+            <th>Employees</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+{%- endblock %}
+{%- block scripts %}
+<script>
+$(() => {
+    const renderDate = v => v ? v.substring(0, 10) : ''
+    const renderLink = (v, type, row) => `<a href="/r/${row.id}">${v}</a>`
+    const columns = [
+        {data: 'state', name: 'state'},
+        {data: 'company', name: 'company', render: renderLink},
+        {data: 'reported', name: 'reported', type: 'date', render: renderDate},
+        {data: 'starting', name: 'starting', type: 'date', render: renderDate},
+        {data: 'employees', name: 'employees', type: 'num'},
+        {data: 'action', name: 'action'},
+    ]
+    $('table').DataTable({
+        processing: true,
+        serverSide: true,
+        ajax: '/dt/reports',
+        pageLength: 25,
+        columns,
+        order: {
+            name: 'reported',
+            dir: 'desc',
+        }
+    })
+});
+</script>
+{%- endblock %}
