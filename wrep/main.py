@@ -26,8 +26,8 @@ app.mount('/static', static, name='static')
 @app.get('/', include_in_schema=False)
 async def index(req: Request) -> HTMLResponse:
     stats = await search.search_stats()
-    majors = await search.search(ReportData, dict(employees_gt=49), 10)
-    states = await search.search(StateDetail)
+    majors = (await search.search(ReportData, dict(employees_gt=49), 10))[0]
+    states = (await search.search(StateDetail))[0]
     context = dict(stats=stats, majors=majors, states=states)
     return templates.TemplateResponse(req, 'index.jinja', context)
 
@@ -55,6 +55,48 @@ async def artifact(id: UUID, disposition: str) -> FileResponse:
         media_type=artifact.media_type,
         filename=artifact.name,
         content_disposition_type=disposition)
+
+@app.get('/search', include_in_schema=False)
+async def report_search(req: Request) -> HTMLResponse:
+    return templates.TemplateResponse(req, 'search.jinja')
+
+class ReportDtResult(DataModel):
+    data: list[ReportData]
+    recordsTotal: int
+    recordsFiltered: int
+    draw: int
+
+@app.get('/dt/reports', include_in_schema=False, response_model_by_alias=False)
+async def search_dt(
+    req: Request,
+    length: Limit,
+    start: Offset,
+    draw: int,
+) -> ReportDtResult:
+    qp = dict(req.query_params)
+    order = parse_dt_order(qp)
+    params = dict(order=order)
+    text = qp.get('search[value]')
+    if text:
+        params.update(text=text)
+    data, total = await search.search(ReportData, params, length, start)
+    return ReportDtResult(
+        data=data,
+        recordsTotal=total,
+        recordsFiltered=total,
+        draw=draw)
+
+def parse_dt_order(params: dict[str, str]) -> str|None:
+    res = []
+    for i in range(len(params)):
+        try:
+            field = params[f'order[{i}][name]']
+        except KeyError:
+            break
+        if params[f'order[{i}][dir]'] == 'desc':
+            field = f'-{field}'
+        res.append(field)
+    return ','.join(res) if res else None
 
 def cmd(*args, **kw):
     if settings.DB_AUTO_MIGRATE:

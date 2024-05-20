@@ -252,6 +252,10 @@ class CO(Scraper, state='CO'):
         with self.cache.open('normalized.csv') as file:
             yield csv.DictReader(file, restkey='__')
 
+class CT(Scraper, state='CT'):
+    ...
+    # TODO: get record url and pdf artifacts
+
 class DE(Scraper, state='DE'):
     base_url = 'https://joblink.delaware.gov'
     index_url = '/search/warn_lookups?commit=Search&page=1&q%5Bs%5D=notice_on+desc'

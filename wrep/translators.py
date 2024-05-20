@@ -356,6 +356,9 @@ class CT(ReportedYearToUrl, state='CT'):
         location=[
             ('Not Indicated', ''),
             ('CT', ''),
+        ],
+        action=[
+            (_r(r'^Yes.*'), 'Closing'),
         ]
     )
 
@@ -1156,7 +1159,6 @@ class WA(Translator, state='WA'):
         'Type of Layoff' : 'action',
         'Location' : 'location',
         'Received Date' : 'reported'
-
     }
 
 class WI(Translator, state='WI'):
