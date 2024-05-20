@@ -16,7 +16,8 @@
                 window.location.href = href
             }
         })
-        $('.form-reset').on('click', function() {
+        $('.form-reset').on('click', function(e) {
+            e.preventDefault()
             if (window.location.search) {
                 window.location.href = window.location.pathname
             } else {

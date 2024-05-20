@@ -40,6 +40,7 @@
         return str
     }
     $(() => {
+        const DEFAULT_ORDER = [{name: 'reported', dir: 'desc'}]
 
         const renderDate = v => v ? v.substring(0, 10) : ''
         const renderCompany = (v, type, row) => $('<a/>')
@@ -68,8 +69,8 @@
 
         let reqTimeout
 
-        const doDraw = () => {
-            table.DataTable().draw()
+        const doDraw = (...args) => {
+            table.DataTable().draw(...args)
         }
         const queueDraw = () => {
             clearTimeout(reqTimeout)
@@ -82,8 +83,12 @@
             })
             .on('change keyup keydown', queueDraw)
         
-        clearForm.on('click', () => {
+        clearForm.on('click', e => {
+            e.preventDefault()
             $(':input', form).val('')
+            table.DataTable().state({order: DEFAULT_ORDER})
+            clearTimeout(reqTimeout)
+            doDraw()
         })
 
         table.DataTable({
@@ -91,10 +96,7 @@
             serverSide: true,
             pageLength: 25,
             columns,
-            order: {
-                name: 'reported',
-                dir: 'desc',
-            },
+            order: DEFAULT_ORDER,
             layout: {
                 topStart: form,
                 topEnd: null,
