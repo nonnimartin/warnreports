@@ -39,9 +39,21 @@ async def report_view(req: Request, id: UUID) -> HTMLResponse:
 @app.get('/d/{id}', include_in_schema=False)
 @app.head('/d/{id}', include_in_schema=False)
 async def artifact_download(id: UUID) -> FileResponse:
+    return await artifact(id, 'download')
+
+@app.get('/v/{id}', include_in_schema=False)
+@app.head('/v/{id}', include_in_schema=False)
+async def artifact_view(id: UUID) -> FileResponse:
+    return await artifact(id, 'inline')
+
+async def artifact(id: UUID, disposition: str) -> FileResponse:
     artifact = await search.retrieve404(ArtifactDetail, id=id)
     path = Path(settings.ARTIFACTS_DIR, artifact.path)
-    return FileResponse(path, media_type=artifact.media_type, filename=artifact.name)
+    return FileResponse(
+        path,
+        media_type=artifact.media_type,
+        filename=artifact.name,
+        content_disposition_type=disposition)
 
 def cmd(*args, **kw):
     if settings.DB_AUTO_MIGRATE:
