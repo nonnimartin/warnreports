@@ -873,7 +873,7 @@ class NY(Translator, state='NY'):
     )
 
 class OH(Translator, state='OH'):
-    default_url = ''
+    default_url = 'https://jfs.ohio.gov/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa'
     headermap = {
         'Company' : 'company',
         'Potential Number Affected' : 'employees',
@@ -882,7 +882,13 @@ class OH(Translator, state='OH'):
         'City/County' : 'location',
         'Layoff Date(s)': 'starting',
         'Notice ID' : 'report_id',
+        'artifacts_json': 'artifacts',
     }
+    rewrites=dict(
+        starting=[
+            REWRITE_COMPACT_DATERANGE,
+        ]
+    )
 
 class OK(Translator, state='OK'):
     default_url = 'https://okjobmatch.com/search/warn_lookups/new'
