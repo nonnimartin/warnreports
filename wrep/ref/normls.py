@@ -10,6 +10,8 @@ COMPANY_NAME = {
     _r(r'^walmart\s?', re.I): 'Walmart',
     _r(r'^99 cents only', re.I): '99 Cents Only',
     _r(r'^3M ', re.I): '3M',
+    _r(r'^at&t', re.I): 'AT&T',
+    _r(r'^united airlines', re.I): 'United Airlines',
     **{value: 'Boeing' for value in [
         'Boeing',
         'Boeing Co',

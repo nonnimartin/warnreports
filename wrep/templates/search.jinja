@@ -1,6 +1,6 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
-<table class="table table-striped responsive">
+<table class="table table-striped responsive" id="search_table">
     <thead>
         <tr>
             <th>State</th>
@@ -13,31 +13,41 @@
     </thead>
     <tbody></tbody>
 </table>
+<div class="hidden">
+    <form class="row g-3" id="search_form">
+        <div class="col-3">
+            <label for="search_text">Search</label>
+            <input class="form-control" name="text" id="search_text">
+        </div>
+        <div class="col-2">
+            <label for="search_state">State</label>
+            <select class="form-select" name="state" id="search_state">
+                <option value="">-</option>
+                {%- for state in states %}
+                <option value="{{ state.id }}">{{ state.id }}</option>
+                {%- endfor %}
+            </select>
+        </div>
+        <div class="col-2">
+            <label for="search_reported_after">Reported after</label>
+            <input class="form-control" name="reported_after" type="date" id="search_reported_after">
+        </div>
+        <div class="col-2">
+            <label for="search_reported_before">Reported before</label>
+            <input class="form-control" name="reported_before" type="date" id="search_reported_before">
+        </div>
+        <div class="col-2">
+            <label for="search_employees_min">Employees min.</label>
+            <input class="form-control" name="employees_min" type="number" id="search_employees_min">
+        </div>
+        <div class="col-1">
+            <label for="search_clear"></label>
+            <input type="submit" class="hidden">
+            <button class="form-control clear-form btn btn-secondary" id="search_clear">Clear</button>
+        </div>
+    </form>
+</div>
 {%- endblock %}
 {%- block scripts %}
-<script>
-$(() => {
-    const renderDate = v => v ? v.substring(0, 10) : ''
-    const renderLink = (v, type, row) => `<a href="/r/${row.id}">${v}</a>`
-    const columns = [
-        {data: 'state', name: 'state'},
-        {data: 'company', name: 'company', render: renderLink},
-        {data: 'reported', name: 'reported', type: 'date', render: renderDate},
-        {data: 'starting', name: 'starting', type: 'date', render: renderDate},
-        {data: 'employees', name: 'employees', type: 'num'},
-        {data: 'action', name: 'action', orderable: false},
-    ]
-    $('table').DataTable({
-        processing: true,
-        serverSide: true,
-        ajax: '/dt/reports',
-        pageLength: 25,
-        columns,
-        order: {
-            name: 'reported',
-            dir: 'desc',
-        }
-    })
-});
-</script>
+<script src="/static/js/search.js"></script>
 {%- endblock %}

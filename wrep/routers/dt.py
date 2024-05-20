@@ -1,49 +1,50 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Request
 
-from .. import utils, search
+from .. import search, utils
 from ..models import *
 
 logger = utils.get_logger('dt')
 router = APIRouter()
 
-class ReportDtResult(DataModel):
-    data: list[ReportData]
+class SearchResult(DataModel):
     recordsTotal: int
     recordsFiltered: int
     draw: int
 
+class ReportSearchResult(SearchResult):
+    data: list[ReportData]
+
 @router.get('/reports', include_in_schema=False, response_model_by_alias=False)
-async def search_dt(
+async def search_reports(
     req: Request,
-    length: Limit,
-    start: Offset,
-    draw: int,
-) -> ReportDtResult:
+    text: str|None = None,
+    state: StateCode|None = None,
+    reported_before: datetime|None = None,
+    reported_after: datetime|None = None,
+    employees_min: int|None = None,
+    draw: int = 1,
+    limit: Limit = 25,
+    offset: Offset = 0,
+    order: str|None = None,
+) -> ReportSearchResult:
     qp = dict(req.query_params)
-    order = parse_dt_order(qp)
-    params = dict(order=order)
-    text = qp.get('search[value]')
-    if text:
-        params.update(text=text)
-    data, total = await search.search_with_total(ReportData, params, length, start)
+    logger.info(f'{qp=}')
+    employees_gt = None if employees_min is None else employees_min - 1
+    params = dict(
+        text=text,
+        state=state,
+        reported_before=reported_before,
+        reported_after=reported_after,
+        employees_gt=employees_gt,
+        order=order)
+    data, total = await search.search_with_total(ReportData, params, limit, offset)
     collstats = (await search.search_stats('reports'))['reports']
-    return ReportDtResult(
+    return ReportSearchResult(
         data=data,
         recordsTotal=collstats['count'],
         recordsFiltered=total,
         draw=draw)
-
-def parse_dt_order(params: dict[str, str]) -> str|None:
-    res = []
-    for i in range(len(params)):
-        try:
-            field = params[f'order[{i}][name]']
-        except KeyError:
-            break
-        if params[f'order[{i}][dir]'] == 'desc':
-            field = f'-{field}'
-        res.append(field)
-    return ','.join(res) if res else None
-

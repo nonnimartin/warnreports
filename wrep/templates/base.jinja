@@ -13,10 +13,10 @@
   {%- block styles %}{% endblock %}
 </head>
 <body>
-  {%- block nav %}
-  {%- include 'nav.jinja' %}
-  {%- endblock %}
   <div class="container">
+    {%- block nav %}
+    {%- include 'nav.jinja' %}
+    {%- endblock %}
     {%- block content %}{% endblock %}
   </div>
   {%- block base_scripts %}

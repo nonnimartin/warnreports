@@ -124,7 +124,7 @@ async def naics_list(
         companies_count_gt=companies_count_gt,
         companies_count_lt=companies_count_lt,
         order=order)
-    return (await search(NaicsDetail, params, limit, (page - 1) * limit))[0]
+    return await search(NaicsDetail, params, limit, (page - 1) * limit)
 
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:

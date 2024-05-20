@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 import json
 import re
 import uuid
@@ -1102,7 +1101,7 @@ class TX(Translator, state='TX'):
             (_r(r'_x000D_'), ''),
             (_r(r"'$"), ''),
             # TODO: Dallas4 Plano2 etc.
-            (_r(r'(dallas|plano|austin|antonio|houston|worth)\d', re.I), r'\1'),
+            (_r(r'(dallas|plano|austin|antonio|houston|worth|el paso)\d', re.I), r'\1'),
         ],
         starting=[
             ('1930-03-30 00:00:00', '2020-03-30'),
@@ -1197,47 +1196,19 @@ class WI(Translator, state='WI'):
         'City': 'location',
         'Affected Workers': 'employees',
         'Original Notice Type / Update Type': 'action',
-        'Layoff Begin Date': 'starting'
+        'Layoff Begin Date': 'starting',
+        'NAICS Description': 'industry',
     }
     rewrites = dict(
         company=[
             (_r(r'\s*\(CORRECTED\)$'), ''),
         ],
+        action=[
+            ('WR', 'Workforce Reduction'),
+            ('CL', 'Facility Closure'),
+        ],
+        industry=[
+            (_r(r' & '), ' and '),
+            (_r(r'Mfg\.?'), 'Manufacturing'),
+        ]
     )
-
-
-class ReviewTable:
-
-    def __init__(self, state: str, field: str, empty: bool = False):
-        from .scrapers import scrapers
-        self.state = state.upper()
-        self.field = field
-        self.empty = empty
-        self.scraper = scrapers[self.state]()
-        self.translator = translators[self.state]()
-        self.headermap = self.translator.headermap
-        self.columns = []
-        for header, fields in self.headermap.items():
-            if isinstance(fields, str):
-                fields = [fields]
-            for field in fields:
-                if field == self.field:
-                    self.columns.append(header)
-
-    def rows(self, limit: int|None = None):
-        with self.scraper.extract() as reader:
-            it = map(list, map(self.values, reader))
-            it = itertools.islice(it, limit)
-            if not self.empty:
-                it = filter(lambda x: utils.morethan(1, x), it)
-            yield from it
-
-    def headers(self):
-        yield 'state'
-        yield self.field
-        yield from self.columns
-
-    def values(self, row: dict):
-        yield self.state
-        yield self.translator.entry(row).get(self.field)
-        yield from map(row.get, self.columns)

@@ -1,12 +1,3 @@
-
-.container {
-    /* max-width: 600px; */
-    /* margin: 0 auto; */
-    padding: 40px 20px;
-    /* background-color: #fff; */
-    border-radius: 6px;
-    /* box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1); */
-}
 hr.rounded {
     border-top: 8px solid #bbb;
     border-radius: 5px;
@@ -14,7 +5,6 @@ hr.rounded {
 
 h1 {
     text-align: center;
-    /* color: #333; */
 }
 
 .req {
@@ -24,22 +14,25 @@ h1 {
 .report-detail {
     margin-bottom: 20px;
 }
+
 .report-detail td,
 .report-detail th {
     padding: 5px;
 }
 
-nav ul {
-    list-style: none;
-}
-nav ul li {
-    display: inline-block;
-}
-nav .container {
-    padding: 10px 0 0 0;
-
-}
-ul.list-group.feed-list > .list-group-item {
+ul.list-group.feed-list>.list-group-item {
     margin-top: 20px;
     border-top-width: 1px;
+}
+
+td.field-employees {
+    text-align: right;
+}
+
+.hidden {
+    display: none;
+}
+
+nav.main-nav {
+    padding-top: 10px
 }

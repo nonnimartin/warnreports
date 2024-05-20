@@ -26,15 +26,22 @@ app.mount('/static', static, name='static')
 
 @app.get('/', include_in_schema=False)
 async def index(req: Request) -> HTMLResponse:
-    stats = await search.search_stats()
     majors = await search.search(ReportData, dict(employees_gt=49), 10)
-    states = await search.search(StateDetail)
-    context = dict(stats=stats, majors=majors, states=states)
+    context = dict(majors=majors)
     return templates.TemplateResponse(req, 'index.jinja', context)
 
 @app.get('/search', include_in_schema=False)
 async def report_search(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'search.jinja')
+    states = await search.search(StateDetail)
+    context = dict(states=states)
+    return templates.TemplateResponse(req, 'search.jinja', context)
+
+@app.get('/about', include_in_schema=False)
+async def about(req: Request) -> HTMLResponse:
+    stats = await search.search_stats()
+    states = await search.search(StateDetail)
+    context = dict(stats=stats, states=states)
+    return templates.TemplateResponse(req, 'about.jinja', context)
 
 @app.get('/r/{id}', include_in_schema=False)
 async def report_view(req: Request, id: UUID) -> HTMLResponse:

@@ -142,7 +142,9 @@ async def search_result(
     filts = tuple(filt.get_filters())
     q = {'$and': filts} if filts else {}
     cur = coll.find(q)
-    orders = tuple(filt.get_ordering())
+    orders = list(filt.get_ordering())
+    if ('_id', 1) not in orders and ('_id', -1) not in orders:
+        orders.append(('_id', 1))
     if orders:
         cur = cur.sort(orders)
     if offset:

@@ -1,29 +1,35 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
-<form>
-    {%- for field, value in form.items() %}
-    <div class="form-group">
-        <input class="form-control" name="{{ field }}" placeholder="{{ field }}" value="{{ value|default('', true) }}">
-    </div>
-    {%- endfor %}
-    <button type="submit" class="btn btn-primary">Submit</button>
-    <button class="btn btn-secondary form-reset">Reset</button>
-</form>
-
-<div>
+<div class="feed-customize">
+    <h2>Customize</h2>
+    <form>
+        {%- for field, value in form.items() %}
+        <div class="form-group">
+            <input class="form-control" name="{{ field }}" placeholder="{{ field }}" value="{{ value|default('', true) }}">
+        </div>
+        {%- endfor %}
+        <button type="submit" class="btn btn-primary">Submit</button>
+        <button class="btn btn-secondary form-reset">Reset</button>
+    </form>
+</div>
+<div class="feed-links">
+    <h2>Feed Links</h2>
     <ul class="list-group">
         <li class="list-group-item"><a href="{{ permalinks.rss }}">RSS</a></li>
         <li class="list-group-item"><a href="{{ permalinks.atom }}">Atom</a></li>
     </ul>
 </div>
-{%- set viewlink = true %}
-<ul class="list-group feed-list">
-    {%- for report in reports %}
-    <li class="list-group-item">
-        {%- include 'reports/detail.jinja' %}
-    </li>
-    {%- endfor %}
-</ul>
+<div class="feed-results">
+    <ul class="list-group feed-list">
+        {%- with viewlink = true %}
+        {%- for report in reports %}
+        <li class="list-group-item">
+            {%- include 'reports/detail.jinja' %}
+        </li>
+        {%- endfor %}
+        {%- endwith %}
+    </ul>
+</div>
 {%- endblock %}
 {%- block scripts %}
 <script src="/static/js/feed.js"></script>
