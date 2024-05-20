@@ -210,6 +210,7 @@ class ReportedYearToUrl(Translator):
         super().finish(entry, row)
 
 class AK(Translator, state='AK'):
+    default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
@@ -248,6 +249,7 @@ class AL(Translator, state='AL'):
     )
 
 class AZ(Translator, state='AZ'):
+    default_url = 'https://www.azjobconnection.gov/search/warn_lookups/new'
     headermap = {
         'employer': 'company',
         'notice_date': ['reported', 'starting'],
@@ -769,7 +771,7 @@ class MI(Translator, state='MI'):
         'City': 'location',
         'Date Received': 'reported',
         'Incident Type': 'action',
-        'Number of Layoffs': 'empoloyees'
+        'Number of Layoffs': 'employees'
     }
 
 class MO(Translator, state='MO'):
@@ -1032,10 +1034,15 @@ class TN(Translator, state='TN'):
         'Received Date' : 'reported',
         'Notice Date' : 'reported',
         'County' : 'location',
-        'No. Of Employees': 'affected',
+        'No. Of Employees': 'employees',
         'Layoff/Closure': 'action',
-        'WARN#': 'report_id',
+        'Notice ID': 'report_id',
     }
+    rewrites = dict(
+        report_id=[
+            (_r(r'^#'), ''),
+        ]
+    )
 
 class TX(Translator, state='TX'):
     default_url = 'https://www.twc.texas.gov/data-reports/warn-notice'
@@ -1120,6 +1127,7 @@ class VT(Translator, state='VT'):
     }
 
 class WA(Translator, state='WA'):
+    default_url = 'https://esd.wa.gov/about-employees/WARN'
     headermap = {
         'Company' : 'company',
         '# of Workers' : 'employees',
