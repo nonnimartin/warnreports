@@ -153,12 +153,13 @@ filters: dict[type[DataModel], type[MongoSearch]] = {
     NaicsDetail: MongoNaicsFilter,
     ArtifactDetail: MongoArtifactsFilter}
 
-async def search(
+async def search_result(
     model: type[DM],
     params: dict[str, Any]|None = None,
     limit: Limit|None = None,
-    offset: Offset = 0
-) -> tuple[list[DM], int]:
+    offset: Offset = 0,
+    with_total: bool = False,
+) -> tuple[list[DM], int|None]:
     filt = filters[model](**params or {})
     coll = mongo.get_collection(filt.collection_name)
     filts = tuple(filt.get_filters())
@@ -171,11 +172,28 @@ async def search(
         cur = cur.skip(offset)
     if limit:
         cur = cur.limit(limit)
-    total = await coll.count_documents(q)
-    return await cur.to_list(None), total
+    total = await coll.count_documents(q) if with_total else None
+    objs = [model.model_validate(obj) async for obj in cur]
+    return objs, total
+
+async def search_with_total(
+    model: type[DM],
+    params: dict[str, Any]|None = None,
+    limit: Limit|None = None,
+    offset: Offset = 0
+) -> tuple[list[DM], int]:
+    return await search_result(model, params, limit, offset, with_total=True)
+
+async def search(
+    model: type[DM],
+    params: dict[str, Any]|None = None,
+    limit: Limit|None = None,
+    offset: Offset = 0
+) -> list[DM]:
+    return (await search_result(model, params, limit, offset))[0]
 
 async def retrieve(model: type[DM], **params) -> DM:
-    results = (await search(model, params, 1))[0]
+    results = await search(model, params, 1)
     if results:
         return results[0]
     raise NotFoundError

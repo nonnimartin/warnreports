@@ -26,8 +26,8 @@ app.mount('/static', static, name='static')
 @app.get('/', include_in_schema=False)
 async def index(req: Request) -> HTMLResponse:
     stats = await search.search_stats()
-    majors = (await search.search(ReportData, dict(employees_gt=49), 10))[0]
-    states = (await search.search(StateDetail))[0]
+    majors = await search.search(ReportData, dict(employees_gt=49), 10)
+    states = await search.search(StateDetail)
     context = dict(stats=stats, majors=majors, states=states)
     return templates.TemplateResponse(req, 'index.jinja', context)
 
@@ -79,7 +79,7 @@ async def search_dt(
     text = qp.get('search[value]')
     if text:
         params.update(text=text)
-    data, total = await search.search(ReportData, params, length, start)
+    data, total = await search.search_with_total(ReportData, params, length, start)
     return ReportDtResult(
         data=data,
         recordsTotal=total,

@@ -71,7 +71,7 @@ async def build_feed(fmt: str, **kw) -> bytes:
         order='-reported',
         employees_gt=employees - 1 if employees else None)
     template = utils.get_template('reports/feed.jinja')
-    for report in (await search(ReportData, params, settings.FEED_ENTRY_LIMIT))[0]:
+    for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
         entry.title(report.company)
@@ -108,7 +108,7 @@ async def feed_index(
         order='-reported',
         employees_gt=employees - 1 if employees else None)
     permalinks = {fmt: id_permalink(id, fmt) for fmt in ('rss', 'atom')}
-    reports = (await search(ReportData, params, limit, offset))[0]
+    reports = await search(ReportData, params, limit, offset)
     context = dict(reports=reports, permalinks=permalinks, form=form)
     return templates.TemplateResponse(req, 'feed.jinja', context)
 
