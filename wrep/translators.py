@@ -493,10 +493,18 @@ class GA(Translator, state='GA'):
         2. For historical reports, extract the year from 'GA WARN ID' and use Dec. 31
         of that year. However, if the starting date ('First Date of Separation')
         is earlier, use that.
+        
+        3. If reported and starting are more than five years apart, discard.
         """
         if not row.get('submitted_date'):
             it = map(entry.get, ['reported', 'starting'])
             entry['reported'] = min(filter(None, it), default=None)
+        reported: datetime|None = entry.get('reported')
+        starting: datetime|None = entry.get('starting')
+        if reported and starting:
+            if abs(reported.year - starting.year) > 5:
+                reported = None
+                entry['reported'] = reported
         super().finish(entry, row)
 
 class HI(Translator, state='HI'):
@@ -862,6 +870,7 @@ class NY(Translator, state='NY'):
         'Number Affected': 'employees',
         'Total Number of Affected Workers': 'employees',
         'Closure Start Date': 'starting',
+        'Closing Date': 'starting',
         'Layoff Date': 'starting',
         'City': 'location',
         'Region': 'location',
@@ -891,6 +900,12 @@ class NY(Translator, state='NY'):
         report_id=[
             (_r(r' and '), ','),
             (_r(r'^.*[^\d,-].*$'), ''),
+        ],
+        starting=[
+            # (_r(r'.* on or about (.*)\.?$'), r'\1'),
+            (_r(r'[\d,]+ employees ', re.I), ''),
+            (_r(r'.*within 90 days \(from August 11, 2022/*'), '2022-08-11'),
+            (_r(r'^.{20}.*'), ''),
         ]
     )
 
@@ -1064,6 +1079,10 @@ class TN(Translator, state='TN'):
         ],
         report_id=[
             (_r(r'^#'), ''),
+        ],
+        company=[
+            (',', ''),
+            ('.', ''),
         ]
     )
 
@@ -1090,6 +1109,15 @@ class TX(Translator, state='TX'):
             ('1930-03-31 00:00:00', '2020-03-31'),
         ],
     )
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        reported: datetime|None = entry.get('reported')
+        starting: datetime|None = entry.get('starting')
+        if reported and starting:
+            if starting.year == 2027 and reported.year == 2017:
+                starting = starting.replace(year=reported.year)
+                entry['starting'] = starting
+        super().finish(entry, row)
 
 class UT(Translator, state='UT'):
     default_url = 'https://jobs.utah.gov/employer/business/warnnotices.html'

@@ -219,8 +219,8 @@ class MapReducingModel(DataModel, Generic[OM]):
     def equals_obj(self, obj: OM) -> bool:
         return self.id == obj.id
 
-    @abstractmethod
-    def reduce_obj(self, obj: OM, memo: dict[str, set]) -> None: ...
+    def reduce_obj(self, obj: OM, memo: dict[str, set]) -> None:
+        pass
 
 class ReportData(MapReducingModel[Report]):
     id: UUID = Field(alias='_id')
@@ -296,10 +296,11 @@ class NaicsDetail(NaicsData, MapReducingModel[Naics]):
                 self.companies_count += 1
                 memo['companies'].add(company)
 
-class StateDetail(DataModel):
+class StateDetail(MapReducingModel[StateStat]):
     id: StateCode
     last_reported: datetime|None = None
     reports_count: int = 0
+    orm_model: ClassVar = StateStat
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 class CompanyDetail(MapReducingModel[Company]):

@@ -8,6 +8,8 @@ _r = re.compile
 
 COMPANY_NAME = {
     _r(r'^walmart\s?', re.I): 'Walmart',
+    _r(r'^99 cents only', re.I): '99 Cents Only',
+    _r(r'^3M ', re.I): '3M',
     **{value: 'Boeing' for value in [
         'Boeing',
         'Boeing Co',

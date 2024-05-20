@@ -177,7 +177,7 @@ class MongoSearchIndex(SearchIndexBackend):
     mongo = search.mongo
 
     async def clean(self) -> None:
-        for name in search.search_indexes:
+        for name in search.collection_defs:
             coll = self.mongo.get_collection(name)
             if name == 'naics':
                 coro = coll.drop()
@@ -222,7 +222,7 @@ class MongoSearchIndex(SearchIndexBackend):
 
     async def update_collection(self, name: str, source: Iterable[DM], get_filter: Callable[[DM], dict[str, Any]]) -> tuple[int, int, int]:
         coll = self.mongo.get_collection(name)
-        indexes = search.search_indexes[name]
+        indexes = search.collection_defs[name]['indexes']
         await coll.create_indexes(indexes)
         return await update_collection(coll, source, get_filter)
 
