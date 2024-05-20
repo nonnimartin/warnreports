@@ -15,10 +15,13 @@ from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
 from urllib.parse import urlparse
 
 import openpyxl
+import openpyxl.worksheet
+import openpyxl.worksheet.worksheet
 import pdfplumber
 import requests
 from bs4 import BeautifulSoup as Soup
 from bs4.element import PageElement, ResultSet, Tag
+from openpyxl.worksheet.worksheet import Worksheet
 from typing_extensions import Buffer
 
 import warn.cache
@@ -107,9 +110,12 @@ class Scraper:
 
 def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
     worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
-    it = ([cell.value for cell in row] for row in worksheet.rows)
+    return extract_xlsx_worksheet(worksheet)
+
+def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
+    it = ([cell.value for cell in row] for row in ws.rows)
     headers = next(it)
-    for values in it:
+    for values in filter(any, it):
         row = {}
         for k, v in zip(headers, values):
             if not (k or v):
@@ -638,6 +644,29 @@ class MO(Scraper, state='MO'):
         files = self.cache.files('pages', '*.html')
         files.sort(reverse=True)
         return list(map(Path, files))
+
+class NJ(Scraper, state='NJ'):
+    index_url = "https://www.nj.gov/labor/assets/PDFs/WARN/WARN_Notice_Archive.xlsx"
+
+    async def scrape(self):
+        await self.cache_download('latest.xlsx', self.index_url)
+
+    async def stat(self):
+        return hashstat(self.cache.glob('latest.xlsx'))
+
+    async def clean(self):
+        for file in self.cache.glob('*.xlsx', '*.csv'):
+            file.unlink()
+
+    @contextmanager
+    def extract(self):
+        wb = openpyxl.load_workbook(self.cache.topath('latest.xlsx'), read_only=True)
+        yield chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
+
+    def extract_xlsx_worksheet(self, ws: openpyxl.worksheet.worksheet.Worksheet):
+        extra = dict(worksheet_name=ws.title)
+        it = extract_xlsx_worksheet(ws)
+        return (row|extra for row in it)
 
 class NY(Scraper, state='NY'):
     base_url = 'https://dol.ny.gov'

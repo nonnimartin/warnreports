@@ -4,7 +4,7 @@ import itertools
 import json
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import unescape as html_unescape
 from pathlib import Path
 from typing import Any
@@ -810,14 +810,31 @@ class NE(Translator, state='NE'):
     }
 
 class NJ(Translator, state='NJ'):
-    default_url = 'https://www.nj.gov/labor/assets/PDFs/WARN/2024_WARN_Notice_Archive.pdf'
+    default_url = 'https://www.nj.gov/labor/employer-services/warn/'
     headermap = {
         'Company': 'company',
         'City': 'location',
-        'Month Posted': 'reported',
         'Effective Date': 'starting',
         'Workforce Affected': 'employees',
     }
+
+    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+        month: str|None = row.get('Month Posted')
+        if month:
+            year = int(row['worksheet_name'][:4])
+            datestr = f'{month} 1, {year}'
+            reported = self.parse_date(datestr)
+            if reported:
+                for days in reversed(range(28, 31)):
+                    dt = reported + timedelta(days=days)
+                    if dt.month == reported.month:
+                        reported = dt
+                        break
+            starting: datetime|None = entry.get('starting')
+            if starting and starting < reported:
+                reported = starting
+            entry['reported'] = reported
+        super().finish(entry, row)
 
 class NM(Translator, state='NM'):
     default_url = 'https://www.dws.state.nm.us/Portals/0/DM/Business/2024_WARN.pdf'
