@@ -1,0 +1,18 @@
+<table class="table table-striped responsive" id="states_table">
+    <thead>
+        <tr>
+            <th>State</th>
+            <th>Reports</th>
+            <th>Last Reported</th>
+        </tr>
+    </thead>
+    <tbody>
+        {%- for state in states %}
+        <tr>
+            <td><a href="/feed/?state={{ state.id }}">{{ state.id }}</a></td>
+            <td>{{ state.reports_count }}</td>
+            <td>{{ state.last_reported.date() if state.last_reported else '' }}</td>
+        </tr>
+        {%- endfor %}
+    </tbody>
+</table>

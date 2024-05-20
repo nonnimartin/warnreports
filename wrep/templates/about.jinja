@@ -1,0 +1,35 @@
+{%- extends 'base.jinja' %}
+{%- block content %}
+<h3>Collection Stats</h3>
+<table class="table table-striped">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Records</th>
+        </tr>
+    </thead>
+    <tbody>
+        {%- for name, stats in stats.items() %}
+        <tr>
+            <td>{{ name }}</td>
+            <td>{{ stats.count }}</td>
+        </tr>
+        {%- endfor %}
+    </tbody>
+</table>
+<h3>State Stats</h3>
+{%- include 'states/table.jinja' %}
+{%- endblock %}
+{%- block scripts %}
+<script>
+$(() => {
+    $('#states_table').DataTable({
+        paging: false,
+        filter: false,
+        layout: {
+            bottomStart: null,
+        },
+    })
+});
+</script>
+{%- endblock %}

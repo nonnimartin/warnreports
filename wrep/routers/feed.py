@@ -71,7 +71,7 @@ async def build_feed(fmt: str, **kw) -> bytes:
         order='-reported',
         employees_gt=employees - 1 if employees else None)
     template = utils.get_template('reports/feed.jinja')
-    for report in (await search(ReportData, params, settings.FEED_ENTRY_LIMIT))[0]:
+    for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
         entry.title(report.company)
@@ -85,20 +85,14 @@ async def build_feed(fmt: str, **kw) -> bytes:
 async def feed_index(
     req: Request,
     text: str|None = None,
-    company: str|None = None,
     state: StateCode|None = None,
-    location: str|None = None,
-    action: str|None = None,
     naics: int|None = None,
     employees: int|None = None,
     limit: Limit = 50,
     offset: Offset = 0) -> HTMLResponse:
     form = dict(
         text=text,
-        company=company,
         state=state,
-        action=action,
-        location=location,
         naics=naics,
         employees=employees)
     id = id_encode(**form)
@@ -108,22 +102,37 @@ async def feed_index(
         order='-reported',
         employees_gt=employees - 1 if employees else None)
     permalinks = {fmt: id_permalink(id, fmt) for fmt in ('rss', 'atom')}
-    reports = (await search(ReportData, params, limit, offset))[0]
+    reports = await search(ReportData, params, limit, offset)
     context = dict(reports=reports, permalinks=permalinks, form=form)
+    is_custom = any(form.values())
+    custom_desc = query_description(**form)
+    states = await search(StateDetail)
+    context.update(is_custom=is_custom, custom_desc=custom_desc, states=states)
     return templates.TemplateResponse(req, 'feed.jinja', context)
 
 def query_description(**kw) -> str:
     params = {k: v for k, v in kw.items() if v}
-    return ' '.join(urlencode(params).split('&'))
+    descs = []
+    if (state := params.pop('state', None)):
+        descs.append(state)
+    if (employees := params.pop('employees', None)) is not None:
+        descs.append(f'{employees}+')
+    if (text := params.pop('text', None)):
+        descs.append(text)
+    descs.extend(filter(None, urlencode(params).split('&')))
+    return ' '.join(descs)
 
 def id_encode(**kw) -> str:
     params = {k: kw[k] for k in sorted(kw) if kw[k]}
     q = urlencode(params)
     return base64.b32hexencode(q.encode()).decode().lower()
 
-def id_decode(id: str) -> dict[str, str]:
+def id_decode(id: str) -> dict[str, str|int]:
     q = base64.b32hexdecode(id, casefold=True).decode()
     params = parse_qs(q)
+    for key in ('employees', 'naics'):
+        if key in params:
+            params[key][0] = int(params[key][0])
     return {k: v[0] for k, v in params.items()}
 
 def id_permalink(id: str, fmt: str) -> str:

@@ -44,7 +44,7 @@ async def reports_list(
         employees_gt=employees_gt,
         employees_lt=employees_lt,
         order=order)
-    return (await search(ReportData, params, limit, (page - 1) * limit))[0]
+    return await search(ReportData, params, limit, (page - 1) * limit)
 
 @router.get('/reports/{id}', response_model_by_alias=False)
 async def report_get(id: UUID) -> ReportData:
@@ -64,7 +64,7 @@ async def states_list(
         last_reported_after=last_reported_after,
         last_reported_before=last_reported_before,
         order=order)
-    return (await search(StateDetail, params))[0]
+    return await search(StateDetail, params)
 
 @router.get('/states/{id}')
 async def state_get(id: StateCode) -> StateDetail:
@@ -96,7 +96,7 @@ async def companies_list(
         last_reported_after=last_reported_after,
         last_reported_before=last_reported_before,
         order=order)
-    return (await search(CompanyDetail, params, limit, (page - 1) * limit))[0]
+    return await search(CompanyDetail, params, limit, (page - 1) * limit)
 
 @router.get('/companies/{id}', response_model_by_alias=False)
 async def company_get(id: UUID) -> CompanyDetail:
@@ -124,7 +124,7 @@ async def naics_list(
         companies_count_gt=companies_count_gt,
         companies_count_lt=companies_count_lt,
         order=order)
-    return (await search(NaicsDetail, params, limit, (page - 1) * limit))[0]
+    return await search(NaicsDetail, params, limit, (page - 1) * limit)
 
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:

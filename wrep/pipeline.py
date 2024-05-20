@@ -45,6 +45,15 @@ class Pipeline:
         'industry',
         'artifacts']
     required_fields = {'company', 'reported'}
+    write_fields = [
+        'company',
+        'location',
+        'reported',
+        'starting',
+        'employees',
+        'action',
+        'url',
+        'company_norm']
     json_types = {
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
@@ -177,7 +186,8 @@ class Pipeline:
         artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
         record['company_norm'] = normls.company_name(record['company'])
-        for field, value in record.items():
+        for field in self.write_fields:
+            value = record.get(field)
             if save is save.Create or getattr(report, field) != value:
                 setattr(report, field, value)
         if save is save.Nochange and report.dirty_fields:
