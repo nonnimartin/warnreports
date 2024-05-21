@@ -537,6 +537,9 @@ class IA(Translator, state='IA'):
         reported=[
             ('9/1/8/2020', '2020-09-18'),
         ],
+        action=[
+            ('Mayss Layoff', 'Mass Layoff'),
+        ],
     )
 
 class ID(Translator, state='ID'):
