@@ -3,10 +3,10 @@ from __future__ import annotations
 import base64
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, HTTPException, status, Request
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
-from feedgen.feed import FeedGenerator
 from fastapi.templating import Jinja2Templates
+from feedgen.feed import FeedGenerator
 
 from .. import settings, utils
 from ..models import *
@@ -19,19 +19,13 @@ templates = Jinja2Templates(env=utils.jinja_env())
 def feed_query(fmt: str):
     async def query(
         text: str|None = None,
-        company: str|None = None,
         state: StateCode|None = None,
-        location: str|None = None,
-        action: str|None = None,
         naics: int|None = None,
         employees: int|None = None,
     ) -> HTMLResponse:
         form = dict(
             text=text,
-            company=company,
             state=state,
-            action=action,
-            location=location,
             naics=naics,
             employees=employees)
         content = await build_feed(fmt, **form)
@@ -67,8 +61,10 @@ async def build_feed(fmt: str, **kw) -> bytes:
     feed.description(title)
     params = dict(kw)
     employees = params.pop('employees', None)
+    state = params.pop('state', None)
     params.update(
         order='-reported',
+        state=[state] if state else None,
         employees_gt=employees - 1 if employees else None)
     template = utils.get_template('reports/feed.jinja')
     for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
@@ -96,7 +92,7 @@ async def feed_index(
         naics=naics,
         employees=employees)
     id = id_encode(**form)
-    params = dict(form)
+    params = dict(form, state=[state] if state else None)
     params.pop('employees')
     params.update(
         order='-reported',

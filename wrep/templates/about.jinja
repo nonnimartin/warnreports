@@ -1,6 +1,6 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
-<h3>Collection Stats</h3>
+<h2>Collection Stats</h2>
 <table class="table table-striped">
     <thead>
         <tr>
@@ -17,7 +17,7 @@
         {%- endfor %}
     </tbody>
 </table>
-<h3>State Stats</h3>
+<h2>State Stats</h2>
 {%- include 'states/table.jinja' %}
 {%- endblock %}
 {%- block scripts %}

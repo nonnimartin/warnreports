@@ -1,4 +1,16 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
 {%- include 'reports/detail.jinja' %}
+<div class="reports-auto-table slim" data-query-id="query_related">
+    <h3>Related</h3>
+    {%- include 'reports/table.jinja' %}
+</div>
+{%- endblock %}
+{%- block scripts %}
+{%- set query = dict(
+    id_not=report.id|string,
+    company_id=report.company_id|string,
+    order='-reported') %}
+<script type="json" id="query_related">{{ query|tojson }}</script>
+<script src="/static/js/table.js" type="module"></script>
 {%- endblock %}

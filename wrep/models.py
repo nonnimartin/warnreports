@@ -286,6 +286,7 @@ class MapReducingModel(DataModel, Generic[OM]):
 class ReportData(MapReducingModel[Report]):
     id: UUID = Field(alias='_id')
     company: CompanyName
+    company_id: UUID|None = None
     state: StateCode
     location: str|None
     reported: datetime
@@ -299,6 +300,8 @@ class ReportData(MapReducingModel[Report]):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     def reduce_obj(self, obj: Report, memo: dict[str, set]) -> None:
+        if not self.company_id:
+            self.company_id = uuid5(Company.NS, obj.company_norm)
         nr: NaicsReport|None = getattr(obj.company_report, 'naicsreport', None)
         if nr and nr.naics not in memo['naics']:
             naics = NaicsData.model_validate(nr.naics)
@@ -383,6 +386,9 @@ class CompanyDetail(MapReducingModel[Company]):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     def reduce_obj(self, obj, memo):
+        if not memo['normed']:
+            self.id = uuid5(Company.NS, obj.name_norm)
+            memo['normed'].add(True)
         memo['canon'].add(obj.name_canon)
         if obj.name_canon not in memo['aliases']:
             self.aliases.append(obj.name_canon)
@@ -408,7 +414,6 @@ class CompanyDetail(MapReducingModel[Company]):
 
     def reduce_end(self, memo):
         self.name = sorted(memo['canon'], key=normls.company_name_sort)[0]
-        self.id = uuid5(Company.NS, self.name)
         self.aliases.sort(key=lambda x: (x.lower(), x))
         self.naics.sort(key=lambda x: (x.code, x.id))
         self.states.sort()
@@ -450,9 +455,11 @@ class FilterModel(DataModel, Generic[DM]):
 
 class ReportsFilter(FilterModel[ReportData]):
     id: UUID|None = None
+    id_not: list[UUID]|None = None
     text: str|None = None
-    company: CompanyName|None = None
-    state: StateCode|None = None
+    company: list[CompanyName]|None = None
+    company_id: list[UUID]|None = None
+    state: list[StateCode]|None = None
     location: str|None = None
     action: str|None = None
     naics: int|None = None
@@ -477,10 +484,10 @@ class StatesFilter(FilterModel[StateDetail]):
     default_ordering: ClassVar = [('id', 1)]
 
 class CompaniesFilter(FilterModel[CompanyDetail]):
-    id: UUID|None = None
+    id: list[UUID]|None = None
     text: str|None = None
-    name: CompanyName|None = None
-    state: StateCode|None = None
+    name: list[CompanyName]|None = None
+    state: list[StateCode]|None = None
     naics: int|None = None
     reports_count_gt: int|None = None
     reports_count_lt: int|None = None

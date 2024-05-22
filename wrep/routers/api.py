@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from .. import utils
 from ..models import *
@@ -15,8 +16,10 @@ router = APIRouter()
 @router.get('/reports', response_model_by_alias=False)
 async def reports_list(
     text: str|None = None,
-    company: CompanyName|None = None,
-    state: StateCode|None = None,
+    id_not: Annotated[list[UUID]|None, Query()] = None,
+    company: Annotated[list[CompanyName]|None, Query()] = None,
+    company_id: Annotated[list[UUID]|None, Query()] = None,
+    state: Annotated[list[StateCode]|None, Query()] = None,
     location: str|None = None,
     action: str|None = None,
     naics: int|None = None,
@@ -30,9 +33,12 @@ async def reports_list(
     limit: Limit = 50,
     page: PageNumber = 1
 ) -> list[ReportData]:
+    logger.info(f'{company=}')
     params = dict(
         text=text,
+        id_not=id_not,
         company=company,
+        company_id=company_id,
         state=state,
         action=action,
         location=location,
@@ -72,9 +78,10 @@ async def state_get(id: StateCode) -> StateDetail:
 
 @router.get('/companies', response_model_by_alias=False)
 async def companies_list(
+    id: Annotated[list[UUID]|None, Query()] = None,
     text: str|None = None,
-    name: CompanyName|None = None,
-    state: StateCode|None = None,
+    name: Annotated[list[CompanyName]|None, Query()] = None,
+    state: Annotated[list[StateCode]|None, Query()] = None,
     naics: int|None = None,
     reports_count_gt: int|None = None,
     reports_count_lt: int|None = None,
@@ -87,6 +94,7 @@ async def companies_list(
     page: PageNumber = 1
 ) -> list[CompanyDetail]:
     params = dict(
+        id=id,
         text=text,
         name=name,
         state=state,
@@ -102,7 +110,7 @@ async def companies_list(
 
 @router.get('/companies/{id}', response_model_by_alias=False)
 async def company_get(id: UUID) -> CompanyDetail:
-    return await retrieve404(CompanyDetail, id=id)
+    return await retrieve404(CompanyDetail, id=[id])
 
 @router.get('/naics')
 async def naics_list(
