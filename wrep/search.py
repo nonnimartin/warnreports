@@ -56,8 +56,7 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
         if self.id_not:
             yield {'_id': {'$nin': self.id_not}}
         for field in ('state', 'company', 'company_id'):
-            value: list|None = getattr(self, field)
-            if value is not None:
+            if (value := getattr(self, field)) is not None:
                 yield {field: {'$in': value}}
         if self.action:
             yield {'action': {'$regex': self.wc_contains(self.action)}}

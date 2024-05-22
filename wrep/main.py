@@ -15,7 +15,7 @@ from .models import *
 from .routers import *
 
 logger = utils.get_logger('main')
-app = FastAPI(title='WARN Reporter')
+app = FastAPI(title='WARN Reporter', docs_url='/api/swagger', redoc_url='/api/docs')
 static = StaticFiles(directory=settings.STATIC_DIR)
 templates = Jinja2Templates(env=utils.jinja_env())
 
@@ -34,6 +34,10 @@ async def report_search(req: Request) -> HTMLResponse:
     states = await search.search(StateDetail)
     context = dict(states=states)
     return templates.TemplateResponse(req, 'search.jinja', context)
+
+@app.get('/api', include_in_schema=False)
+async def api_home(req: Request) -> HTMLResponse:
+    return templates.TemplateResponse(req, 'api.jinja')
 
 @app.get('/about', include_in_schema=False)
 async def about(req: Request) -> HTMLResponse:
