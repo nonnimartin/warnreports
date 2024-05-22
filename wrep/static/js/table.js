@@ -9,6 +9,7 @@ export const defaults = {
     ],
     order: [{name: 'reported', dir: 'desc'}],
     pageLength: 25,
+    autoWidth: false,
 }
 
 export const serverSide = {
