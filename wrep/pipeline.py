@@ -86,7 +86,7 @@ class Pipeline:
             Report.delete().where(Report.state == self.state).execute()
             StateStat.delete().where(StateStat.id == self.state).execute()
             Artifact.delete().where(Artifact.path.startswith(f'{self.state.lower()}/')).execute()
-            Company.delete().where(self.get_companies_pred()).execute()
+            Company.delete().where(self.get_companies_delete_pred()).execute()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
@@ -114,10 +114,10 @@ class Pipeline:
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
         backend: TranslationBackend = self.backends[stage]
-        source = self.backends[Stage.Extract]
+        source: ExtractionBackend = self.backends[Stage.Extract]
         prev = await backend.stat()
         if clean:
-            await self.clean(Stage.Translate)
+            await self.clean(stage)
         async with source.reader() as reader:
             count = await backend.run(self.translator, reader)
         cur = await backend.stat()
@@ -127,7 +127,8 @@ class Pipeline:
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
-        async with self.backends[Stage.Translate].reader() as reader:
+        source: TranslationBackend = self.backends[Stage.Translate]
+        async with source.reader() as reader:
             with db.atomic():
                 if clean:
                     await self.clean(Stage.Load)
@@ -146,27 +147,35 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         backend: SearchIndexBackend = self.backends[stage]
-        reports = ReportData.map_reduce((
-            Report
-            .select_for_reduce()
-            .where(Report.state == self.state)))
-        count, created, updated = await backend.update_reports(reports)
-        nochange = created + updated == 0
-        counts = dict(created=created, updated=updated, nochange=count-created-updated)
-        details = [StateDetail.model_validate(StateStat.get_by_id(self.state))]
-        await backend.update_states(details)
-        companies = CompanyDetail.map_reduce((
-            Company
-            .select_for_reduce()
-            .where(self.get_companies_pred())))
-        await backend.update_companies(companies)
-        await backend.update_naics(NaicsDetail.map_reduce())
-        artifacts = ArtifactDetail.map_reduce((
-            Artifact
-            .select_for_reduce()
-            .where(Artifact.path.startswith(f'{self.state.lower()}/'))))
-        await backend.update_artifacts(artifacts)
-        return dict(count=count, counts=counts, nochange=nochange)
+        results: dict[str, tuple[int, int, int]] = dict(
+            reports=await backend.update_reports(ReportData.map_reduce(
+                Report
+                .select_for_reduce()
+                .where(Report.state == self.state)
+                .iterator())),
+            companies=await backend.update_companies(CompanyDetail.map_reduce(
+                Company
+                .select_for_reduce()
+                .where(self.get_companies_update_pred())
+                .iterator())),
+            artifacts=await backend.update_artifacts(ArtifactDetail.map_reduce(
+                Artifact
+                .select_for_reduce()
+                .where(Artifact.path.startswith(f'{self.state.lower()}/'))
+                .iterator())),
+            states=await backend.update_states([
+                StateDetail.model_validate(StateStat.get_by_id(self.state))]),
+            naics=await backend.update_naics(NaicsDetail.map_reduce()))
+        nochange = True
+        counts: dict[str, dict[str, int]] = {}
+        totals: dict[str, int] = defaultdict(int)
+        for name, (count, created, updated) in results.items():
+            nochange &= created + updated == 0
+            counts[name] = dict(count=count, created=created, updated=updated)
+            totals['created'] += created
+            totals['updated'] += updated
+            totals['nochange'] += count - created - updated
+        return dict(counts=counts, totals=dict(totals), nochange=nochange)
 
     def save(self, entry: dict) -> SaveType:
         save = SaveType.Nochange
@@ -185,7 +194,7 @@ class Pipeline:
         industry = record.pop('industry', None)
         artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
-        record['company_norm'] = normls.company_name(record['company'])
+        record['company_norm'] = normls.company_name_norm(record['company'])
         for field in self.write_fields:
             value = record.get(field)
             if save is save.Create or getattr(report, field) != value:
@@ -194,15 +203,15 @@ class Pipeline:
             save = save.Update
         if save is not save.Nochange:
             report.save(force_insert=save is save.Create)
+        company_save = self.save_company(report)
+        if save is save.Nochange and company_save is not save.Nochange:
+            save = save.Update
         naics_save = self.save_naics(report, naics, industry)
         if save is save.Nochange:
             save = naics_save
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
             save = artifacts_save
-        Company.get_or_create(
-            name_norm=record['company_norm'],
-            defaults=dict(name=record['company']))
         return save
 
     def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
@@ -214,6 +223,20 @@ class Pipeline:
                 trims[field] = len(value) - limit
                 record[field] = value[:limit]
         return trims
+
+    def save_company(self, report: Report) -> SaveType:
+        save = SaveType.Nochange
+        try:
+            company = Company.get(name=report.company)
+        except Company.DoesNotExist:
+            Company.create(name=report.company, name_norm=report.company_norm)
+            save = save.Create
+        else:
+            if company.name_norm != report.company_norm:
+               company.name_norm = report.company_norm
+               company.save()
+               save = save.Update
+        return save
 
     def save_naics(self, report: Report, codes: set[int], industry: str|None) -> SaveType:
         save = SaveType.Nochange
@@ -278,11 +301,18 @@ class Pipeline:
             ArtifactReport.insert_many(add).execute()
         return save
 
-    def get_companies_pred(self):
+    def get_companies_delete_pred(self):
+        return Company.id.not_in(
+            Company
+            .select(Company.id)
+            .join(Report, on=(Report.company == Company.name))
+            .where(Report.state != self.state))
+
+    def get_companies_update_pred(self):
         return Company.id.in_(
             Company
             .select(Company.id)
-            .join(Report, on=(Report.company_norm == Company.name_norm))
+            .join(Report, on=(Report.company == Company.name))
             .where(Report.state == self.state))
 
     def from_json(self, field: str, value: Any) -> Any:

@@ -534,6 +534,9 @@ class IA(Translator, state='IA'):
         'Layoff Date': 'starting'
     }
     rewrites = dict(
+        company=[
+            (_r(r'Prinicpal'), 'Principal'),
+        ],
         reported=[
             ('9/1/8/2020', '2020-09-18'),
         ],
@@ -655,6 +658,7 @@ class KS(Translator, state='KS'):
         company=[
             (_r(r'[,\']$'), ''),
             (_r(r'^wal-mart$', re.I), 'Walmart'),
+            (_r(r'Thte '), 'The '),
             ("Walgreen's", 'Walgreens'),
         ],
     )
