@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import re
-from abc import abstractmethod
 from collections import defaultdict
 from datetime import datetime
 from itertools import batched
 from pathlib import Path
-from typing import (Annotated, Any, ClassVar, Generic, Iterable, Iterator,
-                    Literal, Self, TypeAlias, TypeVar)
-from uuid import UUID, uuid4
+from typing import (TYPE_CHECKING, Annotated, Any, ClassVar, Generic, Iterable,
+                    Iterator, Literal, Self, TypeAlias, TypeVar)
+from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 import peewee as orm
@@ -22,8 +21,14 @@ from pydantic import (ConfigDict, Field, NonNegativeInt, PositiveInt,
 from pydantic_core import ValidationError as ValidationError
 
 from . import settings, utils
-from .ref.tz import zoneinfos
 from .ref import normls
+from .ref.tz import zoneinfos
+
+if TYPE_CHECKING:
+    from typing import overload
+
+DM = TypeVar('DM', bound='DataModel')
+OM = TypeVar('OM', bound='OrmModel')
 logger = utils.get_logger('models')
 
 __all__ = [
@@ -42,13 +47,44 @@ db: orm.Database = db_url.connect(settings.DB_URL)
 
 LEFT_OUTER = orm.JOIN['LEFT_OUTER']
 
+class ModelSelect(orm.ModelSelect, Generic[OM]):
+    if TYPE_CHECKING:
+        @overload
+        def join(self, *args, **kw) -> Self: ...
+        @overload
+        def join(self, *args) -> Self: ...
+        @overload
+        def where(self, *args) -> Self: ...
+        @overload
+        def limit(self, value=None) -> Self: ...
+        @overload
+        def first(self) -> OM|None: ...
+        @overload
+        def switch(self, ctx=None) -> Self: ...
+        @overload
+        def order_by(self, *values) -> Self: ...
+        @overload
+        def __iter__(self) -> Iterator[OM]: ...
+
 class OrmModel(orm.Model):
     class Meta:
         database = db
 
     @classmethod
-    def select_for_reduce(cls) -> orm.ModelSelect[Self]:
+    def select_for_reduce(cls) -> ModelSelect[Self]:
         return cls.select()
+
+    if TYPE_CHECKING:
+        DoesNotExist: type[orm.DoesNotExist]
+        @overload
+        @classmethod
+        def select(cls, *args) -> ModelSelect[Self]: ...
+        @overload
+        @classmethod
+        def alias(cls, alias=None) -> type[Self]: ...
+        @overload
+        @classmethod
+        def get(cls, *queries, **filters) -> Self: ...
 
 class Report(OrmModel):
     id = orm.UUIDField(primary_key=True)
@@ -66,13 +102,23 @@ class Report(OrmModel):
     @classmethod
     def select_for_reduce(cls):
         return (cls
-            .select(NaicsReport, Naics, ArtifactReport, Artifact, cls)
+            .select(
+                cls,
+                CompanyReport := cls.alias(),
+                NaicsReport,
+                Naics,
+                ArtifactReport,
+                Artifact)
+            .join(
+                CompanyReport,
+                attr='company_report',
+                on=(cls.company_norm == CompanyReport.company_norm))
             .join(NaicsReport, LEFT_OUTER)
             .join(Naics, LEFT_OUTER)
             .switch(cls)
             .join(ArtifactReport, LEFT_OUTER)
             .join(Artifact, LEFT_OUTER)
-            .order_by(cls.id, Naics.id, Artifact.id))
+            .order_by(cls.id, Naics.code, Artifact.id))
 
 class StateStat(OrmModel):
     id = orm.CharField(max_length=2, primary_key=True)
@@ -86,18 +132,27 @@ class StateStat(OrmModel):
         self.last_reported = latest and latest.reported
 
 class Company(OrmModel):
-    id = orm.UUIDField(primary_key=True, default=uuid4)
+    NS = uuid5(settings.NAMESPACE, 'Company')
+    id = orm.UUIDField(primary_key=True)
     name = orm.CharField(max_length=512, unique=True)
-    name_norm = orm.CharField(max_length=512, unique=True)
+    name_norm = orm.CharField(max_length=512, index=True)
+    name_canon = orm.CharField(max_length=512, index=True)
 
     @classmethod
     def select_for_reduce(cls):
         return (cls
-            .select(Report, NaicsReport, Naics, cls)
-            .join(Report, LEFT_OUTER, on=(Report.company_norm == cls.name_norm))
+            .select(
+                cls,
+                Report,
+                NaicsReport,
+                Naics)
+            .join(
+                Report,
+                LEFT_OUTER,
+                on=(Report.company_norm == cls.name_norm))
             .join(NaicsReport, LEFT_OUTER)
             .join(Naics, LEFT_OUTER)
-            .order_by(cls.name, Report.state, Naics.id))
+            .order_by(cls.name_norm, cls.name, Report.state, Naics.id))
 
 class Naics(OrmModel):
     id = orm.IntegerField(primary_key=True)
@@ -110,7 +165,10 @@ class Naics(OrmModel):
             .select(NaicsReport, Report, cls)
             .join(NaicsReport, LEFT_OUTER)
             .join(Report, LEFT_OUTER)
-            .join(Company, LEFT_OUTER, on=(Report.company_norm == Company.name_norm))
+            .join(
+                Company,
+                LEFT_OUTER,
+                on=(Report.company_norm == Company.name_norm))
             .order_by(cls.id))
 
 class NaicsReport(OrmModel):
@@ -137,7 +195,7 @@ class Artifact(OrmModel):
     @classmethod
     def select_for_reduce(cls):
         return (cls
-            .select(ArtifactReport, Report, cls)
+            .select(cls, ArtifactReport, Report)
             .join(ArtifactReport, LEFT_OUTER)
             .join(Report, LEFT_OUTER)
             .order_by(cls.id))
@@ -149,9 +207,9 @@ class Artifact(OrmModel):
         stat = file.stat()
         data = dict(
             size=stat.st_size,
-            modified = datetime.fromtimestamp(stat.st_mtime),
-            mimetype = utils.get_mimetype(file),
-            sha1 = digest.hexdigest())
+            modified=datetime.fromtimestamp(stat.st_mtime),
+            mimetype=utils.get_mimetype(file),
+            sha1=digest.hexdigest())
         for field, value in data.items():
             if getattr(self, field) != value:
                 setattr(self, field, value)
@@ -182,8 +240,6 @@ __all__ += [
     'StateDetail',
     'ValidationError']
 
-DM = TypeVar('DM', bound='DataModel')
-OM = TypeVar('OM', bound=OrmModel)
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
@@ -204,22 +260,27 @@ class MapReducingModel(DataModel, Generic[OM]):
     @classmethod
     def map_reduce(cls, it: Iterable[OM]|None = None) -> Iterator[Self]:
         if it is None:
-            it = cls.orm_model.select_for_reduce()
+            it = cls.orm_model.select_for_reduce().iterator()
         inst: Self|None = None
         for obj in it:
             if inst is None or not inst.equals_obj(obj):
                 if inst:
+                    inst.reduce_end(memo)
                     yield inst
                 inst = cls.model_validate(obj)
                 memo = defaultdict(set)
             inst.reduce_obj(obj, memo)
         if inst:
+            inst.reduce_end(memo)
             yield inst
 
     def equals_obj(self, obj: OM) -> bool:
         return self.id == obj.id
 
     def reduce_obj(self, obj: OM, memo: dict[str, set]) -> None:
+        pass
+
+    def reduce_end(self, memo: dict[str, set]) -> None:
         pass
 
 class ReportData(MapReducingModel[Report]):
@@ -238,7 +299,7 @@ class ReportData(MapReducingModel[Report]):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     def reduce_obj(self, obj: Report, memo: dict[str, set]) -> None:
-        nr: NaicsReport|None = getattr(obj, 'naicsreport', None)
+        nr: NaicsReport|None = getattr(obj.company_report, 'naicsreport', None)
         if nr and nr.naics not in memo['naics']:
             naics = NaicsData.model_validate(nr.naics)
             self.naics.append(naics)
@@ -248,6 +309,9 @@ class ReportData(MapReducingModel[Report]):
             artifact = ArtifactData.model_validate(ar.artifact)
             self.artifacts.append(artifact)
             memo['artifacts'].add(ar.artifact)
+
+    def reduce_end(self, memo):
+        self.naics.sort(key=lambda x: (x.code, x.id))
 
     @field_serializer('reported', 'starting')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
@@ -284,14 +348,17 @@ class NaicsData(DataModel):
 class NaicsDetail(NaicsData, MapReducingModel[Naics]):
     reports_count: int = 0
     companies_count: int = 0
+    employees_sum: int = 0
     orm_model: ClassVar = Naics
 
     def reduce_obj(self, obj, memo) -> None:
         nr: NaicsReport|None = getattr(obj, 'naicsreport', None)
         if nr and nr.report not in memo['reports']:
             self.reports_count += 1
+            if nr.report.employees:
+                self.employees_sum += nr.report.employees
             memo['reports'].add(nr.report)
-            company: Company|None = getattr(nr.report, 'company', None)
+            company: str|None = getattr(nr.report, 'company_norm', None)
             if company and company not in memo['companies']:
                 self.companies_count += 1
                 memo['companies'].add(company)
@@ -306,6 +373,7 @@ class StateDetail(MapReducingModel[StateStat]):
 class CompanyDetail(MapReducingModel[Company]):
     id: UUID = Field(alias='_id')
     name: CompanyName
+    aliases: list[CompanyName] = Field(default_factory=list)
     states: list[StateCode] = Field(default_factory=list)
     naics: list[NaicsData] = Field(default_factory=list)
     reports_count: int = 0
@@ -315,6 +383,13 @@ class CompanyDetail(MapReducingModel[Company]):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     def reduce_obj(self, obj, memo):
+        memo['canon'].add(obj.name_canon)
+        if obj.name_canon not in memo['aliases']:
+            self.aliases.append(obj.name_canon)
+            memo['aliases'].add(obj.name_canon)
+        if obj.name not in memo['aliases']:
+            self.aliases.append(obj.name)
+            memo['aliases'].add(obj.name)
         report: Report = getattr(obj, 'report', None)
         if report and report not in memo['reports']:
             self.reports_count += 1
@@ -331,6 +406,15 @@ class CompanyDetail(MapReducingModel[Company]):
                 self.naics.append(naics)
                 memo['naics'].add(nr.naics)
 
+    def reduce_end(self, memo):
+        self.name = sorted(memo['canon'], key=normls.company_name_sort)[0]
+        self.id = uuid5(Company.NS, self.name)
+        self.aliases.sort(key=lambda x: (x.lower(), x))
+        self.naics.sort(key=lambda x: (x.code, x.id))
+        self.states.sort()
+
+    def equals_obj(self, obj: Company) -> bool:
+        return obj.name_norm == normls.company_name_norm(self.name)
 
 # ----------------------------
 
@@ -394,6 +478,7 @@ class StatesFilter(FilterModel[StateDetail]):
 
 class CompaniesFilter(FilterModel[CompanyDetail]):
     id: UUID|None = None
+    text: str|None = None
     name: CompanyName|None = None
     state: StateCode|None = None
     naics: int|None = None
@@ -416,8 +501,10 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     reports_count_lt: int|None = None
     companies_count_gt: int|None = None
     companies_count_lt: int|None = None
+    employees_sum_gt: int|None = None
+    employees_sum_lt: int|None = None
     result_model: ClassVar = NaicsDetail
-    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count'}
+    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count', 'employees_sum'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
@@ -442,34 +529,51 @@ def migrate() -> None:
 
         if 'company' in tables:
             cols = {col.name: col for col in db.get_columns('company')}
+            idxs = {idx.name: idx for idx in db.get_indexes('company')}
             needed = (
                 'state' in cols or
                 'company' in cols or
                 'name_norm' not in cols or
+                'name_canon' not in cols or
+                'company_name_norm' not in idxs or
+                idxs['company_name_norm'].unique or
                 cols['id'].data_type != 'uuid')
             if needed:
-                db.execute_sql('DROP TABLE IF EXISTS company_tmp')
-                db.execute_sql('ALTER TABLE company RENAME to company_tmp')
+                logger.info(f'Migrating company table')
+                tmp = f'company_tmp_{uuid4().hex[:8]}'
+                db.execute_sql(f'DROP TABLE IF EXISTS {tmp}')
+                db.execute_sql(f'ALTER TABLE company RENAME to {tmp}')
                 db.create_tables([Company])
                 col = 'company' if 'company' in cols else 'name'
-                cur = db.execute_sql(f'SELECT {col} FROM company_tmp')
+                cur = db.execute_sql(f'SELECT {col} FROM {tmp}')
                 if cur.rowcount:
-                    it = (x[0] for x in cur)
-                    it = ((name, normls.company_name(name)) for name in it)
-                    Company.insert_from(it, ['name', 'name_norm']).on_conflict('IGNORE').execute()
-                db.execute_sql('DROP TABLE company_tmp')
+                    def vals(name: str):
+                        return (
+                            uuid5(Company.NS, name),
+                            name,
+                            normls.company_name_norm(name),
+                            normls.company_name_canon(name))
+                    q = (
+                        Company
+                        .insert_from(
+                            (vals(x[0]) for x in cur),
+                            ['id', 'name', 'name_norm', 'name_canon'])
+                        .on_conflict('IGNORE'))
+                    q.execute()
+                db.execute_sql(f'DROP TABLE {tmp}')
 
         if 'report' in tables:
             cols = {col.name: col for col in db.get_columns('report')}
             needed = 'company_norm' not in cols
             if needed:
+                logger.info(f'Migrating report table')
                 field = orm.CharField(max_length=512, default='', index=True)
                 op = migrator.add_column('report', 'company_norm', field)
                 playhouse.migrate.migrate(op)
                 for batch in batched(Report.select(Report.id, Report.company), 1000):
                     reports = list(batch)
                     for report in reports:
-                        report.company_norm = normls.company_name(report.company).lower()
+                        report.company_norm = normls.company_name_norm(report.company)
                     Report.bulk_update(reports, ['company_norm'])
 
         db.create_tables([

@@ -184,7 +184,10 @@ class MongoSearchIndex(SearchIndexBackend):
             elif name == 'artifacts':
                 coro = coll.delete_many(dict(path={'$regex': f'^{self.state.lower()}/'}))
             elif name == 'companies':
-                coro = coll.delete_many(dict(states=self.state))
+                coro = coll.delete_many({
+                    '$and': [
+                        {'states': self.state},
+                        {'states': {'$size': 1}}]})
             elif name == 'states':
                 coro = coll.delete_one(dict(id=self.state))
             else:

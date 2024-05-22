@@ -72,6 +72,7 @@ async def state_get(id: StateCode) -> StateDetail:
 
 @router.get('/companies', response_model_by_alias=False)
 async def companies_list(
+    text: str|None = None,
     name: CompanyName|None = None,
     state: StateCode|None = None,
     naics: int|None = None,
@@ -86,6 +87,7 @@ async def companies_list(
     page: PageNumber = 1
 ) -> list[CompanyDetail]:
     params = dict(
+        text=text,
         name=name,
         state=state,
         naics=naics,
@@ -111,6 +113,8 @@ async def naics_list(
     reports_count_lt: int|None = None,
     companies_count_gt: int|None = None,
     companies_count_lt: int|None = None,
+    employees_sum_gt: int|None = None,
+    employees_sum_lt: int|None = None,
     order: str|None = None,
     limit: Limit = 50,
     page: PageNumber = 1
@@ -123,6 +127,8 @@ async def naics_list(
         reports_count_lt=reports_count_lt,
         companies_count_gt=companies_count_gt,
         companies_count_lt=companies_count_lt,
+        employees_sum_gt=employees_sum_gt,
+        employees_sum_lt=employees_sum_lt,
         order=order)
     return await search(NaicsDetail, params, limit, (page - 1) * limit)
 

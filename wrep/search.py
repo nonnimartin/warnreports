@@ -90,6 +90,8 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
             yield {'states': self.state.upper()}
         if self.naics:
             yield self.get_naics_filter(self.naics)
+        if self.text:
+            yield {'$text': {'$search': self.text}}
         yield from self.get_ltgt_filters('reports_count')
         yield from self.get_ltgt_filters('employees_sum')
         yield from self.get_ltgt_filters('last_reported', 'before', 'after')
@@ -107,6 +109,7 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
         if self.title:
             yield {'title': {'$regex': self.wc_contains(self.title)}}
         yield from self.get_ltgt_filters('reports_count')
+        yield from self.get_ltgt_filters('employees_sum')
         yield from self.get_ltgt_filters('companies_count')
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
@@ -211,7 +214,9 @@ collection_defs = dict(
     companies=dict(
         model=CompanyDetail,
         indexes=[
+            IndexModel({'aliases': 'text'}),
             IndexModel({'name': 1}),
+            IndexModel({'aliases': 1}),
             IndexModel({'states': 1}),
             IndexModel({'naics.code': 1}),
             IndexModel({'naics.id': 1}),
@@ -219,6 +224,7 @@ collection_defs = dict(
             IndexModel({'last_reported': -1}),
             IndexModel({'reports_count': 1}),
             IndexModel({'reports_count': -1}),
+            IndexModel({'employees_sum': -1}),
         ],
     ),
     artifacts=dict(
@@ -237,6 +243,7 @@ collection_defs = dict(
             IndexModel({'companies_count': 1}),
             IndexModel({'reports_count': 1}),
             IndexModel({'reports_count': -1}),
+            IndexModel({'employees_sum': -1}),
         ],
     ),
 )
@@ -245,29 +252,37 @@ async def search_stats(*names: str) -> dict[str, dict[str, Any]]:
     names = names or collection_defs
     stats = {}
     for name in names:
-        stats[name] = await mongo.command('collstats', name)
+        stat = await mongo.command('collstats', name)
+        stats[name] = dict(count=stat['count'], size=stat['size'])
     return stats
 
 async def search_init(*names: str) -> None:
     names = names or collection_defs
-    for name in names:
-        indexes = collection_defs[name]['indexes']
+    defns = {name: collection_defs[name] for name in names}
+    for name, defn in defns.items():
+        logger.info(f'Initializing {name}')
+        indexes = defn['indexes']
         await mongo.get_collection(name).create_indexes(indexes)
 
 async def search_clean(*names: str) -> None:
     names = names or collection_defs
     for name in names:
+        stat = (await search_stats(name))[name]
+        logger.info(f'Cleaning {name} {stat=}')
         await mongo.get_collection(name).drop()
 
 async def search_build(*names: str) -> None:
     names = names or collection_defs
-    await search_clean(*names)
-    await search_init(*names)
-    for name in names:
-        defn = collection_defs[name]
+    defns = {name: collection_defs[name] for name in names}
+    for name, defn in defns.items():
+        await search_clean(name)
+        await search_init(name)
+        logger.info(f'Building {name}')
         model: type[MapReducingModel] = defn['model']
         it = map(model.as_doc, model.map_reduce())
         await mongo.get_collection(name).insert_many(it)
+        stat = (await search_stats(name))[name]
+        logger.info(f'Built {name} {stat=}')
 
 actions = dict(
     init=search_init,
