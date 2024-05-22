@@ -165,7 +165,10 @@ class Naics(OrmModel):
             .select(NaicsReport, Report, cls)
             .join(NaicsReport, LEFT_OUTER)
             .join(Report, LEFT_OUTER)
-            .join(Company, LEFT_OUTER, on=(Report.company_norm == Company.name_norm))
+            .join(
+                Company,
+                LEFT_OUTER,
+                on=(Report.company_norm == Company.name_norm))
             .order_by(cls.id))
 
 class NaicsReport(OrmModel):
@@ -307,6 +310,9 @@ class ReportData(MapReducingModel[Report]):
             self.artifacts.append(artifact)
             memo['artifacts'].add(ar.artifact)
 
+    def reduce_end(self, memo):
+        self.naics.sort(key=lambda x: (x.code, x.id))
+
     @field_serializer('reported', 'starting')
     def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
         return tzreplace(dt, zoneinfos[self.state])
@@ -380,7 +386,7 @@ class CompanyDetail(MapReducingModel[Company]):
         memo['canon'].add(obj.name_canon)
         if obj.name_canon not in memo['aliases']:
             self.aliases.append(obj.name_canon)
-            memo['aliases'].add(obj.name)
+            memo['aliases'].add(obj.name_canon)
         if obj.name not in memo['aliases']:
             self.aliases.append(obj.name)
             memo['aliases'].add(obj.name)
@@ -403,6 +409,9 @@ class CompanyDetail(MapReducingModel[Company]):
     def reduce_end(self, memo):
         self.name = sorted(memo['canon'], key=normls.company_name_sort)[0]
         self.id = uuid5(Company.NS, self.name)
+        self.aliases.sort(key=lambda x: (x.lower(), x))
+        self.naics.sort(key=lambda x: (x.code, x.id))
+        self.states.sort()
 
     def equals_obj(self, obj: Company) -> bool:
         return obj.name_norm == normls.company_name_norm(self.name)
@@ -495,7 +504,7 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     employees_sum_gt: int|None = None
     employees_sum_lt: int|None = None
     result_model: ClassVar = NaicsDetail
-    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count'}
+    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count', 'employees_sum'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
