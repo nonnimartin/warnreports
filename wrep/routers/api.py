@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 
 from .. import utils
 from ..models import *
@@ -13,27 +13,58 @@ from ..search import *
 logger = utils.get_logger('api')
 router = APIRouter()
 
+async def common_params(order: str|None = None, limit: Limit = 50, page: PageNumber = 1):
+    return dict(order=order, limit=limit, offset=(page - 1) * limit)
+
+async def reported_params(reported_min: datetime|None = None, reported_max: datetime|None = None):
+    return dict(reported_min=reported_min, reported_max=reported_max)
+
+async def last_reported_params(last_reported_min: datetime|None = None, last_reported_max: datetime|None = None):
+    return dict(last_reported_min=last_reported_min, last_reported_max=last_reported_max)
+
+async def starting_params(starting_min: datetime|None = None, starting_max: datetime|None = None):
+    return dict(starting_min=starting_min, starting_max=starting_max)
+
+async def employees_params(employees_min: int|None = None, employees_max: int|None = None):
+    return dict(employees_min=employees_min, employees_max=employees_max)
+
+async def employees_sum_params(employees_sum_min: int|None = None, employees_sum_max: int|None = None):
+    return dict(employees_sum_min=employees_sum_min, employees_sum_max=employees_sum_max)
+
+async def reports_count_params(reports_count_min: int|None = None, reports_count_max: int|None = None):
+    return dict(reports_count_min=reports_count_min, reports_count_max=reports_count_max)
+
+async def companies_count_params(companies_count_min: int|None = None, companies_count_max: int|None = None):
+    return dict(companies_count_min=companies_count_min, companies_count_max=companies_count_max)
+
+CommonParams = Annotated[dict, Depends(common_params)]
+CompanyParam = Annotated[list[CompanyName]|None, Query()]
+StateParam = Annotated[list[StateCode]|None, Query()]
+IdsParam = Annotated[list[UUID]|None, Query()]
+NaicsParam = Annotated[list[int]|None, Query()]
+ReportedParams = Annotated[dict, Depends(reported_params)]
+StartingParams = Annotated[dict, Depends(starting_params)]
+EmployeesParams = Annotated[dict, Depends(employees_params)]
+EmployeesSumParams = Annotated[dict, Depends(employees_sum_params)]
+ReportsCountParams = Annotated[dict, Depends(reports_count_params)]
+LastReportedParams = Annotated[dict, Depends(last_reported_params)]
+CompaniesCountParams = Annotated[dict, Depends(companies_count_params)]
+
 @router.get('/reports', response_model_by_alias=False)
 async def reports_list(
     text: str|None = None,
-    id_not: Annotated[list[UUID]|None, Query()] = None,
-    company: Annotated[list[CompanyName]|None, Query()] = None,
-    company_id: Annotated[list[UUID]|None, Query()] = None,
-    state: Annotated[list[StateCode]|None, Query()] = None,
+    state: StateParam = None,
+    reported: ReportedParams = ...,
+    starting: StartingParams = ...,
+    employees: EmployeesParams = ...,
+    company: CompanyParam = None,
+    id_not: IdsParam = None,
+    company_id: IdsParam = None,
     location: str|None = None,
     action: str|None = None,
-    naics: int|None = None,
-    reported_after: datetime|None = None,
-    reported_before: datetime|None = None,
-    starting_after: datetime|None = None,
-    starting_before: datetime|None = None,
-    employees_gt: int|None = None,
-    employees_lt: int|None = None,
-    order: str|None = None,
-    limit: Limit = 50,
-    page: PageNumber = 1
+    naics: NaicsParam = None,
+    commons: CommonParams = ...,
 ) -> list[ReportData]:
-    logger.info(f'{company=}')
     params = dict(
         text=text,
         id_not=id_not,
@@ -43,14 +74,11 @@ async def reports_list(
         action=action,
         location=location,
         naics=naics,
-        reported_after=reported_after,
-        reported_before=reported_before,
-        starting_after=starting_after,
-        starting_before=starting_before,
-        employees_gt=employees_gt,
-        employees_lt=employees_lt,
-        order=order)
-    return await search(ReportData, params, limit, (page - 1) * limit)
+        **reported,
+        **starting,
+        **employees,
+        order=commons['order'])
+    return await search(ReportData, params, commons['limit'], commons['offset'])
 
 @router.get('/reports/{id}', response_model_by_alias=False)
 async def report_get(id: UUID) -> ReportData:
@@ -58,18 +86,11 @@ async def report_get(id: UUID) -> ReportData:
 
 @router.get('/states')
 async def states_list(
-    reports_count_gt: int|None = None,
-    reports_count_lt: int|None = None,
-    last_reported_after: datetime|None = None,
-    last_reported_before: datetime|None = None,
+    reports_count: ReportsCountParams,
+    last_reported: LastReportedParams,
     order: str|None = None
 ) -> list[StateDetail]:
-    params = dict(
-        reports_count_gt=reports_count_gt,
-        reports_count_lt=reports_count_lt,
-        last_reported_after=last_reported_after,
-        last_reported_before=last_reported_before,
-        order=order)
+    params = dict(**reports_count, **last_reported, order=order)
     return await search(StateDetail, params)
 
 @router.get('/states/{id}')
@@ -78,20 +99,15 @@ async def state_get(id: StateCode) -> StateDetail:
 
 @router.get('/companies', response_model_by_alias=False)
 async def companies_list(
-    id: Annotated[list[UUID]|None, Query()] = None,
+    commons: CommonParams,
+    id: IdsParam = None,
     text: str|None = None,
-    name: Annotated[list[CompanyName]|None, Query()] = None,
-    state: Annotated[list[StateCode]|None, Query()] = None,
-    naics: int|None = None,
-    reports_count_gt: int|None = None,
-    reports_count_lt: int|None = None,
-    employees_sum_gt: int|None = None,
-    employees_sum_lt: int|None = None,
-    last_reported_after: datetime|None = None,
-    last_reported_before: datetime|None = None,
-    order: str|None = None,
-    limit: Limit = 50,
-    page: PageNumber = 1
+    name: CompanyParam= None,
+    state: StateParam = None,
+    naics: NaicsParam = None,
+    employees_sum: EmployeesSumParams = ...,
+    reports_count: ReportsCountParams = ...,
+    last_reported: LastReportedParams = ...,
 ) -> list[CompanyDetail]:
     params = dict(
         id=id,
@@ -99,14 +115,11 @@ async def companies_list(
         name=name,
         state=state,
         naics=naics,
-        reports_count_gt=reports_count_gt,
-        reports_count_lt=reports_count_lt,
-        employees_sum_gt=employees_sum_gt,
-        employees_sum_lt=employees_sum_lt,
-        last_reported_after=last_reported_after,
-        last_reported_before=last_reported_before,
-        order=order)
-    return await search(CompanyDetail, params, limit, (page - 1) * limit)
+        **reports_count,
+        **last_reported,
+        **employees_sum,
+        order=commons['order'])
+    return await search(CompanyDetail, params, commons['limit'], commons['offset'])
 
 @router.get('/companies/{id}', response_model_by_alias=False)
 async def company_get(id: UUID) -> CompanyDetail:
@@ -114,31 +127,23 @@ async def company_get(id: UUID) -> CompanyDetail:
 
 @router.get('/naics')
 async def naics_list(
+    commons: CommonParams,
     code: int|None = None,
-    prefix: int|None = None,
+    prefix: NaicsParam = None,
     title: str|None = None,
-    reports_count_gt: int|None = None,
-    reports_count_lt: int|None = None,
-    companies_count_gt: int|None = None,
-    companies_count_lt: int|None = None,
-    employees_sum_gt: int|None = None,
-    employees_sum_lt: int|None = None,
-    order: str|None = None,
-    limit: Limit = 50,
-    page: PageNumber = 1
+    reports_count: ReportsCountParams = ...,
+    employees_sum: EmployeesSumParams = ...,
+    companies_count: CompaniesCountParams = ...,
 ) -> list[NaicsDetail]:
     params = dict(
         code=code,
         prefix=prefix,
         title=title,
-        reports_count_gt=reports_count_gt,
-        reports_count_lt=reports_count_lt,
-        companies_count_gt=companies_count_gt,
-        companies_count_lt=companies_count_lt,
-        employees_sum_gt=employees_sum_gt,
-        employees_sum_lt=employees_sum_lt,
-        order=order)
-    return await search(NaicsDetail, params, limit, (page - 1) * limit)
+        **reports_count,
+        **employees_sum,
+        **companies_count,
+        order=commons['order'])
+    return await search(NaicsDetail, params, commons['limit'], commons['offset'])
 
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:

@@ -33,19 +33,19 @@ class MongoSearch(FilterModel[DM]):
         return re.compile(f'^{re.escape(text)}.*', flags)
 
     @classmethod
-    def get_naics_filter(cls, naics: int, prefix: str = 'naics'):
+    def get_naics_filter(cls, naics: list[int], prefix: str = 'naics'):
         if prefix:
             prefix = prefix.removesuffix('.') + '.'
-        return {
-                '$or': [
-                    {f'{prefix}code': {'$regex': cls.wc_startswith(str(naics))}},
-                    {f'{prefix}id': naics}]}
+        rxs = (
+            {f'{prefix}code': {'$regex': cls.wc_startswith(str(code))}}
+            for code in naics)
+        return {'$or': [*rxs, {f'{prefix}id': {'$in': naics}}]}
 
-    def get_ltgt_filters(self, field: str, lt: str = 'lt', gt: str = 'gt') -> Iterator[dict[str, dict[str, int]]]:
-        for oper, suffix in zip(('$lt', '$gt'), (lt, gt)):
-            value = getattr(self, f'{field}_{suffix}')
-            if value is not None:
-                yield {field: {oper: value}}
+    def get_minmax_filters(self, *fields: str) -> Iterator[dict[str, dict[str, int]]]:
+        for oper, suffix in zip(('$gte', '$lte'), ('min', 'max')):
+            for field in fields:
+                if (value := getattr(self, f'{field}_{suffix}')) is not None:
+                    yield {field: {oper: value}}
 
 class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
     collection_name: ClassVar = 'reports'
@@ -58,17 +58,14 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
         for field in ('state', 'company', 'company_id'):
             if (value := getattr(self, field)) is not None:
                 yield {field: {'$in': value}}
-        if self.action:
-            yield {'action': {'$regex': self.wc_contains(self.action)}}
-        if self.location:
-            yield {'location': {'$regex': self.wc_contains(self.location)}}
-        if self.naics:
+        for field in ('action', 'location'):
+            if (value := getattr(self, field)) is not None:
+                yield {field: {'$regex': self.wc_contains(value)}}
+        if self.naics is not None:
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_ltgt_filters('reported', 'before', 'after')
-        yield from self.get_ltgt_filters('starting', 'before', 'after')
-        yield from self.get_ltgt_filters('employees')
+        yield from self.get_minmax_filters('reported', 'starting', 'employees')
 
 class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
     collection_name: ClassVar = 'states'
@@ -76,8 +73,7 @@ class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
     def get_filters(self):
         if self.id:
             yield {'id': self.id.upper()}
-        yield from self.get_ltgt_filters('reports_count')
-        yield from self.get_ltgt_filters('last_reported', 'before', 'after')
+        yield from self.get_minmax_filters('reports_count', 'last_reported')
 
 class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
     collection_name: ClassVar = 'companies'
@@ -89,13 +85,11 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
             yield {'$or': [{'aliases': name} for name in self.name]}
         if self.state is not None:
             yield {'state': {'$in': self.state}}
-        if self.naics:
+        if self.naics is not None:
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_ltgt_filters('reports_count')
-        yield from self.get_ltgt_filters('employees_sum')
-        yield from self.get_ltgt_filters('last_reported', 'before', 'after')
+        yield from self.get_minmax_filters('reports_count', 'employees_sum', 'last_reported')
 
 class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
     collection_name: ClassVar = 'naics'
@@ -105,13 +99,11 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
             yield {'id': self.id}
         if self.code is not None:
             yield {'code': self.code}
-        if self.prefix:
+        if self.prefix is not None:
             yield self.get_naics_filter(self.prefix, prefix='')
         if self.title:
             yield {'title': {'$regex': self.wc_contains(self.title)}}
-        yield from self.get_ltgt_filters('reports_count')
-        yield from self.get_ltgt_filters('employees_sum')
-        yield from self.get_ltgt_filters('companies_count')
+        yield from self.get_minmax_filters('reports_count', 'employees_sum', 'companies_count')
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
     collection_name: ClassVar = 'artifacts'

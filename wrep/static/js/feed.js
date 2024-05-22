@@ -1,21 +1,25 @@
 import {getFormParams} from './main.js'
 
 $(() => {
-    $('form').on('submit', function(e) {
+    const form = $('form')
+    form.on('submit', function(e) {
         e.preventDefault()
-        const params = getFormParams(this)
+        const params = getFormParams(form)
+        for (const key of params.keys()) {
+            params.set(key, params.getAll(key).join(','))
+        }
         const search = params.size ? `?${params.toString()}` : ''
         if (search !== window.location.search) {
             const href = `${window.location.pathname}${search}`
             window.location.href = href
         }
     })
-    $('.form-reset').on('click', function(e) {
+    $('.form-reset', form).on('click', function(e) {
         e.preventDefault()
         if (window.location.search) {
             window.location.href = window.location.pathname
         } else {
-            $(this).closest('form').get(0).reset()
+            form.get(0).reset()
         }
     })
 })
