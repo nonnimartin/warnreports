@@ -187,7 +187,7 @@ class MongoSearchIndex(SearchIndexBackend):
                 coro = coll.delete_many({
                     '$and': [
                         {'states': self.state},
-                        {'states', {'$size': 1}}]})
+                        {'states': {'$size': 1}}]})
             elif name == 'states':
                 coro = coll.delete_one(dict(id=self.state))
             else:
@@ -210,7 +210,7 @@ class MongoSearchIndex(SearchIndexBackend):
 
     async def update_companies(self, source):
         def get_filter(inst: CompanyDetail):
-            return dict(name=inst.name)
+            return dict(_id=inst.id)
         return await self.update_collection('companies', source, get_filter)
 
     async def update_naics(self, source):

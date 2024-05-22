@@ -8,7 +8,7 @@ from itertools import batched
 from pathlib import Path
 from typing import (TYPE_CHECKING, Annotated, Any, ClassVar, Generic, Iterable,
                     Iterator, Literal, Self, TypeAlias, TypeVar)
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 import peewee as orm
@@ -132,9 +132,11 @@ class StateStat(OrmModel):
         self.last_reported = latest and latest.reported
 
 class Company(OrmModel):
-    id = orm.UUIDField(primary_key=True, default=uuid4)
+    NS = uuid5(settings.NAMESPACE, 'Company')
+    id = orm.UUIDField(primary_key=True)
     name = orm.CharField(max_length=512, unique=True)
     name_norm = orm.CharField(max_length=512, index=True)
+    name_canon = orm.CharField(max_length=512, index=True)
 
     @classmethod
     def select_for_reduce(cls):
@@ -260,17 +262,22 @@ class MapReducingModel(DataModel, Generic[OM]):
         for obj in it:
             if inst is None or not inst.equals_obj(obj):
                 if inst:
+                    inst.reduce_end(memo)
                     yield inst
                 inst = cls.model_validate(obj)
                 memo = defaultdict(set)
             inst.reduce_obj(obj, memo)
         if inst:
+            inst.reduce_end(memo)
             yield inst
 
     def equals_obj(self, obj: OM) -> bool:
         return self.id == obj.id
 
     def reduce_obj(self, obj: OM, memo: dict[str, set]) -> None:
+        pass
+
+    def reduce_end(self, memo: dict[str, set]) -> None:
         pass
 
 class ReportData(MapReducingModel[Report]):
@@ -370,9 +377,10 @@ class CompanyDetail(MapReducingModel[Company]):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     def reduce_obj(self, obj, memo):
-        if not memo['canon']:
-            self.name = normls.company_name_canon(obj.name)
-            memo['canon'].add(True)
+        memo['canon'].add(obj.name_canon)
+        if obj.name_canon not in memo['aliases']:
+            self.aliases.append(obj.name_canon)
+            memo['aliases'].add(obj.name)
         if obj.name not in memo['aliases']:
             self.aliases.append(obj.name)
             memo['aliases'].add(obj.name)
@@ -391,6 +399,10 @@ class CompanyDetail(MapReducingModel[Company]):
                 naics = NaicsData.model_validate(nr.naics)
                 self.naics.append(naics)
                 memo['naics'].add(nr.naics)
+
+    def reduce_end(self, memo):
+        self.name = sorted(memo['canon'], key=normls.company_name_sort)[0]
+        self.id = uuid5(Company.NS, self.name)
 
     def equals_obj(self, obj: Company) -> bool:
         return obj.name_norm == normls.company_name_norm(self.name)
@@ -513,21 +525,33 @@ def migrate() -> None:
                 'state' in cols or
                 'company' in cols or
                 'name_norm' not in cols or
+                'name_canon' not in cols or
                 'company_name_norm' not in idxs or
                 idxs['company_name_norm'].unique or
                 cols['id'].data_type != 'uuid')
             if needed:
                 logger.info(f'Migrating company table')
-                db.execute_sql('DROP TABLE IF EXISTS company_tmp')
-                db.execute_sql('ALTER TABLE company RENAME to company_tmp')
+                tmp = f'company_tmp_{uuid4().hex[:8]}'
+                db.execute_sql(f'DROP TABLE IF EXISTS {tmp}')
+                db.execute_sql(f'ALTER TABLE company RENAME to {tmp}')
                 db.create_tables([Company])
                 col = 'company' if 'company' in cols else 'name'
-                cur = db.execute_sql(f'SELECT {col} FROM company_tmp')
+                cur = db.execute_sql(f'SELECT {col} FROM {tmp}')
                 if cur.rowcount:
-                    it = (x[0] for x in cur)
-                    it = ((name, normls.company_name_norm(name)) for name in it)
-                    Company.insert_from(it, ['name', 'name_norm']).on_conflict('IGNORE').execute()
-                db.execute_sql('DROP TABLE company_tmp')
+                    def vals(name: str):
+                        return (
+                            uuid5(Company.NS, name),
+                            name,
+                            normls.company_name_norm(name),
+                            normls.company_name_canon(name))
+                    q = (
+                        Company
+                        .insert_from(
+                            (vals(x[0]) for x in cur),
+                            ['id', 'name', 'name_norm', 'name_canon'])
+                        .on_conflict('IGNORE'))
+                    q.execute()
+                db.execute_sql(f'DROP TABLE {tmp}')
 
         if 'report' in tables:
             cols = {col.name: col for col in db.get_columns('report')}
@@ -540,7 +564,7 @@ def migrate() -> None:
                 for batch in batched(Report.select(Report.id, Report.company), 1000):
                     reports = list(batch)
                     for report in reports:
-                        report.company_norm = normls.company_name_norm(report.company).lower()
+                        report.company_norm = normls.company_name_norm(report.company)
                     Report.bulk_update(reports, ['company_norm'])
 
         db.create_tables([

@@ -194,7 +194,8 @@ class Pipeline:
         industry = record.pop('industry', None)
         artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
-        record['company_norm'] = normls.company_name_norm(record['company'])
+        company, company_save = self.save_company(record['company'])
+        record['company_norm'] = company.name_norm
         for field in self.write_fields:
             value = record.get(field)
             if save is save.Create or getattr(report, field) != value:
@@ -203,7 +204,6 @@ class Pipeline:
             save = save.Update
         if save is not save.Nochange:
             report.save(force_insert=save is save.Create)
-        company_save = self.save_company(report)
         if save is save.Nochange and company_save is not save.Nochange:
             save = save.Update
         naics_save = self.save_naics(report, naics, industry)
@@ -224,19 +224,26 @@ class Pipeline:
                 record[field] = value[:limit]
         return trims
 
-    def save_company(self, report: Report) -> SaveType:
+    def save_company(self, name: str) -> tuple[Company, SaveType]:
         save = SaveType.Nochange
+        uid = uuid.uuid5(Company.NS, name)
         try:
-            company = Company.get(name=report.company)
+            company = Company.get(id=uid)
         except Company.DoesNotExist:
-            Company.create(name=report.company, name_norm=report.company_norm)
+            company = Company(id=uid)
             save = save.Create
-        else:
-            if company.name_norm != report.company_norm:
-               company.name_norm = report.company_norm
-               company.save()
-               save = save.Update
-        return save
+        record = dict(
+            name=name,
+            name_norm=normls.company_name_norm(name),
+            name_canon=normls.company_name_canon(name))
+        for field, value in record.items():
+            if save is save.Create or getattr(company, field) != value:
+                setattr(company, field, value)
+        if save is save.Nochange and company.dirty_fields:
+            save = save.Update
+        if save is not save.Nochange:
+            company.save(force_insert=save is save.Create)
+        return company, save
 
     def save_naics(self, report: Report, codes: set[int], industry: str|None) -> SaveType:
         save = SaveType.Nochange

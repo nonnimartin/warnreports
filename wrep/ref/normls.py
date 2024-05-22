@@ -119,3 +119,11 @@ def company_name_norm(name: str) -> str:
 
 def company_name_canon(name: str) -> str:
     return canon(COMPANY_NAME, name)
+
+def company_name_sort(name: str) -> tuple[bool, bool, bool, int, str]:
+    return (
+        name != name.title(),
+        name == name.lower(),
+        name == name.upper(),
+        len(name),
+        name)
