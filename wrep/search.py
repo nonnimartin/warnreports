@@ -53,10 +53,12 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
     def get_filters(self):
         if self.id:
             yield {'_id': self.id}
-        if self.state:
-            yield {'state': self.state.upper()}
-        if self.company:
-            yield {'company': {'$regex': self.wc_contains(self.company)}}
+        if self.id_not:
+            yield {'_id': {'$nin': self.id_not}}
+        for field in ('state', 'company', 'company_id'):
+            value: list|None = getattr(self, field)
+            if value is not None:
+                yield {field: {'$in': value}}
         if self.action:
             yield {'action': {'$regex': self.wc_contains(self.action)}}
         if self.location:
@@ -82,12 +84,12 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
     collection_name: ClassVar = 'companies'
 
     def get_filters(self):
-        if self.id:
-            yield {'_id': self.id}
-        if self.name:
-            yield {'name': {'$regex': self.wc_contains(self.name)}}
-        if self.state:
-            yield {'states': self.state.upper()}
+        if self.id is not None:
+            yield {'_id': {'$in': self.id}}
+        if self.name is not None:
+            yield {'$or': [{'aliases': name} for name in self.name]}
+        if self.state is not None:
+            yield {'state': {'$in': self.state}}
         if self.naics:
             yield self.get_naics_filter(self.naics)
         if self.text:
@@ -194,6 +196,7 @@ collection_defs = dict(
         model=ReportData,
         indexes=[
             IndexModel({'company': 'text'}),
+            IndexModel({'company_id': 'hashed'}),
             IndexModel({'reported': 1}),
             IndexModel({'reported': -1}),
             IndexModel({'employees': 1}),
@@ -285,6 +288,7 @@ async def search_build(*names: str) -> None:
         logger.info(f'Built {name} {stat=}')
 
 actions = dict(
+    stats=search_stats,
     init=search_init,
     build=search_build,
     clean=search_clean)
@@ -297,7 +301,11 @@ class Command(utils.BaseCommand):
         parser.add_argument('args', nargs='*')
 
     async def run(self):
-        await actions[self.opts.action](*self.opts.args)
+        action: str = self.opts.action
+        res = await actions[action](*self.opts.args)
+        if action == 'stats':
+            import json
+            print(json.dumps(res, indent=2))
 
 if __name__ == '__main__':
     Command.main()

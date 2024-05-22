@@ -26,8 +26,7 @@ app.mount('/static', static, name='static')
 
 @app.get('/', include_in_schema=False)
 async def index(req: Request) -> HTMLResponse:
-    majors = await search.search(ReportData, dict(employees_gt=49), 10)
-    context = dict(majors=majors)
+    context = dict()
     return templates.TemplateResponse(req, 'index.jinja', context)
 
 @app.get('/search', include_in_schema=False)

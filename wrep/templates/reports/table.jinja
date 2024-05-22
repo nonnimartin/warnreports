@@ -1,24 +1,11 @@
 <table class="table table-striped reports-table">
     <thead>
         <tr>
-            <th>State</th>
-            <th>Company</th>
-            <th>Reported</th>
-            <th>Starting</th>
-            <th>Employees</th>
-            <th>Action</th>
+            {%- set fields = ['state', 'company', 'reported', 'starting', 'employees', 'action'] %}
+            {%- for field in fields %}
+            <th class="field-{{ field }}" data-data="{{ field }}" data-name="{{ field }}" data-class-name="field-{{ field }}">{{ field.title() }}</th>
+            {%- endfor %}
         </tr>
     </thead>
-    <tbody>
-        {%- for report in reports|default([], true) %}
-        <tr>
-            <td class="field-state">{{ report.state }}</td>
-            <td class="field-company"><a href="/r/{{ report.id }}">{{ report.company }}</a></td>
-            <td class="field-reported">{{ report.reported.date() }}</td>
-            <td class="field-starting">{{ report.starting.date() if report.starting else '' }}</td>
-            <td class="field-employees">{{ report.employees }}</td>
-            <td class="field-action">{{ report.action or '' }}</td>
-        </tr>
-        {%- endfor %}
-    </tbody>
+    <tbody></tbody>
 </table>

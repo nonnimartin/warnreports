@@ -3,14 +3,12 @@ hr.rounded {
     border-radius: 5px;
 }
 
-h1 {
-    text-align: center;
-}
-
 .req {
     color: red;
 }
 
+h2,
+h3,
 .report-detail {
     margin-bottom: 20px;
 }
@@ -20,13 +18,37 @@ h1 {
     padding: 5px;
 }
 
+h2,
+h3,
 ul.list-group.feed-list>.list-group-item {
     margin-top: 20px;
+}
+
+ul.list-group.feed-list>.list-group-item {
     border-top-width: 1px;
 }
 
-td.field-employees {
+td.field-employees,
+td.field-starting,
+td.field-reported {
     text-align: right;
+}
+
+th.field-employees,
+td.field-employees {
+    width: 100px;
+}
+
+th.field-company,
+td.field-company {
+    width: 450px;
+}
+
+th.field-reported,
+td.field-reported,
+th.field-starting,
+td.field-starting {
+    width: 125px;
 }
 
 .hidden {
@@ -34,5 +56,6 @@ td.field-employees {
 }
 
 nav.main-nav {
-    padding-top: 10px
+    padding-top: 10px;
+    padding-bottom: 10px;
 }

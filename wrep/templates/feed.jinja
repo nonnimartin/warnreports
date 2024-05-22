@@ -51,7 +51,7 @@
 </div>
 <div class="feed-results">
     <ul class="list-group feed-list">
-        {%- with viewlink = true %}
+        {%- with viewlink=true, with_naics=false, with_artifacts=false %}
         {%- for report in reports %}
         <li class="list-group-item">
             {%- include 'reports/detail.jinja' %}
@@ -62,5 +62,5 @@
 </div>
 {%- endblock %}
 {%- block scripts %}
-<script src="/static/js/feed.js"></script>
+<script src="/static/js/feed.js" type="module"></script>
 {%- endblock %}

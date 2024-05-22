@@ -4,7 +4,6 @@ import asyncio
 import enum
 import logging
 import mimetypes
-import time
 from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from functools import cache
@@ -33,10 +32,6 @@ def now(**kw) -> datetime:
     if kw:
         dt += timedelta(**kw)
     return dt
-
-def nowms() -> int:
-    'Current time in milliseconds'
-    return int(round(time.time() * 1000))
 
 def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):
