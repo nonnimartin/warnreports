@@ -36,6 +36,7 @@ class CompanyDetailView(CompanyDetail):
 
 class ArtifactDataView(ArtifactData):
     id: UUID = Field(title='ID')
+    media_type: str = Field()
 
 class ArtifactDetailView(ArtifactDataView, ArtifactDetail):
     pass
@@ -71,7 +72,7 @@ async def naics_get(id: int) -> NaicsDetail:
     return await retrieve404(NaicsDetail, id=id)
 
 @router.get('/states')
-async def states_list(params: CompanySearchParams, opts: SearchOpts) -> list[StateDetail]:
+async def states_list(params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
     params |= dict(order=opts.pop('order'))
     return await search(StateDetail, params, **opts)
 

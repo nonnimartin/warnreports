@@ -33,6 +33,10 @@ async def report_search(req: Request) -> HTMLResponse:
 async def api_home(req: Request) -> HTMLResponse:
     return templates.TemplateResponse(req, 'api.jinja')
 
+@router.get('/api/docs')
+async def api_home(req: Request) -> HTMLResponse:
+    return templates.TemplateResponse(req, 'docs/rapidoc.jinja')
+
 @router.get('/about')
 async def about(req: Request) -> HTMLResponse:
     stats = await search.search_stats()
@@ -65,9 +69,9 @@ async def artifact(id: UUID, disposition: str) -> FileResponse:
         content_disposition_type=disposition)
 
 app = FastAPI(
-    title='WARN Reporter',
-    docs_url='/api/swagger',
-    redoc_url='/api/docs')
+    title='warnreports API',
+    docs_url='/api/docs/swagger',
+    redoc_url='/api/docs/redoc')
 
 app.include_router(router, include_in_schema=False)
 app.include_router(api.router, prefix='/api/v0')

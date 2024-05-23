@@ -1,0 +1,51 @@
+{%- extends 'base.jinja' %}
+{%- block content %}
+<rapi-doc spec-url="/openapi.json" theme="dark" render-style="view" class="hidden"></rapi-doc>
+{%- endblock %}
+{%- block scripts %}
+<script type="module" src="https://unpkg.com/rapidoc/dist/rapidoc-min.js"></script>
+<script>
+;$(() => {
+    const rapi = $('rapi-doc')
+    const checkStart = +new Date
+    const iflag = setInterval(
+        () => {
+            const ctx = rapi.get(0).shadowRoot
+            if (!ctx) {
+                if (+new Date - checkStart < 10 * 1000) {
+                    return
+                }
+                console.error('giving up')
+            }
+            clearInterval(iflag)
+            init(ctx)
+        },
+        50)
+    setTimeout(() => clearInterval(iflag), 10 * 1000)
+    const hides = [
+        'header',
+        '#auth',
+        'div.table-title[part="label-selected-server"]',
+    ]
+    function init(ctx) {
+        $(hides.join(','), ctx).hide()
+        $('#operations-top', ctx).next('div').hide()
+        const generalHeader = $('.section-gap.section-tag > .section-tag-header', ctx)
+        if (generalHeader.length === 1) {
+            generalHeader.hide()
+        }
+        $('section, .section-gap', ctx).css({paddingLeft: '4px'})
+        $('summary.endpoint-head', ctx).css({padding: '6px 0'})
+        rapi.show()
+    }
+});
+</script>
+{%- endblock %}
+{%- block styles %}
+<style>
+rapi-doc {
+    --bg: var(--bs-body-bg);
+    --header-bg: var(--bs-body-bg);
+}
+</style>
+{%- endblock %}

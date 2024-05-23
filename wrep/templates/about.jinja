@@ -6,13 +6,15 @@
         <tr>
             <th>Name</th>
             <th>Records</th>
+            <th>Size</th>
         </tr>
     </thead>
     <tbody>
         {%- for name, stats in stats.items() %}
         <tr>
             <td>{{ name }}</td>
-            <td>{{ stats.count }}</td>
+            <td>{{ '{:,}'.format(stats.count) }}</td>
+            <td>{{ '{:,}'.format(stats.size) }}</td>
         </tr>
         {%- endfor %}
     </tbody>
