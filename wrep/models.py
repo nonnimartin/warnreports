@@ -241,7 +241,7 @@ __all__ += [
     'StateDetail',
     'ValidationError']
 
-Limit = Annotated[NonNegativeInt, Le(1000)]
+Limit = Annotated[PositiveInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
@@ -362,9 +362,9 @@ class ArtifactDetail(ArtifactData, MapReducingModel[Artifact]):
             memo['reports'].add(ar.report)
 
 class NaicsData(DataModel):
-    id: int
-    code: str
-    title: str
+    id: int = Field(description='The 2 to 6 digit NAICS code')
+    code: str = Field(description='The code string')
+    title: str = Field(description='The NAICS industry title')
     model_config = ConfigDict(from_attributes=True)
 
 class NaicsDetail(NaicsData, MapReducingModel[Naics]):
