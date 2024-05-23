@@ -11,14 +11,15 @@
     const iflag = setInterval(
         () => {
             const ctx = rapi.get(0).shadowRoot
-            if (!ctx) {
+            if (!ctx || !$('#auth', ctx).length) {
+                console.log('nope')
                 if (+new Date - checkStart < 10 * 1000) {
                     return
                 }
                 console.error('giving up')
             }
             clearInterval(iflag)
-            init(ctx)
+            setTimeout(() => init(ctx))
         },
         50)
     setTimeout(() => clearInterval(iflag), 10 * 1000)
