@@ -226,6 +226,7 @@ class ArtifactReport(OrmModel):
 __all__ += [
     'ArtifactData',
     'ArtifactDetail',
+    'ClassVar',
     'CompanyDetail',
     'CompanyName',
     'DataModel',
@@ -285,16 +286,34 @@ class MapReducingModel(DataModel, Generic[OM]):
 
 class ReportData(MapReducingModel[Report]):
     id: UUID = Field(alias='_id')
-    company: CompanyName
-    company_id: UUID|None = None
-    state: StateCode
-    location: str|None
-    reported: datetime
-    starting: datetime|None
-    employees: int|None
-    action: str|None
-    url: str|None
-    naics: list[NaicsData] = Field(default_factory=list)
+    company: CompanyName = Field(
+        description='The company name as indicated')
+    company_id: UUID = Field(
+        default=None,
+        title='Company ID',
+        description='The internal company ID, for cross-referencing related reports')
+    state: StateCode = Field(
+        description='The 2-letter state postal code')
+    location: str|None = Field(
+        default=None,
+        description='Location details (city, county, address, store number, etc.)')
+    reported: datetime = Field(
+        description='The indicated date the report was filed')
+    starting: datetime|None = Field(
+        default=None,
+        description='The effective start date')
+    employees: int|None = Field(
+        default=None,
+        description='The projected number of employees to be affected')
+    action: str|None = Field(
+        default=None,
+        description='The action (layoff, closure, etc.)')
+    url: str = Field(
+        title='URL',
+        description='Source link to the report or state agency')
+    naics: list[NaicsData] = Field(
+        default_factory=list,
+        description='Associated NAICS details')
     artifacts: list[ArtifactData] = Field(default_factory=list)
     orm_model: ClassVar = Report
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -462,23 +481,23 @@ class ReportsFilter(FilterModel[ReportData]):
     state: list[StateCode]|None = None
     location: str|None = None
     action: str|None = None
-    naics: int|None = None
-    reported_after: datetime|None = None
-    reported_before: datetime|None = None
-    starting_after: datetime|None = None
-    starting_before: datetime|None = None
-    employees_gt: int|None = None
-    employees_lt: int|None = None
+    naics: list[int]|None = None
+    reported_min: datetime|None = None
+    reported_max: datetime|None = None
+    starting_min: datetime|None = None
+    starting_max: datetime|None = None
+    employees_min: int|None = None
+    employees_max: int|None = None
     result_model: ClassVar = ReportData
     order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
 
 class StatesFilter(FilterModel[StateDetail]):
     id: StateCode|None = None
-    reports_count_gt: int|None = None
-    reports_count_lt: int|None = None
-    last_reported_after: datetime|None = None
-    last_reported_before: datetime|None = None
+    reports_count_min: int|None = None
+    reports_count_max: int|None = None
+    last_reported_min: datetime|None = None
+    last_reported_max: datetime|None = None
     result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('id', 1)]
@@ -488,13 +507,13 @@ class CompaniesFilter(FilterModel[CompanyDetail]):
     text: str|None = None
     name: list[CompanyName]|None = None
     state: list[StateCode]|None = None
-    naics: int|None = None
-    reports_count_gt: int|None = None
-    reports_count_lt: int|None = None
-    employees_sum_gt: int|None = None
-    employees_sum_lt: int|None = None
-    last_reported_after: datetime|None = None
-    last_reported_before: datetime|None = None
+    naics: list[int]|None = None
+    reports_count_min: int|None = None
+    reports_count_max: int|None = None
+    employees_sum_min: int|None = None
+    employees_sum_max: int|None = None
+    last_reported_min: datetime|None = None
+    last_reported_max: datetime|None = None
     result_model: ClassVar = CompanyDetail
     order_fields: ClassVar = {'name', 'reports_count', 'last_reported', 'employees_sum'}
     default_ordering: ClassVar = [('name', 1)]
@@ -502,14 +521,14 @@ class CompaniesFilter(FilterModel[CompanyDetail]):
 class NaicsFilter(FilterModel[NaicsDetail]):
     id: int|None = None
     code: int|None = None
-    prefix: int|None = None
+    prefix: list[int]|None = None
     title: str|None = None
-    reports_count_gt: int|None = None
-    reports_count_lt: int|None = None
-    companies_count_gt: int|None = None
-    companies_count_lt: int|None = None
-    employees_sum_gt: int|None = None
-    employees_sum_lt: int|None = None
+    reports_count_min: int|None = None
+    reports_count_max: int|None = None
+    companies_count_min: int|None = None
+    companies_count_max: int|None = None
+    employees_sum_min: int|None = None
+    employees_sum_max: int|None = None
     result_model: ClassVar = NaicsDetail
     order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count', 'employees_sum'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]

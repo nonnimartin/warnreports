@@ -34,6 +34,11 @@ td.field-reported {
     text-align: right;
 }
 
+th.field-state,
+td.field-state {
+    width: 60px;
+}
+
 th.field-employees,
 td.field-employees {
     width: 100px;

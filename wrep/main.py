@@ -5,7 +5,7 @@ from uuid import UUID
 
 import click
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, APIRouter
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -15,57 +15,67 @@ from .models import *
 from .routers import *
 
 logger = utils.get_logger('main')
-app = FastAPI(title='WARN Reporter')
-static = StaticFiles(directory=settings.STATIC_DIR)
 templates = Jinja2Templates(env=utils.jinja_env())
 
-app.include_router(prefix='/api/v0', router=api.router)
-app.include_router(prefix='/feed', router=feed.router)
-app.include_router(prefix='/dt', router=dt.router)
-app.mount('/static', static, name='static')
+router = APIRouter()
 
-@app.get('/', include_in_schema=False)
+@router.get('/')
 async def index(req: Request) -> HTMLResponse:
-    context = dict()
-    return templates.TemplateResponse(req, 'index.jinja', context)
+    return templates.TemplateResponse(req, 'index.jinja')
 
-@app.get('/search', include_in_schema=False)
+@router.get('/search')
 async def report_search(req: Request) -> HTMLResponse:
     states = await search.search(StateDetail)
     context = dict(states=states)
     return templates.TemplateResponse(req, 'search.jinja', context)
 
-@app.get('/about', include_in_schema=False)
+@router.get('/api')
+async def api_home(req: Request) -> HTMLResponse:
+    return templates.TemplateResponse(req, 'api.jinja')
+
+@router.get('/about')
 async def about(req: Request) -> HTMLResponse:
     stats = await search.search_stats()
     states = await search.search(StateDetail)
     context = dict(stats=stats, states=states)
     return templates.TemplateResponse(req, 'about.jinja', context)
 
-@app.get('/r/{id}', include_in_schema=False)
+@router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
     report = await search.retrieve404(ReportData, id=id)
     context = dict(report=report)
     return templates.TemplateResponse(req, 'report.jinja', context)
 
-@app.get('/d/{id}', include_in_schema=False)
-@app.head('/d/{id}', include_in_schema=False)
+@router.get('/d/{id}')
+@router.head('/d/{id}')
 async def artifact_download(id: UUID) -> FileResponse:
     return await artifact(id, 'download')
 
-@app.get('/v/{id}', include_in_schema=False)
-@app.head('/v/{id}', include_in_schema=False)
+@router.get('/v/{id}')
+@router.head('/v/{id}')
 async def artifact_view(id: UUID) -> FileResponse:
     return await artifact(id, 'inline')
 
 async def artifact(id: UUID, disposition: str) -> FileResponse:
     artifact = await search.retrieve404(ArtifactDetail, id=id)
-    path = Path(settings.ARTIFACTS_DIR, artifact.path)
     return FileResponse(
-        path,
+        Path(settings.ARTIFACTS_DIR, artifact.path),
         media_type=artifact.media_type,
         filename=artifact.name,
         content_disposition_type=disposition)
+
+app = FastAPI(
+    title='WARN Reporter',
+    docs_url='/api/swagger',
+    redoc_url='/api/docs')
+
+app.include_router(router, include_in_schema=False)
+app.include_router(api.router, prefix='/api/v0')
+app.include_router(feed.router, prefix='/feed', include_in_schema=False)
+app.include_router(dt.router, prefix='/dt', include_in_schema=False)
+
+static = StaticFiles(directory=settings.STATIC_DIR)
+app.mount('/static', static, name='static')
 
 def cmd(*args, **kw):
     if settings.DB_AUTO_MIGRATE:

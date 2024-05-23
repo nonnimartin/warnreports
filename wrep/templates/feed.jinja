@@ -19,17 +19,19 @@
             <select class="form-select" name="state" id="search_state">
                 <option value="">-</option>
                 {%- for state in states %}
-                <option value="{{ state.id }}" {% if form.state == state.id %}selected{% endif %}>{{ state.id }}</option>
+                <option value="{{ state.id }}"
+                    {%- if form.state and state.id in form.state %} selected {%- endif -%}
+                    >{{ state.id }}</option>
                 {%- endfor %}
             </select>
         </div>
         <div class="col-2">
-            <label for="search_employees">Employees</label>
-            <input class="form-control" name="employees" type="number" id="search_employees" value="{{ form.employees|default('', true) }}">
+            <label for="search_employees_min">Employees</label>
+            <input class="form-control" name="employees_min" type="number" id="search_employees_min" value="{{ form.employees_min|default('', true) }}">
         </div>
         <div class="col-2">
             <label for="search_naics">NAICS</label>
-            <input class="form-control" name="naics" type="number" id="search_naics" value="{{ form.naics|default('', true) }}">
+            <input class="form-control" name="naics" type="number" id="search_naics" value="{{ form.naics|default([], true)|join(',') }}">
         </div>
         <div class="col-1">
             <label for="search_submit"></label>
