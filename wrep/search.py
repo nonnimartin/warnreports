@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
-from typing import Any, ClassVar, Iterable, Iterator
+from typing import Any, Iterable, Iterator
 
 from fastapi import HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -18,7 +18,6 @@ logger = utils.get_logger('search')
 
 
 class MongoSearch(FilterModel[DM]):
-    collection_name: ClassVar[str]
 
     @abstractmethod
     def get_filters(self) -> Iterable[Any]:
@@ -48,7 +47,6 @@ class MongoSearch(FilterModel[DM]):
                     yield {field: {oper: value}}
 
 class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
-    collection_name: ClassVar = 'reports'
 
     def get_filters(self):
         if self.id:
@@ -68,7 +66,6 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
         yield from self.get_minmax_filters('reported', 'starting', 'employees')
 
 class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
-    collection_name: ClassVar = 'states'
 
     def get_filters(self):
         if self.id:
@@ -76,7 +73,6 @@ class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
         yield from self.get_minmax_filters('reports_count', 'last_reported')
 
 class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
-    collection_name: ClassVar = 'companies'
 
     def get_filters(self):
         if self.id is not None:
@@ -92,7 +88,6 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
         yield from self.get_minmax_filters('reports_count', 'employees_sum', 'last_reported')
 
 class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
-    collection_name: ClassVar = 'naics'
 
     def get_filters(self):
         if self.id:
@@ -106,7 +101,6 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
         yield from self.get_minmax_filters('reports_count', 'employees_sum', 'companies_count')
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
-    collection_name: ClassVar = 'artifacts'
 
     def get_filters(self):
         if self.id:
@@ -134,7 +128,7 @@ async def search_result(
     with_total: bool = False,
 ) -> tuple[list[DM], int|None]:
     filt = filters[model](**params or {})
-    coll = mongo.get_collection(filt.collection_name)
+    coll = mongo.get_collection(collections_map[model])
     filts = tuple(filt.get_filters())
     q = {'$and': filts} if filts else {}
     cur = coll.find(q)
@@ -182,68 +176,58 @@ async def retrieve404(model: type[DM], **params) -> DM:
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
 mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
 
-collection_defs = dict(
-    reports=dict(
-        model=ReportData,
-        indexes=[
-            IndexModel({'company': 'text'}),
-            IndexModel({'company_id': 'hashed'}),
-            IndexModel({'reported': 1}),
-            IndexModel({'reported': -1}),
-            IndexModel({'employees': 1}),
-            IndexModel({'employees': -1}),
-            IndexModel({'naics.code': 1}),
-            IndexModel({'naics.id': 1}),
-            IndexModel({'state': 'hashed'}),
-        ],
-    ),
-    states=dict(
-        model=StateDetail,
-        indexes=[
-            IndexModel({'id': 'hashed'}),
-            IndexModel({'last_reported': -1}),
-            IndexModel({'reports_count': -1}),
-        ],
-    ),
-    companies=dict(
-        model=CompanyDetail,
-        indexes=[
-            IndexModel({'aliases': 'text'}),
-            IndexModel({'name': 1}),
-            IndexModel({'aliases': 1}),
-            IndexModel({'states': 1}),
-            IndexModel({'naics.code': 1}),
-            IndexModel({'naics.id': 1}),
-            IndexModel({'last_reported': 1}),
-            IndexModel({'last_reported': -1}),
-            IndexModel({'reports_count': 1}),
-            IndexModel({'reports_count': -1}),
-            IndexModel({'employees_sum': -1}),
-        ],
-    ),
-    artifacts=dict(
-        model=ArtifactDetail,
-        indexes=[
-            IndexModel({'name': 1}),
-        ],
-    ),
-    naics=dict(
-        model=NaicsDetail,
-        indexes=[
-            IndexModel({'id': 'hashed'}),
-            IndexModel({'id': 1}),
-            IndexModel({'code': 1}),
-            IndexModel({'title': 1}),
-            IndexModel({'companies_count': 1}),
-            IndexModel({'reports_count': 1}),
-            IndexModel({'reports_count': -1}),
-            IndexModel({'employees_sum': -1}),
-        ],
-    ),
-)
+class CollectionDefn:
+    model: type[MapReducingModel]
+    indexes: list[IndexModel]
 
-async def search_stats(*names: str) -> dict[str, dict[str, Any]]:
-    names = names or collection_defs
+    def __init__(self, model: type[MapReducingModel], indexes: Iterable[dict]) -> None:
+        self.model = model
+        self.indexes = list(map(IndexModel, indexes))
+
+collections: dict[str, CollectionDefn] = dict(
+    reports=CollectionDefn(ReportData, [
+        {'company': 'text'},
+        {'company_id': 'hashed'},
+        {'reported': 1},
+        {'reported': -1},
+        {'employees': 1},
+        {'employees': -1},
+        {'naics.code': 1},
+        {'naics.id': 1},
+        {'state': 'hashed'}]),
+    companies=CollectionDefn(CompanyDetail, [
+        {'aliases': 'text'},
+        {'name': 1},
+        {'aliases': 1},
+        {'states': 1},
+        {'naics.code': 1},
+        {'naics.id': 1},
+        {'last_reported': 1},
+        {'last_reported': -1},
+        {'reports_count': 1},
+        {'reports_count': -1},
+        {'employees_sum': -1}]),
+    naics=CollectionDefn(NaicsDetail, [
+        {'id': 'hashed'},
+        {'id': 1},
+        {'code': 1},
+        {'title': 1},
+        {'companies_count': 1},
+        {'reports_count': 1},
+        {'reports_count': -1},
+        {'employees_sum': -1}]),
+    artifacts=CollectionDefn(ArtifactDetail, [
+        {'name': 1}]),
+    states=CollectionDefn(StateDetail, [
+        {'id': 'hashed'},
+        {'last_reported': -1},
+        {'reports_count': -1}]))
+
+collections_map: dict[type[MapReducingModel], str] = {
+    defn.model: name for name, defn in collections.items()}
+
+async def search_stats(*names: str) -> dict[str, dict[str, int]]:
+    names = names or collections
     stats = {}
     for name in names:
         stat = await mongo.command('collstats', name)
@@ -251,29 +235,27 @@ async def search_stats(*names: str) -> dict[str, dict[str, Any]]:
     return stats
 
 async def search_init(*names: str) -> None:
-    names = names or collection_defs
-    defns = {name: collection_defs[name] for name in names}
+    names = names or collections
+    defns = {name: collections[name] for name in names}
     for name, defn in defns.items():
         logger.info(f'Initializing {name}')
-        indexes = defn['indexes']
-        await mongo.get_collection(name).create_indexes(indexes)
+        await mongo.get_collection(name).create_indexes(defn.indexes)
 
 async def search_clean(*names: str) -> None:
-    names = names or collection_defs
+    names = names or collections
     for name in names:
         stat = (await search_stats(name))[name]
         logger.info(f'Cleaning {name} {stat=}')
         await mongo.get_collection(name).drop()
 
 async def search_build(*names: str) -> None:
-    names = names or collection_defs
-    defns = {name: collection_defs[name] for name in names}
+    names = names or collections
+    defns = {name: collections[name] for name in names}
     for name, defn in defns.items():
         await search_clean(name)
         await search_init(name)
         logger.info(f'Building {name}')
-        model: type[MapReducingModel] = defn['model']
-        it = map(model.as_doc, model.map_reduce())
+        it = map(defn.model.as_doc, defn.model.map_reduce())
         await mongo.get_collection(name).insert_many(it)
         stat = (await search_stats(name))[name]
         logger.info(f'Built {name} {stat=}')

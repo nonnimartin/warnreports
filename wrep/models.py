@@ -226,6 +226,7 @@ class ArtifactReport(OrmModel):
 __all__ += [
     'ArtifactData',
     'ArtifactDetail',
+    'ClassVar',
     'CompanyDetail',
     'CompanyName',
     'DataModel',
@@ -285,16 +286,34 @@ class MapReducingModel(DataModel, Generic[OM]):
 
 class ReportData(MapReducingModel[Report]):
     id: UUID = Field(alias='_id')
-    company: CompanyName
-    company_id: UUID|None = None
-    state: StateCode
-    location: str|None
-    reported: datetime
-    starting: datetime|None
-    employees: int|None
-    action: str|None
-    url: str|None
-    naics: list[NaicsData] = Field(default_factory=list)
+    company: CompanyName = Field(
+        description='The company name as indicated')
+    company_id: UUID = Field(
+        default=None,
+        title='Company ID',
+        description='The internal company ID, for cross-referencing related reports')
+    state: StateCode = Field(
+        description='The 2-letter state postal code')
+    location: str|None = Field(
+        default=None,
+        description='Location details (city, county, address, store number, etc.)')
+    reported: datetime = Field(
+        description='The indicated date the report was filed')
+    starting: datetime|None = Field(
+        default=None,
+        description='The effective start date')
+    employees: int|None = Field(
+        default=None,
+        description='The projected number of employees to be affected')
+    action: str|None = Field(
+        default=None,
+        description='The action (layoff, closure, etc.)')
+    url: str = Field(
+        title='URL',
+        description='Source link to the report or state agency')
+    naics: list[NaicsData] = Field(
+        default_factory=list,
+        description='Associated NAICS details')
     artifacts: list[ArtifactData] = Field(default_factory=list)
     orm_model: ClassVar = Report
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
