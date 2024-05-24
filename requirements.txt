@@ -6,7 +6,6 @@ feedgen
 jinja2
 motor
 openpyxl
-peewee
 pdfplumber
 psycopg2-binary
 pydantic[email]

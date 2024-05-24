@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import operator
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -8,9 +10,10 @@ from itertools import batched
 from typing import Any, Iterable
 
 from . import settings, utils
+from .backends import orm
 from .backends.etl import *
+from .backends.orm import *
 from .models import *
-from .models import db
 from .ref import normls
 from .scrapers import scrapers
 from .translators import translators
@@ -67,6 +70,7 @@ class Pipeline:
             Stage.Extract: MongoExtraction(self.state),
             Stage.Translate: MongoTranslation(self.state),
             Stage.Index: MongoSearchIndex(self.state)}
+        self.session: orm.Session|None = None
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -83,10 +87,22 @@ class Pipeline:
         elif stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Load:
-            Report.delete().where(Report.state == self.state).execute()
-            StateStat.delete().where(StateStat.id == self.state).execute()
-            Artifact.delete().where(Artifact.path.startswith(f'{self.state.lower()}/')).execute()
-            Company.delete().where(self.get_companies_delete_pred()).execute()
+            filters = {
+                Report: [Report.state == self.state],
+                Company: [self.get_companies_delete_pred()],
+                Artifact: [Artifact.path.startswith(f'{self.state.lower()}/')],
+                StateStat: [StateStat.id == self.state]}
+            stmts = (
+                orm.delete(model).where(*filters)
+                for model, filters in filters.items())
+            if self.session:
+                for stmt in stmts:
+                    self.session.execute(stmt)
+            else:
+                with SessionLocal() as session:
+                    for stmt in stmts:
+                        session.execute(stmt)
+                    session.commit()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
@@ -129,14 +145,18 @@ class Pipeline:
         self.artifact_cache = {}
         source: TranslationBackend = self.backends[Stage.Translate]
         async with source.reader() as reader:
-            with db.atomic():
+            with SessionLocal() as session:
+                self.session = session
                 if clean:
                     await self.clean(Stage.Load)
                 async for entry in reader:
                     counts[self.save(entry)] += 1
-                stat = StateStat.get_or_create(id=self.state)[0]
-                stat.self_update()
-                stat.save()
+                stat = session.get(StateStat, self.state)
+                stat = stat or StateStat(id=self.state)
+                stat.self_update(session)
+                session.add(stat)
+                session.commit()
+            self.session = None
         del self.artifact_cache
         count = sum(counts.values())
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
@@ -147,25 +167,20 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         backend: SearchIndexBackend = self.backends[stage]
-        results: dict[str, tuple[int, int, int]] = dict(
-            reports=await backend.update_reports(ReportData.map_reduce(
-                Report
-                .select_for_reduce()
-                .where(Report.state == self.state)
-                .iterator())),
-            companies=await backend.update_companies(CompanyDetail.map_reduce(
-                Company
-                .select_for_reduce()
-                .where(self.get_companies_update_pred())
-                .iterator())),
-            artifacts=await backend.update_artifacts(ArtifactDetail.map_reduce(
-                Artifact
-                .select_for_reduce()
-                .where(Artifact.path.startswith(f'{self.state.lower()}/'))
-                .iterator())),
-            states=await backend.update_states([
-                StateDetail.model_validate(StateStat.get_by_id(self.state))]),
-            naics=await backend.update_naics(NaicsDetail.map_reduce()))
+        filters = dict(
+            reports=[Report.state == self.state],
+            companies=[self.get_companies_update_pred()],
+            artifacts=[self.get_artifacts_pred()],
+            states=[StateStat.id == self.state],
+            naics=[])
+        from .search import collections
+        results: dict[str, tuple[int, int, int]] = {}
+        with SessionLocal() as session:
+            for name, defn in collections.items():
+                model = defn.orm_model
+                stmt = model.reduce_select(*filters[name])
+                it = model.map_reduce(session.execute(stmt).unique())
+                results[name] = await getattr(backend, f'update_{name}')(it)
         nochange = True
         counts: dict[str, dict[str, int]] = {}
         totals: dict[str, int] = defaultdict(int)
@@ -185,9 +200,8 @@ class Pipeline:
         if not all(map(record.get, self.required_fields)):
             return save.Skip
         uid = record.pop('id')
-        try:
-            report = Report.get_by_id(uid)
-        except Report.DoesNotExist:
+        report = self.session.get(Report, uid)
+        if report is None:
             report = Report(id=uid, state=self.state)
             save = save.Create
         naics = set(record.pop('naics', ()))
@@ -196,14 +210,16 @@ class Pipeline:
         self.truncate_fields(record)
         company, company_save = self.save_company(record['company'])
         record['company_norm'] = company.name_norm
+        dirty = save is save.Create
         for field in self.write_fields:
             value = record.get(field)
-            if save is save.Create or getattr(report, field) != value:
+            if dirty or getattr(report, field) != value:
                 setattr(report, field, value)
-        if save is save.Nochange and report.dirty_fields:
+                dirty = True
+        if save is save.Nochange and dirty:
             save = save.Update
         if save is not save.Nochange:
-            report.save(force_insert=save is save.Create)
+            self.session.add(report)
         if save is save.Nochange and company_save is not save.Nochange:
             save = save.Update
         naics_save = self.save_naics(report, naics, industry)
@@ -218,7 +234,7 @@ class Pipeline:
         trims = {}
         for field in ('action', 'location', 'company'):
             value = record.get(field)
-            limit = getattr(Report, field).max_length
+            limit = Report.__table__._columns[field].type.length
             if value and len(value) > limit:
                 trims[field] = len(value) - limit
                 record[field] = value[:limit]
@@ -227,47 +243,40 @@ class Pipeline:
     def save_company(self, name: str) -> tuple[Company, SaveType]:
         save = SaveType.Nochange
         uid = uuid.uuid5(Company.NS, name)
-        try:
-            company = Company.get(id=uid)
-        except Company.DoesNotExist:
+        company = self.session.get(Company, uid)
+        if company is None:
             company = Company(id=uid)
             save = save.Create
         record = dict(
             name=name,
             name_norm=normls.company_name_norm(name),
             name_canon=normls.company_name_canon(name))
+        dirty = save is save.Create
         for field, value in record.items():
-            if save is save.Create or getattr(company, field) != value:
+            if dirty or getattr(company, field) != value:
                 setattr(company, field, value)
-        if save is save.Nochange and company.dirty_fields:
+                dirty = True
+        if save is save.Nochange and dirty:
             save = save.Update
         if save is not save.Nochange:
-            company.save(force_insert=save is save.Create)
+            self.session.add(company)
         return company, save
 
     def save_naics(self, report: Report, codes: set[int], industry: str|None) -> SaveType:
         save = SaveType.Nochange
+        ors = [Naics.id.in_(codes)]
         if industry:
-            q = Naics.select(Naics.id)
-            q = q.where(Naics.title.like(industry) | Naics.code.like(industry))
-            codes.update(n.id for n in q)
-        q = NaicsReport.delete()
-        q = q.where(
-            NaicsReport.report == report,
-            NaicsReport.naics.not_in(codes))
-        if q.execute():
+            ors += [
+                Naics.title.like(industry),
+                Naics.code.like(industry)]
+        stmt = orm.select(Naics).where(functools.reduce(operator.or_, ors))
+        current = list(self.session.execute(stmt).scalars())
+        for naics in set(report.naics).difference(current):
+            report.naics.remove(naics)
             save = save.Update
-        q = NaicsReport.select(NaicsReport.naics)
-        q = q.where(NaicsReport.report == report)
-        cur = [nr.naics for nr in q]
-        q = Naics.select(Naics.id)
-        q = q.where(
-            Naics.id.in_(codes),
-            Naics.id.not_in(cur))
-        add = [dict(naics=naics, report=report) for naics in q]
-        if add:
+        for naics in set(current).difference(report.naics):
+            report.naics.append(naics)
             save = save.Update
-            NaicsReport.insert_many(add).execute()
         return save
 
     def save_artifacts(self, report: Report, index: dict[str, str]) -> SaveType:
@@ -276,50 +285,39 @@ class Pipeline:
         artifacts: list[Artifact] = []
         for path, url in index.items():
             uid = uuid.uuid5(settings.NAMESPACE, f'artifact:{path}')
-            try:
-                artifact: Artifact = Artifact.get_by_id(uid)
-            except Artifact.DoesNotExist:
+            artifact = self.session.get(Artifact, uid)
+            if artifact is None:
                 artifact = Artifact(id=uid, path=path, url=url)
                 artifact.self_update()
-                artifact.save(force_insert=True)
+                self.session.add(artifact)
+                self.artifact_cache[uid] = None
             else:
                 if path.endswith('.xlsx') and uid not in self.artifact_cache:
-                    artifact.self_update()
-                    if artifact.dirty_fields:
-                        artifact.save()
+                    if artifact.self_update():
+                        self.session.add(artifact)
                     self.artifact_cache[uid] = None
             artifacts.append(artifact)
-        q = ArtifactReport.delete()
-        q = q.where(
-            ArtifactReport.report == report,
-            ArtifactReport.artifact.not_in(artifacts))
-        if q.execute():
+        for artifact in set(report.artifacts).difference(artifacts):
+            report.artifacts.remove(artifact)
             save = save.Update
-        q = ArtifactReport.select()
-        q = q.where(ArtifactReport.report == report)
-        cur = set(ar.artifact for ar in q)
-        q = Artifact.select()
-        q = q.where(
-            Artifact.id.in_(artifacts),
-            Artifact.id.not_in(cur))
-        add = [dict(artifact=artifact, report=report) for artifact in q]
-        if add:
+        for artifact in set(artifacts).difference(report.artifacts):
+            report.artifacts.append(artifact)
             save = save.Update
-            ArtifactReport.insert_many(add).execute()
         return save
+
+    def get_artifacts_pred(self):
+        return Artifact.path.startswith(f'{self.state.lower()}/')
 
     def get_companies_delete_pred(self):
         return Company.id.not_in(
-            Company
-            .select(Company.id)
-            .join(Report, on=(Report.company == Company.name))
+            orm.select(Company.id)
+            .join(Report, Report.company == Company.name)
             .where(Report.state != self.state))
 
     def get_companies_update_pred(self):
         return Company.id.in_(
-            Company
-            .select(Company.id)
-            .join(Report, on=(Report.company == Company.name))
+            orm.select(Company.id)
+            .join(Report, Report.company == Company.name)
             .where(Report.state == self.state))
 
     def from_json(self, field: str, value: Any) -> Any:
