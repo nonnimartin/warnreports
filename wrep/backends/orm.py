@@ -11,6 +11,7 @@ from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
 from sqlalchemy import delete as delete
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload as joinedload
 from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, aliased,
                             mapped_column, relationship, selectinload,
                             sessionmaker)

@@ -190,6 +190,14 @@ class Pipeline:
             totals['nochange'] += count - created - updated
         return dict(counts=counts, totals=dict(totals), nochange=nochange)
 
+    STMT_REPORT_GET = (orm
+        .select(Report, Artifact, Naics)
+        .join(Report.artifacts, isouter=True)
+        .join(Report.naics, isouter=True)
+        .options(
+            orm.joinedload(Report.naics),
+            orm.joinedload(Report.artifacts)))
+
     def save(self, entry: dict) -> SaveType:
         save = SaveType.Nochange
         record = {
@@ -198,7 +206,8 @@ class Pipeline:
         if not all(map(record.get, self.required_fields)):
             return save.Skip
         uid = record.pop('id')
-        report = self.session.get(Report, uid)
+        stmt = self.STMT_REPORT_GET.where(Report.id == uid)
+        report = self.session.scalars(stmt).unique().one_or_none()
         if report is None:
             report = Report(id=uid, state=self.state)
             save = save.Create
@@ -262,6 +271,8 @@ class Pipeline:
 
     def save_naics(self, report: Report, codes: set[int], industry: str|None) -> SaveType:
         save = SaveType.Nochange
+        if not (codes or industry or report.naics):
+            return save
         ors = [Naics.id.in_(codes)]
         if industry:
             ors += [
@@ -279,11 +290,14 @@ class Pipeline:
 
     def save_artifacts(self, report: Report, index: dict[str, str]) -> SaveType:
         save = SaveType.Nochange
-        index = {f'{self.state.lower()}/{key}': value for key, value in index.items()}
+        index = {
+            f'{self.state.lower()}/{key}': value
+            for key, value in index.items()}
+        oldmap = {a.id: a for a in report.artifacts}
         artifacts: list[Artifact] = []
         for path, url in index.items():
             uid = uuid.uuid5(settings.NAMESPACE, f'artifact:{path}')
-            artifact = self.session.get(Artifact, uid)
+            artifact = oldmap.pop(uid, None) or self.session.get(Artifact, uid)
             if artifact is None:
                 artifact = Artifact(id=uid, path=path, url=url)
                 artifact.self_update()
