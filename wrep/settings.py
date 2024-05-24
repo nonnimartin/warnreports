@@ -10,6 +10,7 @@ BUILD_DIR = Path(getenv('BUILD_DIR', REPODIR/'build'))
 ARTIFACTS_DIR = Path(getenv('ARTIFACTS_DIR', BUILD_DIR/'artifacts'))
 NAICS_DOWNLOAD = 'https://github.com/owings1/naics/raw/2022-1/build/2022.min.json'
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
+QUERY_LOGGING = getenv('QUERY_LOGGING', '').lower() == 'true'
 NAMESPACE = UUID(getenv('NAMESPACE', 'b98ba54b-c67b-4bce-b609-b2a236e33b14'))
 DB_URL = getenv('DB_URL', f'sqlite:///{REPODIR}/db.sqlite')
 DB_AUTO_MIGRATE = getenv('DB_AUTO_MIGRATE', 'true').lower() == 'true'

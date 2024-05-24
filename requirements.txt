@@ -6,7 +6,6 @@ feedgen
 jinja2
 motor
 openpyxl
-peewee
 pdfplumber
 psycopg2-binary
 pydantic[email]
@@ -14,6 +13,7 @@ python_dotenv
 python-dateutil
 requests
 sentry-sdk[fastapi]
+sqlalchemy
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
