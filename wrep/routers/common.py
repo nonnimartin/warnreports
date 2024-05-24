@@ -15,98 +15,127 @@ __all__ = [
     'StateSearchParams',
 ]
 
-async def reported_params(
+TextSearchParam = Annotated[str, Query(description='General text search')]
+CompanyParam = Annotated[list[CompanyName], Query(description='The company name')]
+StateParam = Annotated[list[StateCode], Query(description='The 2-letter state postal code')]
+IdsParam = Annotated[list[UUID], Query(description='The unique record ID(s)')]
+NaicsParam = Annotated[list[int], Query(description='The 2 to 6 digit NAICS code')]
+NaicsTitleParam = Annotated[str, Query(description='The NAICS industry title')]
+
+def reported_params(
     reported_min: Annotated[
-        datetime|None,
-        Query(description='The minimum reported date (YYYY-MM-DD).')
-    ] = None,
+        datetime,
+        Query(description='The minimum reported date (YYYY-MM-DD)')] = None,
     reported_max: Annotated[
-        datetime|None,
-        Query(description='The maximum reported date (YYYY-MM-DD).')
-    ] = None,
+        datetime,
+        Query(description='The maximum reported date (YYYY-MM-DD)')] = None,
 ):
     return dict(
         reported_min=reported_min,
         reported_max=reported_max)
 
-async def last_reported_params(
+def last_reported_params(
     last_reported_min: Annotated[
-        datetime|None,
-        Query(description='The minimum last_reported date (YYYY-MM-DD).')
-    ] = None,
+        datetime,
+        Query(description='The minimum last_reported date (YYYY-MM-DD)')] = None,
     last_reported_max: Annotated[
-        datetime|None,
-        Query(description='The maximum last_reported date (YYYY-MM-DD).')
-    ] = None,
+        datetime,
+        Query(description='The maximum last_reported date (YYYY-MM-DD)')] = None,
 ):
     return dict(
         last_reported_min=last_reported_min,
         last_reported_max=last_reported_max)
 
-async def starting_params(
+def starting_params(
     starting_min: Annotated[
-        datetime|None,
-        Query(description='The minimum starting date (YYYY-MM-DD).')
-    ] = None,
+        datetime,
+        Query(description='The minimum starting date (YYYY-MM-DD)')] = None,
     starting_max: Annotated[
-        datetime|None,
-        Query(description='The maximum starting date (YYYY-MM-DD).')
-    ] = None,
+        datetime,
+        Query(description='The maximum starting date (YYYY-MM-DD)')] = None,
 ):
     return dict(
         starting_min=starting_min,
         starting_max=starting_max)
 
-async def employees_params(employees_min: int|None = None, employees_max: int|None = None):
+def employees_params(
+    employees_min: Annotated[
+        int,
+        Query(description='The minimum employees affected')] = None,
+    employees_max: Annotated[
+        int,
+        Query(description='The maximum employees affected')] = None,
+):
     return dict(
         employees_min=employees_min,
         employees_max=employees_max)
 
-async def employees_sum_params(employees_sum_min: int|None = None, employees_sum_max: int|None = None):
+def employees_sum_params(
+    employees_sum_min: Annotated[
+        int,
+        Query(description='The minimum sum total employees affected')] = None,
+    employees_sum_max: Annotated[
+        int,
+        Query(description='The maximum sum total employees affected')] = None,
+):
     return dict(
         employees_sum_min=employees_sum_min,
         employees_sum_max=employees_sum_max)
 
-async def reports_count_params(reports_count_min: int|None = None, reports_count_max: int|None = None):
+def reports_count_params(
+    reports_count_min: Annotated[
+        int,
+        Query(description='The minimum report count')] = None,
+    reports_count_max: Annotated[
+        int,
+        Query(description='The maximum report count')] = None,
+):
     return dict(
         reports_count_min=reports_count_min,
         reports_count_max=reports_count_max)
 
-async def companies_count_params(companies_count_min: int|None = None, companies_count_max: int|None = None):
+def companies_count_params(
+    companies_count_min: Annotated[
+        int,
+        Query(description='The minimum companies count')] = None,
+    companies_count_max: Annotated[
+        int,
+        Query(description='The maximum companies count')] = None,
+):
     return dict(
         companies_count_min=companies_count_min,
         companies_count_max=companies_count_max)
 
-async def report_search_params(
-    text: str|None = None,
+def report_search_params(
+    text: TextSearchParam = None,
     state: StateParam = None,
     reported: ReportedParams = ...,
     starting: StartingParams = ...,
     employees: EmployeesParams = ...,
     company: CompanyParam = None,
-    id_not: IdsParam = None,
     company_id: IdsParam = None,
-    location: str|None = None,
-    action: str|None = None,
     naics: NaicsParam = None,
+    action: Annotated[str, Query(description='The action (layoff, closure, etc.)')] = None,
+    location: Annotated[str, Query(description='Location details')] = None,
+    id_not: Annotated[IdsParam, Query(include_in_schema=False)] = None,
 ):
     return dict(
         text=text,
-        id_not=id_not,
         company=company,
         company_id=company_id,
         state=state,
         action=action,
         location=location,
         naics=naics,
+        id_not=id_not,
         **reported,
         **starting,
         **employees)
 
-async def company_search_params(
+def company_search_params(
     id: IdsParam = None,
-    text: str|None = None,
-    name: CompanyParam= None,
+    text: TextSearchParam = None,
+    name: CompanyParam = None,
     state: StateParam = None,
     naics: NaicsParam = None,
     employees_sum: EmployeesSumParams = ...,
@@ -123,10 +152,10 @@ async def company_search_params(
         **last_reported,
         **employees_sum)
 
-async def naics_search_params(
-    code: int|None = None,
+def naics_search_params(
+    code: NaicsParam = None,
     prefix: NaicsParam = None,
-    title: str|None = None,
+    title: NaicsTitleParam = None,
     reports_count: ReportsCountParams = ...,
     employees_sum: EmployeesSumParams = ...,
     companies_count: CompaniesCountParams = ...,
@@ -139,16 +168,12 @@ async def naics_search_params(
         **employees_sum,
         **companies_count)
 
-async def state_search_params(
+def state_search_params(
     reports_count: ReportsCountParams,
     last_reported: LastReportedParams,
 ):
     return reports_count | last_reported
 
-CompanyParam = Annotated[list[CompanyName]|None, Query()]
-StateParam = Annotated[list[StateCode]|None, Query()]
-IdsParam = Annotated[list[UUID]|None, Query()]
-NaicsParam = Annotated[list[int]|None, Query()]
 ReportedParams = Annotated[dict, Depends(reported_params)]
 StartingParams = Annotated[dict, Depends(starting_params)]
 EmployeesParams = Annotated[dict, Depends(employees_params)]

@@ -1,7 +1,7 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
 {%- include 'reports/detail.jinja' %}
-<div class="reports-auto-table slim" data-query-id="query_related">
+<div class="reports-auto-table slim hide-empty hidden" data-query-id="query_related">
     <h3>Related</h3>
     {%- include 'reports/table.jinja' %}
 </div>

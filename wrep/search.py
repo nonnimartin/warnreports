@@ -9,8 +9,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.operations import IndexModel
 
 from . import settings, utils
+from .backends import orm
 from .models import *
-from .models import MapReducingModel
 
 __all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
 
@@ -177,15 +177,14 @@ mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='stan
 mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
 
 class CollectionDefn:
-    model: type[MapReducingModel]
-    indexes: list[IndexModel]
 
-    def __init__(self, model: type[MapReducingModel], indexes: Iterable[dict]) -> None:
+    def __init__(self, model: type[DataModel], orm_model: type[orm.Base], indexes: Iterable[dict]) -> None:
         self.model = model
         self.indexes = list(map(IndexModel, indexes))
+        self.orm_model = orm_model
 
 collections: dict[str, CollectionDefn] = dict(
-    reports=CollectionDefn(ReportData, [
+    reports=CollectionDefn(ReportData, orm.Report, [
         {'company': 'text'},
         {'company_id': 'hashed'},
         {'reported': 1},
@@ -195,7 +194,7 @@ collections: dict[str, CollectionDefn] = dict(
         {'naics.code': 1},
         {'naics.id': 1},
         {'state': 'hashed'}]),
-    companies=CollectionDefn(CompanyDetail, [
+    companies=CollectionDefn(CompanyDetail, orm.Company, [
         {'aliases': 'text'},
         {'name': 1},
         {'aliases': 1},
@@ -207,7 +206,7 @@ collections: dict[str, CollectionDefn] = dict(
         {'reports_count': 1},
         {'reports_count': -1},
         {'employees_sum': -1}]),
-    naics=CollectionDefn(NaicsDetail, [
+    naics=CollectionDefn(NaicsDetail, orm.Naics, [
         {'id': 'hashed'},
         {'id': 1},
         {'code': 1},
@@ -216,14 +215,14 @@ collections: dict[str, CollectionDefn] = dict(
         {'reports_count': 1},
         {'reports_count': -1},
         {'employees_sum': -1}]),
-    artifacts=CollectionDefn(ArtifactDetail, [
+    artifacts=CollectionDefn(ArtifactDetail, orm.Artifact, [
         {'name': 1}]),
-    states=CollectionDefn(StateDetail, [
+    states=CollectionDefn(StateDetail, orm.StateStat, [
         {'id': 'hashed'},
         {'last_reported': -1},
         {'reports_count': -1}]))
 
-collections_map: dict[type[MapReducingModel], str] = {
+collections_map: dict[type[DataModel], str] = {
     defn.model: name for name, defn in collections.items()}
 
 async def search_stats(*names: str) -> dict[str, dict[str, int]]:
@@ -251,14 +250,17 @@ async def search_clean(*names: str) -> None:
 async def search_build(*names: str) -> None:
     names = names or collections
     defns = {name: collections[name] for name in names}
-    for name, defn in defns.items():
-        await search_clean(name)
-        await search_init(name)
-        logger.info(f'Building {name}')
-        it = map(defn.model.as_doc, defn.model.map_reduce())
-        await mongo.get_collection(name).insert_many(it)
-        stat = (await search_stats(name))[name]
-        logger.info(f'Built {name} {stat=}')
+    with orm.SessionLocal() as session:
+        for name, defn in defns.items():
+            await search_clean(name)
+            await search_init(name)
+            logger.info(f'Building {name}')
+            model = defn.orm_model
+            it = model.map_reduce_exec(session)
+            it = map(defn.model.as_doc, it)
+            await mongo.get_collection(name).insert_many(it)
+            stat = (await search_stats(name))[name]
+            logger.info(f'Built {name} {stat=}')
 
 actions = dict(
     stats=search_stats,

@@ -111,6 +111,14 @@ $(() => {
         if (wrapper.hasClass('slim')) {
             optsets.push(slim)
         }
-        initTable(table, params, ...optsets)
+        const dt = initTable(table, params, ...optsets)
+        if (wrapper.hasClass('hide-empty')) {
+            const cb = () => {
+                const {data} = dt.ajax.json()
+                wrapper.toggle(Boolean(data.length))
+                dt.off('xhr', cb)
+            }
+            dt.on('xhr', cb)
+        }
     })
 })

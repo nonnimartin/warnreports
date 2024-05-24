@@ -5,17 +5,24 @@ from uuid import UUID
 
 import click
 import uvicorn
-from fastapi import FastAPI, Request, APIRouter
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import settings, utils, search
+from . import search, settings, utils
 from .models import *
-from .routers import *
+from .routers import api, dt, feed
 
 logger = utils.get_logger('main')
 templates = Jinja2Templates(env=utils.jinja_env())
+
+app = FastAPI(
+    title='warnreports API',
+    docs_url='/api/docs/swagger',
+    redoc_url='/api/docs/redoc')
+static = StaticFiles(directory=settings.STATIC_DIR)
+app.mount('/static', static, name='static')
 
 router = APIRouter()
 
@@ -32,6 +39,10 @@ async def report_search(req: Request) -> HTMLResponse:
 @router.get('/api')
 async def api_home(req: Request) -> HTMLResponse:
     return templates.TemplateResponse(req, 'api.jinja')
+
+@router.get('/api/docs')
+async def api_home(req: Request) -> HTMLResponse:
+    return templates.TemplateResponse(req, 'docs/rapidoc.jinja')
 
 @router.get('/about')
 async def about(req: Request) -> HTMLResponse:
@@ -64,24 +75,16 @@ async def artifact(id: UUID, disposition: str) -> FileResponse:
         filename=artifact.name,
         content_disposition_type=disposition)
 
-app = FastAPI(
-    title='WARN Reporter',
-    docs_url='/api/swagger',
-    redoc_url='/api/docs')
-
 app.include_router(router, include_in_schema=False)
 app.include_router(api.router, prefix='/api/v0')
 app.include_router(feed.router, prefix='/feed', include_in_schema=False)
 app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 
-static = StaticFiles(directory=settings.STATIC_DIR)
-app.mount('/static', static, name='static')
-
 def cmd(*args, **kw):
     if settings.DB_AUTO_MIGRATE:
         logger.info(f'Running auto migrate')
-        from . import models
-        models.migrate()
+        from .backends import orm
+        orm.migrate()
     logger.info(f'Starting uvicorn')
     return uvicorn.main.callback('wrep.main:app', *args, **kw)
 

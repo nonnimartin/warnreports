@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import Field
 
 from .. import utils
@@ -14,11 +14,17 @@ from .common import *
 logger = utils.get_logger('api')
 router = APIRouter()
 
-async def search_opts(order: str|None = None, limit: Limit = 50, page: PageNumber = 1):
+def search_opts(
+    order: Annotated[
+        str,
+        Query(description='Order field name(s), comma-separated')] = None,
+    limit: Limit = 50,
+    offset: Offset = 0
+):
     return dict(
         order=order,
         limit=limit,
-        offset=(page - 1) * limit)
+        offset=offset)
 
 SearchOpts = Annotated[dict, Depends(search_opts)]
 
@@ -36,6 +42,7 @@ class CompanyDetailView(CompanyDetail):
 
 class ArtifactDataView(ArtifactData):
     id: UUID = Field(title='ID')
+    media_type: str = Field()
 
 class ArtifactDetailView(ArtifactDataView, ArtifactDetail):
     pass
@@ -71,7 +78,7 @@ async def naics_get(id: int) -> NaicsDetail:
     return await retrieve404(NaicsDetail, id=id)
 
 @router.get('/states')
-async def states_list(params: CompanySearchParams, opts: SearchOpts) -> list[StateDetail]:
+async def states_list(params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
     params |= dict(order=opts.pop('order'))
     return await search(StateDetail, params, **opts)
 

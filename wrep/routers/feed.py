@@ -8,21 +8,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from feedgen.feed import FeedGenerator
+from pydantic import ValidationError
 
 from .. import settings, utils
 from ..models import *
 from ..search import *
-from .common import NaicsParam, StateParam
+from .common import NaicsParam, StateParam, TextSearchParam
 
 logger = utils.get_logger('feed')
 router = APIRouter()
 templates = Jinja2Templates(env=utils.jinja_env())
 
-async def common_form(
-    text: str|None = None,
+def search_params(
+    text: TextSearchParam = None,
     state: StateParam = None,
     naics: NaicsParam = None,
-    employees_min: int|None = None,
+    employees_min: int = None,
 ):
     return dict(
         text=text,
@@ -30,59 +31,59 @@ async def common_form(
         naics=naics,
         employees_min=employees_min)
 
-FormDep = Annotated[dict, Depends(common_form)]
+FeedSearchParams = Annotated[dict, Depends(search_params)]
 
 @router.get('/')
-async def feed_index(
-    req: Request,
-    form: FormDep,
-    limit: Limit = 50,
-    offset: Offset = 0
-) -> HTMLResponse:
-    id = id_encode(form)
-    is_custom = any(form.values())
-    custom_desc = query_description(form)
+async def feed_index(req: Request, params: FeedSearchParams) -> HTMLResponse:
+    id = id_encode(params)
+    is_custom = any(params.values())
+    custom_desc = query_description(params)
     permalinks = {fmt: id_permalink(id, fmt) for fmt in ('rss', 'atom')}
     context = dict(
-        form=form,
+        params=params,
         is_custom=is_custom,
         custom_desc=custom_desc,
         permalinks=permalinks)
-    params = dict(form, order='-reported')
-    reports = await search(ReportData, params, limit, offset)
+    params = dict(params, order='-reported')
+    reports = await search(ReportData, params, 50)
     states = await search(StateDetail)
     context.update(reports=reports, states=states)
     return templates.TemplateResponse(req, 'feed.jinja', context)
 
 @router.get('/rss')
-async def rss_query(form: FormDep) -> HTMLResponse:
-    return await feed_query('rss', form)
+async def rss_query(params: FeedSearchParams) -> HTMLResponse:
+    return await feed_query('rss', params)
 
 @router.get('/rss/{id}')
 async def rss_permalink(id: str) -> HTMLResponse:
     return await feed_permalink('rss', id)
 
 @router.get('/atom')
-async def atom_query(form: FormDep) -> HTMLResponse:
-    return await feed_query('atom', form)
+async def atom_query(params: FeedSearchParams) -> HTMLResponse:
+    return await feed_query('atom', params)
 
 @router.get('/atom/{id}')
 async def atom_permalink(id: str) -> HTMLResponse:
     return await feed_permalink('atom', id)
 
-async def feed_query(fmt: str, form: FormDep) -> HTMLResponse:
-    return HTMLResponse(content=await build_feed(fmt, form), media_type='text/xml')
+from ..main import app
+
+
+async def feed_query(fmt: str, params: FeedSearchParams) -> HTMLResponse:
+    return HTMLResponse(content=await build_feed(fmt, params), media_type='text/xml')
 
 async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
     try:
         params = id_decode(id)
+    except ValidationError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY)
     except ValueError:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
     return await feed_query(fmt, params)
 
-async def build_feed(fmt: str, form: FormDep) -> bytes:
-    id = id_encode(form)
-    title = f'WARN Reports {query_description(form)}'.strip()
+async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
+    title = f'WARN Reports {query_description(params)}'.strip()
+    id = id_encode(params)
     url = id_permalink(id, fmt)
     feed = FeedGenerator()
     feed.id(url)
@@ -90,20 +91,20 @@ async def build_feed(fmt: str, form: FormDep) -> bytes:
     feed.language('en')
     feed.title(title)
     feed.description(title)
-    params = dict(form, order='-reported')
+    params = dict(params, order='-reported')
     template = utils.get_template('reports/feed.jinja')
     for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
         entry.title(report.company)
-        entry.link(href=f'{settings.SITE_URL}/r/{report.id}')
+        entry.link(href=app.url_path_for('report_view', id=report.id))
         entry.published(report.tzreplace(report.reported))
         entry.updated(entry.published())
         entry.description(template.render(report=report))
     return getattr(feed, f'{fmt}_str')(pretty=True)
 
-def query_description(form: FormDep) -> str:
-    params = {k: v for k, v in form.items() if v is not None}
+def query_description(params: FeedSearchParams) -> str:
+    params = {k: v for k, v in params.items() if v is not None}
     descs = []
     if (state := params.pop('state', None)) is not None:
         descs.append(','.join(state))
@@ -116,18 +117,29 @@ def query_description(form: FormDep) -> str:
     descs.extend(filter(None, urlencode(params).split('&')))
     return ' '.join(descs)
 
-def id_encode(form: FormDep) -> str:
-    params = {k: form[k] for k in sorted(form) if form[k]}
-    q = urlencode(params)
+def id_encode(params: FeedSearchParams) -> str:
+    items = []
+    for k in sorted(params):
+        if (v := params[k]) is not None:
+            if not isinstance(v, list):
+                v = list[v]
+            for value in v:
+                items.append((k, value))
+    q = urlencode(items)
     return base64.b32hexencode(q.encode()).decode().lower()
 
 def id_decode(id: str) -> dict[str, Any]:
     q = base64.b32hexdecode(id, casefold=True).decode()
     params = parse_qs(q)
+    logger.info(f'133 {params=} {q=}')
     for key in ('employees_min', 'naics'):
         if key in params:
             params[key] = list(map(int, params[key]))
-    return {k: v[0] for k, v in params.items()}
+    return {
+        k: v if key == 'naics' or key == 'state' else v[0]
+        for k, v in params.items()}
 
 def id_permalink(id: str, fmt: str) -> str:
-    return '/'.join((f'{settings.SITE_URL}/feed/{fmt}', id)).rstrip('/')
+    if id:
+        return app.url_path_for(f'{fmt}_permalink', id=id)
+    return app.url_path_for(f'{fmt}_query')
