@@ -32,7 +32,7 @@ __all__ = [
 RT = TypeVar('RT')
 logger = utils.get_logger('backends.orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
 
 class Base(DeclarativeBase, Generic[DM, RT]):
 
