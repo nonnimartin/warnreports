@@ -256,8 +256,7 @@ async def search_build(*names: str) -> None:
             await search_init(name)
             logger.info(f'Building {name}')
             model = defn.orm_model
-            stmt = model.reduce_select()
-            it = model.map_reduce(session.execute(stmt).unique())
+            it = model.map_reduce_exec(session)
             it = map(defn.model.as_doc, it)
             await mongo.get_collection(name).insert_many(it)
             stat = (await search_stats(name))[name]

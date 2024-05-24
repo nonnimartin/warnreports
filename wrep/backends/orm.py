@@ -12,7 +12,7 @@ from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
 from sqlalchemy import delete as delete
 from sqlalchemy import select
 from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, aliased,
-                            joinedload, mapped_column, relationship,
+                            mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
 
@@ -39,8 +39,12 @@ class Base(DeclarativeBase, Generic[DM, RT]):
     data_model: type[DM]
 
     @classmethod
+    def map_reduce_exec(cls, session: Session, *filters) -> Iterator[DM]:
+        return cls.map_reduce(session.execute(cls.reduce_select(*filters)))
+
+    @classmethod
     def reduce_select(cls, *filters) -> Select[RT]:
-        return select(cls).where(*filters)
+        return select(cls).where(*filters).execution_options(yield_per=1000)
 
     @classmethod
     def map_reduce(cls, it: Iterable[RT]) -> Iterator[DM]:
@@ -113,11 +117,12 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
             select(cls, Report2 := aliased(cls), Naics, Artifact)
             .join(Report2, cls.company_norm == Report2.company_norm)
             .join(Report2.naics, isouter=True)
-            .options(joinedload(Report2.naics))
+            .options(selectinload(Report2.naics))
             .join(cls.artifacts, isouter=True)
-            .options(joinedload(cls.artifacts))
+            .options(selectinload(cls.artifacts))
             .where(*filters)
-            .order_by(cls.id, Naics.code, Artifact.id))
+            .order_by(cls.id, Naics.code, Artifact.id)
+            .execution_options(yield_per=1000))
 
     @classmethod
     def reduce_init(cls, row):
@@ -167,7 +172,8 @@ class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
             .join(Report, Report.company_norm == cls.name_norm)
             .join(Report.naics, isouter=True)
             .where(*filters)
-            .order_by(cls.name_norm, cls.name))
+            .order_by(cls.name_norm, cls.name)
+            .execution_options(yield_per=1000))
 
     @classmethod
     def reduce_init(cls, row):
@@ -225,7 +231,8 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
                 Report.company_norm == Company.name_canon,
                 isouter=True)
             .where(*filters)
-            .order_by(cls.id, Report.company_norm, Company.name_norm))
+            .order_by(cls.id, Report.company_norm, Company.name_norm)
+            .execution_options(yield_per=1000))
 
     @classmethod
     def reduce_row(cls, inst, row, memo):
@@ -263,7 +270,8 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
             select(cls, Report)
             .join(cls.reports, isouter=True)
             .where(*filters)
-            .order_by(cls.id))
+            .order_by(cls.id)
+            .execution_options(yield_per=1000))
 
     @classmethod
     def reduce_row(cls, inst, row, memo):

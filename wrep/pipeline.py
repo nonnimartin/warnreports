@@ -177,9 +177,7 @@ class Pipeline:
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
             for name, defn in collections.items():
-                model = defn.orm_model
-                stmt = model.reduce_select(*filters[name])
-                it = model.map_reduce(session.execute(stmt).unique())
+                it = defn.orm_model.map_reduce_exec(session, *filters[name])
                 results[name] = await getattr(backend, f'update_{name}')(it)
         nochange = True
         counts: dict[str, dict[str, int]] = {}
