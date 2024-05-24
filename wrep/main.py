@@ -83,8 +83,8 @@ app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 def cmd(*args, **kw):
     if settings.DB_AUTO_MIGRATE:
         logger.info(f'Running auto migrate')
-        from . import models
-        models.migrate()
+        from .backends import orm
+        orm.migrate()
     logger.info(f'Starting uvicorn')
     return uvicorn.main.callback('wrep.main:app', *args, **kw)
 
