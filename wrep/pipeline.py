@@ -62,7 +62,7 @@ class Pipeline:
         'reported': datetime.fromisoformat,
         'starting': datetime.fromisoformat}
 
-    def __init__(self, state: str) -> None:
+    def __init__(self, state: str, **opts) -> None:
         self.state = state.upper()
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
@@ -71,6 +71,7 @@ class Pipeline:
             Stage.Translate: MongoTranslation(self.state),
             Stage.Index: MongoSearchIndex(self.state)}
         self.session: orm.Session|None = None
+        self.opts = opts
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -177,7 +178,10 @@ class Pipeline:
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
             for name, defn in collections.items():
-                it = defn.orm_model.map_reduce_exec(session, *filters[name])
+                it = defn.orm_model.map_reduce_exec(
+                    session,
+                    *filters[name],
+                    lazy=bool(self.opts.get('lazy', True)))
                 results[name] = await getattr(backend, f'update_{name}')(it)
         nochange = True
         counts: dict[str, dict[str, int]] = {}
@@ -239,7 +243,7 @@ class Pipeline:
 
     def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
         trims = {}
-        for field in ('action', 'location', 'company'):
+        for field in ('action', 'location', 'company', 'url'):
             value = record.get(field)
             limit = Report.__table__._columns[field].type.length
             if value and len(value) > limit:
@@ -355,6 +359,7 @@ class PipelineRunner:
         clean_only: bool = False,
         incremental: bool = False,
         concurrent: bool = False,
+        lazy: bool|int = True,
     ):
         if clean_only and (clean or incremental):
             raise ValueError(f'Cannot specify clean_only with clean or incremental')
@@ -365,7 +370,7 @@ class PipelineRunner:
         self.concurrent = concurrent
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
-        self.pipelines = list(map(Pipeline, self.states))
+        self.pipelines = [Pipeline(state, lazy=lazy) for state in self.states]
         self.size = len(self.pipelines) * len(self.stages)
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
         self.grouping: tuple[list[Stage], ...] = [], [], []
@@ -439,6 +444,7 @@ class Command(utils.BaseCommand):
         parser.add_argument('--clean-only', '-x', action='store_true')
         parser.add_argument('--incremental', '-i', action='store_true')
         parser.add_argument('--concurrent', '-t', action='store_true')
+        parser.add_argument('--eager', '-e', dest='lazy', action='store_false')
 
     def setup(self, opts):
         opts.states = opts.states or list(translators)
