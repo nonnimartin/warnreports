@@ -69,7 +69,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_naics_title'), 'naics', ['title'], unique=False, if_not_exists=True)
 
     if 'report' in tables:
-        drop_indexes('company', 'company_norm', 'created', 'reported', 'state')
+        drop_indexes('report', 'company_norm', 'created', 'reported', 'state')
     else:
         op.create_table('report',
             sa.Column('id', sa.UUID(), nullable=False),
