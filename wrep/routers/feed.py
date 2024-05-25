@@ -97,7 +97,7 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
         entry.title(report.company)
-        entry.link(href=app.url_path_for('report_view', id=report.id))
+        entry.link(href=report_link(report))
         entry.published(report.tzreplace(report.reported))
         entry.updated(entry.published())
         entry.description(template.render(report=report))
@@ -131,7 +131,6 @@ def id_encode(params: FeedSearchParams) -> str:
 def id_decode(id: str) -> dict[str, Any]:
     q = base64.b32hexdecode(id, casefold=True).decode()
     params = parse_qs(q)
-    logger.info(f'133 {params=} {q=}')
     for key in ('employees_min', 'naics'):
         if key in params:
             params[key] = list(map(int, params[key]))
@@ -141,5 +140,10 @@ def id_decode(id: str) -> dict[str, Any]:
 
 def id_permalink(id: str, fmt: str) -> str:
     if id:
-        return app.url_path_for(f'{fmt}_permalink', id=id)
-    return app.url_path_for(f'{fmt}_query')
+        href = app.url_path_for(f'{fmt}_permalink', id=id)
+    else:
+        href = app.url_path_for(f'{fmt}_query')
+    return settings.SITE_URL + href
+
+def report_link(report: ReportData) -> str:
+    return settings.SITE_URL + app.url_path_for('report_view', id=report.id)
