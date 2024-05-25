@@ -93,7 +93,7 @@ class ArtifactData(DataModel):
     url: str
     name: str
     size: int
-    media_type: str = Field(alias='mimetype')
+    media_type: str
     sha1: str
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 

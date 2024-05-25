@@ -11,9 +11,9 @@ from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
 from sqlalchemy import delete as delete
 from sqlalchemy import select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, aliased
 from sqlalchemy.orm import joinedload as joinedload
-from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, aliased,
-                            mapped_column, relationship, selectinload,
+from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
 
@@ -34,18 +34,26 @@ RT = TypeVar('RT')
 logger = utils.get_logger('backends.orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
+DEFAULT_YIELD_PER = 1000
 
 class Base(DeclarativeBase, Generic[DM, RT]):
 
     data_model: type[DM]
 
     @classmethod
-    def map_reduce_exec(cls, session: Session, *filters) -> Iterator[DM]:
-        return cls.map_reduce(session.execute(cls.reduce_select(*filters)))
+    def map_reduce_exec(cls, session: Session, *filters, lazy: bool|int = True) -> Iterator[DM]:
+        it = session.execute(cls.reduce_select(*filters, lazy=lazy))
+        if not lazy:
+            it = it.unique()
+        return cls.map_reduce(it)
 
     @classmethod
-    def reduce_select(cls, *filters) -> Select[RT]:
-        return select(cls).where(*filters).execution_options(yield_per=1000)
+    def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
+        stmt = select(cls).where(*filters)
+        if lazy:
+            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
+            stmt = stmt.execution_options(yield_per=yield_per)
+        return stmt
 
     @classmethod
     def map_reduce(cls, it: Iterable[RT]) -> Iterator[DM]:
@@ -55,15 +63,15 @@ class Base(DeclarativeBase, Generic[DM, RT]):
                 if inst is not None:
                     cls.reduce_finish(inst, memo)
                     yield inst
-                inst = cls.reduce_init(row)
                 memo = defaultdict(set)
+                inst = cls.reduce_init(row, memo)
             cls.reduce_row(inst, row, memo)
         if inst is not None:
             cls.reduce_finish(inst, memo)
             yield inst
 
     @classmethod
-    def reduce_init(cls, row: RT) -> DM:
+    def reduce_init(cls, row: RT, memo: dict[str, set]) -> DM:
         return cls.data_model.model_validate(row[0])
 
     @classmethod
@@ -113,33 +121,39 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
     artifacts: Mapped[list[Artifact]] = relationship(secondary=ArtifactReport, back_populates='reports')
 
     @classmethod
-    def reduce_select(cls, *filters):
-        return (
+    def reduce_select(cls, *filters, lazy: bool|int = True):
+        joinfunc = selectinload if lazy else joinedload
+        stmt = (
             select(cls, Report2 := aliased(cls), Naics, Artifact)
             .join(Report2, cls.company_norm == Report2.company_norm)
             .join(Report2.naics, isouter=True)
-            .options(selectinload(Report2.naics))
             .join(cls.artifacts, isouter=True)
-            .options(selectinload(cls.artifacts))
             .where(*filters)
             .order_by(cls.id, Naics.code, Artifact.id)
-            .execution_options(yield_per=1000))
+            .options(joinfunc(Report2.naics))
+            .options(joinfunc(cls.artifacts)))
+        if lazy:
+            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
+            stmt = stmt.execution_options(yield_per=yield_per)
+        return stmt
 
     @classmethod
-    def reduce_init(cls, row):
-        inst = super().reduce_init(row)
+    def reduce_init(cls, row, memo):
+        inst = super().reduce_init(row, memo)
+        memo['naics'].update(naics.id for naics in inst.naics)
+        memo['artifacts'].update(artifact.id for artifact in inst.artifacts)
         inst.company_id = uuid.uuid5(Company.NS, row[0].company_norm)
         return inst
 
     @classmethod
     def reduce_row(cls, inst, row, memo):
         naics, artifact = row[2:]
-        if naics and naics not in memo['naics']:
+        if naics and naics.id not in memo['naics']:
             inst.naics.append(NaicsData.model_validate(naics))
-            memo['naics'].add(naics)
-        if artifact and artifact not in memo['artifacts']:
+            memo['naics'].add(naics.id)
+        if artifact and artifact.id not in memo['artifacts']:
             inst.artifacts.append(ArtifactData.model_validate(artifact))
-            memo['artifacts'].add(artifact)
+            memo['artifacts'].add(artifact.id)
 
     @classmethod
     def reduce_finish(cls, inst, memo):
@@ -167,50 +181,53 @@ class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
     name_canon: Mapped[str] = mapped_column(String(512), index=True)
 
     @classmethod
-    def reduce_select(cls, *filters):
-        return (
+    def reduce_select(cls, *filters, lazy: bool|int = True):
+        stmt = (
             select(cls, Report, Naics)
             .join(Report, Report.company_norm == cls.name_norm)
             .join(Report.naics, isouter=True)
             .where(*filters)
-            .order_by(cls.name_norm, cls.name)
-            .execution_options(yield_per=1000))
+            .order_by(cls.name_norm, cls.name))
+        if lazy:
+            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
+            stmt = stmt.execution_options(yield_per=yield_per)
+        return stmt
 
     @classmethod
-    def reduce_init(cls, row):
-        inst = super().reduce_init(row)
+    def reduce_init(cls, row, memo):
+        inst = super().reduce_init(row, memo)
         company, report = row[:2]
         inst.id = uuid.uuid5(cls.NS, company.name_norm)
         inst.last_reported = report.reported
         return inst
 
     @classmethod
-    def reduce_equals(cls, inst, row) -> bool:
+    def reduce_equals(cls, inst, row):
         return row[0].name_norm == normls.company_name_norm(inst.name)
 
     @classmethod
-    def reduce_row(cls, inst, row, memo) -> None:
+    def reduce_row(cls, inst, row, memo):
         company, report, naics = row
         memo['canon'].add(company.name_canon)
         for alias in company.name_canon, company.name:
             if alias not in memo['aliases']:
                 inst.aliases.append(alias)
                 memo['aliases'].add(alias)
-        if report not in memo['reports']:
+        if report.id not in memo['reports']:
             inst.reports_count += 1
             if report.employees:
                 inst.employees_sum += report.employees
             inst.last_reported = max(inst.last_reported, report.reported)
-            memo['reports'].add(report)
+            memo['reports'].add(report.id)
             if report.state not in memo['states']:
                 inst.states.append(report.state)
                 memo['states'].add(report.state)
-            if naics and naics not in memo['naics']:
-                inst.naics.append(NaicsData.model_validate(naics))
-                memo['naics'].add(naics)
+        if naics and naics.id not in memo['naics']:
+            inst.naics.append(NaicsData.model_validate(naics))
+            memo['naics'].add(naics.id)
 
     @classmethod
-    def reduce_finish(cls, inst, memo) -> None:
+    def reduce_finish(cls, inst, memo):
         inst.name = min(map(normls.company_name_sort, memo['canon']))[-1]
         inst.aliases.sort(key=lambda x: (x.lower(), x))
         inst.naics.sort(key=lambda x: (x.code, x.id))
@@ -223,8 +240,8 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
     reports: Mapped[list[Report]] = relationship(secondary=NaicsReport, back_populates='naics')
 
     @classmethod
-    def reduce_select(cls, *filters):
-        return (
+    def reduce_select(cls, *filters, lazy: bool = True):
+        stmt = (
             select(cls, Report, Company)
             .join(cls.reports, isouter=True)
             .join(
@@ -232,17 +249,20 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
                 Report.company_norm == Company.name_canon,
                 isouter=True)
             .where(*filters)
-            .order_by(cls.id, Report.company_norm, Company.name_norm)
-            .execution_options(yield_per=1000))
+            .order_by(cls.id, Report.company_norm, Company.name_norm))
+        if lazy:
+            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
+            stmt = stmt.execution_options(yield_per=yield_per)
+        return stmt
 
     @classmethod
     def reduce_row(cls, inst, row, memo):
         report, company = row[1:]
-        if report and report not in memo['reports']:
+        if report and report.id not in memo['reports']:
             inst.reports_count += 1
             if report.employees:
                 inst.employees_sum += report.employees
-            memo['reports'].add(report)
+            memo['reports'].add(report.id)
             if report.company_norm not in memo['companies']:
                 inst.companies_count += 1
                 memo['companies'].add(report.company_norm)
@@ -256,7 +276,7 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
     url: Mapped[str] = mapped_column(String(2083))
     created: Mapped[datetime] = mapped_column(DateTime(timezone=True), **nowopts)
     modified: Mapped[datetime] = mapped_column(DateTime(timezone=True), **nowopts)
-    mimetype: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(255))
     size: Mapped[int] = mapped_column(BigInteger())
     sha1: Mapped[str] = mapped_column(String(40))
     reports: Mapped[list[Report]] = relationship(secondary=ArtifactReport, back_populates='artifacts')
@@ -266,19 +286,22 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
         return Path(self.path).name
 
     @classmethod
-    def reduce_select(cls, *filters):
-        return (
+    def reduce_select(cls, *filters, lazy: bool|int = True):
+        stmt = (
             select(cls, Report)
             .join(cls.reports, isouter=True)
             .where(*filters)
-            .order_by(cls.id)
-            .execution_options(yield_per=1000))
+            .order_by(cls.id))
+        if lazy:
+            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
+            stmt = stmt.execution_options(yield_per=yield_per)
+        return stmt
 
     @classmethod
     def reduce_row(cls, inst, row, memo):
-        if (report := row[1]) and report not in memo['reports']:
+        if (report := row[1]) and report.id not in memo['reports']:
             inst.reports_count += 1
-            memo['reports'].add(report)
+            memo['reports'].add(report.id)
 
     def self_update(self) -> bool:
         file = Path(settings.ARTIFACTS_DIR, self.path)
@@ -288,7 +311,7 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
         data = dict(
             size=stat.st_size,
             modified=datetime.fromtimestamp(stat.st_mtime),
-            mimetype=utils.get_mimetype(file),
+            media_type=utils.get_mimetype(file),
             sha1=digest.hexdigest())
         change = False
         for field, value in data.items():
@@ -298,6 +321,12 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
         return change
 
 def migrate() -> None:
+    import alembic.command
+    from alembic.config import Config
+    config = Config(settings.ALEMBIC_INI)
+    with engine.begin() as connection:
+        config.attributes['connection'] = connection
+        alembic.command.upgrade(config, 'head')
     with SessionLocal() as session:
         exists = bool(
             session
