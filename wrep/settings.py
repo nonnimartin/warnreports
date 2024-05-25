@@ -6,6 +6,7 @@ BASEDIR = Path(__file__).parent
 REPODIR = BASEDIR.parent
 STATIC_DIR = BASEDIR/'static'
 TEMPLATES_DIR = BASEDIR/'templates'
+ALEMBIC_INI = REPODIR/'alembic.ini'
 BUILD_DIR = Path(getenv('BUILD_DIR', REPODIR/'build'))
 ARTIFACTS_DIR = Path(getenv('ARTIFACTS_DIR', BUILD_DIR/'artifacts'))
 NAICS_DOWNLOAD = 'https://github.com/owings1/naics/raw/2022-1/build/2022.min.json'

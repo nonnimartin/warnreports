@@ -11,9 +11,9 @@ from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
 from sqlalchemy import delete as delete
 from sqlalchemy import select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, aliased
 from sqlalchemy.orm import joinedload as joinedload
-from sqlalchemy.orm import (DeclarativeBase, Mapped, Session, aliased,
-                            mapped_column, relationship, selectinload,
+from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
 
@@ -122,25 +122,19 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True):
+        joinfunc = selectinload if lazy else joinedload
         stmt = (
             select(cls, Report2 := aliased(cls), Naics, Artifact)
             .join(Report2, cls.company_norm == Report2.company_norm)
             .join(Report2.naics, isouter=True)
             .join(cls.artifacts, isouter=True)
             .where(*filters)
-            .order_by(cls.id, Naics.code, Artifact.id))
+            .order_by(cls.id, Naics.code, Artifact.id)
+            .options(joinfunc(Report2.naics))
+            .options(joinfunc(cls.artifacts)))
         if lazy:
             yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
-            stmt = (
-                stmt
-                .options(selectinload(Report2.naics))
-                .options(selectinload(cls.artifacts))
-                .execution_options(yield_per=yield_per))
-        else:
-            stmt = (
-                stmt
-                .options(joinedload(Report2.naics))
-                .options(joinedload(cls.artifacts)))
+            stmt = stmt.execution_options(yield_per=yield_per)
         return stmt
 
     @classmethod
@@ -282,7 +276,7 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
     url: Mapped[str] = mapped_column(String(2083))
     created: Mapped[datetime] = mapped_column(DateTime(timezone=True), **nowopts)
     modified: Mapped[datetime] = mapped_column(DateTime(timezone=True), **nowopts)
-    mimetype: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(255))
     size: Mapped[int] = mapped_column(BigInteger())
     sha1: Mapped[str] = mapped_column(String(40))
     reports: Mapped[list[Report]] = relationship(secondary=ArtifactReport, back_populates='artifacts')
@@ -317,7 +311,7 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
         data = dict(
             size=stat.st_size,
             modified=datetime.fromtimestamp(stat.st_mtime),
-            mimetype=utils.get_mimetype(file),
+            media_type=utils.get_mimetype(file),
             sha1=digest.hexdigest())
         change = False
         for field, value in data.items():
@@ -327,6 +321,12 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
         return change
 
 def migrate() -> None:
+    import alembic.command
+    from alembic.config import Config
+    config = Config(settings.ALEMBIC_INI)
+    with engine.begin() as connection:
+        config.attributes['connection'] = connection
+        alembic.command.upgrade(config, 'head')
     with SessionLocal() as session:
         exists = bool(
             session

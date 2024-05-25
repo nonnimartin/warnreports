@@ -42,7 +42,6 @@ class CompanyDetailView(CompanyDetail):
 
 class ArtifactDataView(ArtifactData):
     id: UUID = Field(title='ID')
-    media_type: str = Field()
 
 class ArtifactDetailView(ArtifactDataView, ArtifactDetail):
     pass
