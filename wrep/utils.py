@@ -123,6 +123,19 @@ def jinja_env():
     loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
     return jinja2.Environment(loader=loader)
 
+def build_css():
+    logger.info(f'Building css')
+    import sass
+    context = dict(bootstrap_dir=settings.BOOTSTRAP_DIR)
+    outdir = settings.CSS_BUILD_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    content = render('scss/bootstrap.scss', context)
+    with Path(outdir, 'bootstrap.css').open('w') as file:
+        file.write(sass.compile(string=content))
+    with Path(outdir, 'bootstrap.min.css').open('w') as file:
+        file.write(sass.compile(string=content, output_style='compressed'))
+
+
 class CountingIter:
 
     def __init__(self, it: Iterable[T]):

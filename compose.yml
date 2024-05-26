@@ -33,6 +33,7 @@ services:
       UVICORN_RELOAD: 'true'
       MONGODB_URL: &mongourl mongodb://root:wrep@mongo:27017/
       DB_URL: ${DB_URL:-postgresql://wrep@postgres/wrep}
+      CSS_BUILD_DIR: ${CSS_BUILD_DIR:-/build/css}
     command: ./scripts/wait-for-it.sh -h postgres -p 5432 -t 0 -- wrep main
     depends_on:
       - mongo

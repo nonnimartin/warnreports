@@ -5,14 +5,15 @@ WORKDIR /code
 CMD python -m wrep.main
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
+ENV CSS_BUILD_DIR=/srv/css
+ENV BOOTSTRAP_DIR=/usr/local/src/bootstrap
 ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
-RUN apk --no-cache -q add bash curl mailcap &&\
+RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
-RUN ./scripts/install-warn-scraper.sh
+RUN ./scripts/install-warn-scraper.sh &&\
+    ./scripts/download-bootstrap.sh
 COPY ./requirements.txt ./
-RUN apk --no-cache -q add --virtual .build-deps gcc libc-dev linux-headers libffi-dev &&\
-    pip install -qqq -r requirements.txt &&\
-    apk --no-cache -q del .build-deps
+RUN pip install -qqq --no-cache-dir --no-input -r requirements.txt
 COPY . .
