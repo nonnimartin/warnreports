@@ -21,11 +21,13 @@
 </table>
 <h2>State Stats</h2>
 {%- include 'states/table.jinja' %}
+<h2>NAICS Stats</h2>
+{%- include 'naics/table.jinja' %}
 {%- endblock %}
 {%- block scripts %}
 <script>
 $(() => {
-    $('#states_table').DataTable({
+    $('#states_table, #naics_table').DataTable({
         paging: false,
         filter: false,
         layout: {

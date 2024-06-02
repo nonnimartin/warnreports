@@ -21,6 +21,7 @@ StateParam = Annotated[list[StateCode], Query(description='The 2-letter state po
 IdsParam = Annotated[list[UUID], Query(description='The unique record ID(s)')]
 NaicsParam = Annotated[list[int], Query(description='The 2 to 6 digit NAICS code')]
 NaicsTitleParam = Annotated[str, Query(description='The NAICS industry title')]
+NaicsRootParam = Annotated[list[int], Query(description='The 2 digit root NAICS code')]
 
 def reported_params(
     reported_min: Annotated[
@@ -156,6 +157,7 @@ def naics_search_params(
     code: NaicsParam = None,
     prefix: NaicsParam = None,
     title: NaicsTitleParam = None,
+    root: NaicsRootParam = None,
     reports_count: ReportsCountParams = ...,
     employees_sum: EmployeesSumParams = ...,
     companies_count: CompaniesCountParams = ...,
@@ -164,6 +166,7 @@ def naics_search_params(
         code=code,
         prefix=prefix,
         title=title,
+        root=root,
         **reports_count,
         **employees_sum,
         **companies_count)

@@ -256,6 +256,12 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
         return stmt
 
     @classmethod
+    def reduce_init(cls, row, memo):
+        inst = super().reduce_init(row, memo)
+        inst.root = int(str(inst.id)[:2])
+        return inst
+
+    @classmethod
     def reduce_row(cls, inst, row, memo):
         report, company = row[1:]
         if report and report.id not in memo['reports']:

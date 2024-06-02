@@ -113,6 +113,7 @@ class NaicsDetail(NaicsData):
     reports_count: int = 0
     companies_count: int = 0
     employees_sum: int = 0
+    root: int = None
 
 class StateDetail(DataModel):
     id: StateCode
@@ -214,6 +215,7 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     code: int|None = None
     prefix: list[int]|None = None
     title: str|None = None
+    root: list[int]|None = None
     reports_count_min: int|None = None
     reports_count_max: int|None = None
     companies_count_min: int|None = None
@@ -221,7 +223,7 @@ class NaicsFilter(FilterModel[NaicsDetail]):
     employees_sum_min: int|None = None
     employees_sum_max: int|None = None
     result_model: ClassVar = NaicsDetail
-    order_fields: ClassVar = {'id', 'code', 'title', 'reports_count', 'companies_count', 'employees_sum'}
+    order_fields: ClassVar = {'id', 'code', 'title', 'root', 'reports_count', 'companies_count', 'employees_sum'}
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):

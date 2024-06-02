@@ -211,6 +211,7 @@ collections: dict[str, CollectionDefn] = dict(
         {'id': 1},
         {'code': 1},
         {'title': 1},
+        {'root': 1},
         {'companies_count': 1},
         {'reports_count': 1},
         {'reports_count': -1},

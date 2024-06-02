@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
@@ -60,7 +61,9 @@ async def api_home(req: Request) -> HTMLResponse:
 async def about(req: Request) -> HTMLResponse:
     stats = await search.search_stats()
     states = await search.search(StateDetail)
-    context = dict(stats=stats, states=states)
+    naics = await search.search(NaicsDetail, dict(reports_count_min=1))
+    naics = rollup_naics(naics)
+    context = dict(stats=stats, states=states, naics=naics)
     return templates.TemplateResponse(req, 'about.jinja', context)
 
 @router.get('/r/{id}')
@@ -95,6 +98,17 @@ app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 def cmd(*args, **kw):
     logger.info(f'Starting uvicorn')
     return uvicorn.main.callback('wrep.main:app', *args, **kw)
+
+def rollup_naics(naics: list[NaicsDetail]) -> list[NaicsDetail]:
+    counts = defaultdict(int)
+    roots: dict[int, NaicsDetail] = {}
+    for naic in naics:
+        counts[naic.root] += naic.reports_count
+        if naic.root == naic.id:
+            roots[naic.id] = naic
+    for root, naic in roots.items():
+        naic.reports_count = counts[root]
+    return list(roots.values())
 
 main = click.Command(
     name='main',
