@@ -121,7 +121,9 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
 def jinja_env():
     import jinja2
     loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
-    return jinja2.Environment(loader=loader)
+    env = jinja2.Environment(loader=loader)
+    env.filters['nf'] = '{:,}'.format
+    return env
 
 def build_css():
     logger.info(f'Building css')

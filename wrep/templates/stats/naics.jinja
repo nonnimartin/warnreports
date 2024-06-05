@@ -1,4 +1,4 @@
-<table class="table table-striped responsive" id="naics_table">
+<table class="table table-striped responsive">
     <thead>
         <tr>
             <th>ID</th>
@@ -13,7 +13,7 @@
             <td>{{ naic.id }}</td>
             <td>{{ naic.code }}</td>
             <td>{{ naic.title }}</td>
-            <td>{{ naic.reports_count }}</td>
+            <td>{{ naic.reports_count|nf }}</td>
         </tr>
         {%- endfor %}
     </tbody>

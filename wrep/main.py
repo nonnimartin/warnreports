@@ -54,7 +54,7 @@ async def api_home(req: Request) -> HTMLResponse:
     return templates.TemplateResponse(req, 'api.jinja')
 
 @router.get('/api/docs')
-async def api_home(req: Request) -> HTMLResponse:
+async def api_docs(req: Request) -> HTMLResponse:
     return templates.TemplateResponse(req, 'docs/rapidoc.jinja')
 
 @router.get('/about')

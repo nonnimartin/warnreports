@@ -1,0 +1,18 @@
+<table class="table table-striped responsive">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Records</th>
+            <th>Size</th>
+        </tr>
+    </thead>
+    <tbody>
+        {%- for name, stats in stats.items() %}
+        <tr>
+            <td>{{ name }}</td>
+            <td>{{ stats.count|nf }}</td>
+            <td>{{ stats.size|nf }}</td>
+        </tr>
+        {%- endfor %}
+    </tbody>
+</table>
