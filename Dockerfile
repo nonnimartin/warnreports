@@ -12,7 +12,7 @@ ENV UVICORN_HOST=0.0.0.0
 RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
-RUN ./scripts/install-warn-scraper.sh &&\
+RUN ./scripts/download-warn-scraper.sh &&\
     ./scripts/download-bootstrap.sh
 COPY ./requirements.txt ./
 RUN pip install -qqq --no-cache-dir --no-input -r requirements.txt

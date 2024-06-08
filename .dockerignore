@@ -9,4 +9,5 @@
 build
 Dockerfile
 extra
+lib/bootstrap
 warn
