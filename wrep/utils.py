@@ -121,7 +121,22 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
 def jinja_env():
     import jinja2
     loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
-    return jinja2.Environment(loader=loader)
+    env = jinja2.Environment(loader=loader)
+    env.filters['nf'] = '{:,}'.format
+    return env
+
+def build_css():
+    logger.info(f'Building css')
+    import sass
+    context = dict(bootstrap_dir=settings.BOOTSTRAP_DIR)
+    outdir = settings.CSS_BUILD_DIR
+    outdir.mkdir(parents=True, exist_ok=True)
+    content = render('scss/bootstrap.scss', context)
+    with Path(outdir, 'bootstrap.css').open('w') as file:
+        file.write(sass.compile(string=content))
+    with Path(outdir, 'bootstrap.min.css').open('w') as file:
+        file.write(sass.compile(string=content, output_style='compressed'))
+
 
 class CountingIter:
 

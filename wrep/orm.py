@@ -17,10 +17,10 @@ from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
 
-from .. import settings, utils
-from ..models import (DM, ArtifactData, ArtifactDetail, CompanyDetail,
+from . import settings, utils
+from .models import (DM, ArtifactData, ArtifactDetail, CompanyDetail,
                       NaicsData, NaicsDetail, ReportData, StateDetail)
-from ..ref import normls
+from .ref import normls
 
 __all__ = [
     'Artifact',
@@ -31,7 +31,7 @@ __all__ = [
     'StateStat']
 
 RT = TypeVar('RT')
-logger = utils.get_logger('backends.orm')
+logger = utils.get_logger('orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
 DEFAULT_YIELD_PER = 1000
@@ -39,21 +39,6 @@ DEFAULT_YIELD_PER = 1000
 class Base(DeclarativeBase, Generic[DM, RT]):
 
     data_model: type[DM]
-
-    @classmethod
-    def map_reduce_exec(cls, session: Session, *filters, lazy: bool|int = True) -> Iterator[DM]:
-        it = session.execute(cls.reduce_select(*filters, lazy=lazy))
-        if not lazy:
-            it = it.unique()
-        return cls.map_reduce(it)
-
-    @classmethod
-    def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
-        stmt = select(cls).where(*filters)
-        if lazy:
-            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
-            stmt = stmt.execution_options(yield_per=yield_per)
-        return stmt
 
     @classmethod
     def map_reduce(cls, it: Iterable[RT]) -> Iterator[DM]:
@@ -71,20 +56,37 @@ class Base(DeclarativeBase, Generic[DM, RT]):
             yield inst
 
     @classmethod
+    def map_reduce_exec(cls, session: Session, *filters, lazy: bool|int = True) -> Iterator[DM]:
+        it = session.execute(cls.reduce_select(*filters, lazy=lazy))
+        if not lazy:
+            it = it.unique()
+        return cls.map_reduce(it)
+
+    @classmethod
+    def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
+        stmt = select(cls).where(*filters)
+        stmt = _lazify(stmt, lazy)
+        return stmt
+
+    @classmethod
     def reduce_init(cls, row: RT, memo: dict[str, set]) -> DM:
+        'Create a new DataModel instance from the first result row'
         return cls.data_model.model_validate(row[0])
 
     @classmethod
-    def reduce_equals(cls, inst: DM, row: RT) -> bool:
-        return inst.id == row[0].id
-
-    @classmethod
     def reduce_row(cls, inst: DM, row: RT, memo: dict[str, set]) -> None:
+        'Map a result row into a DataModel instance'
         pass
 
     @classmethod
     def reduce_finish(cls, inst: DM, memo: dict[str, set]) -> None:
+        'Modify a fully-mapped DataModel instance'
         pass
+
+    @classmethod
+    def reduce_equals(cls, inst: DM, row: RT) -> bool:
+        'Whether a result row represents the instance (individuation)'
+        return inst.id == row[0].id
 
     def __init_subclass__(cls, **kw) -> None:
         cls.__tablename__ = cls.__name__.lower()
@@ -94,14 +96,14 @@ class Base(DeclarativeBase, Generic[DM, RT]):
 NaicsReport = Table(
     'naicsreport',
     Base.metadata,
-    Column('naics_id', ForeignKey('naics.id'), primary_key=True),
-    Column('report_id', ForeignKey('report.id'), primary_key=True))
+    Column('naics_id', ForeignKey('naics.id', ondelete='CASCADE'), primary_key=True),
+    Column('report_id', ForeignKey('report.id', ondelete='CASCADE'), primary_key=True))
 
 ArtifactReport = Table(
     'artifactreport',
     Base.metadata,
-    Column('artifact_id', ForeignKey('artifact.id'), primary_key=True),
-    Column('report_id', ForeignKey('report.id'), primary_key=True))
+    Column('artifact_id', ForeignKey('artifact.id', ondelete='CASCADE'), primary_key=True),
+    Column('report_id', ForeignKey('report.id', ondelete='CASCADE'), primary_key=True))
 
 nowopts = dict(server_default=func.now(), default=utils.now)
 
@@ -113,7 +115,7 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
     state: Mapped[str] = mapped_column(String(2), index=True)
     created: Mapped[datetime] = mapped_column(DateTime(timezone=True), **nowopts)
     location: Mapped[str|None] = mapped_column(String(255), nullable=True)
-    starting : Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
+    starting: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
     employees: Mapped[int] = mapped_column(Integer(), nullable=True)
     action: Mapped[str|None] = mapped_column(String(64), nullable=True)
     url: Mapped[str|None] = mapped_column(String(2083), nullable=True)
@@ -122,19 +124,14 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True):
-        joinfunc = selectinload if lazy else joinedload
         stmt = (
             select(cls, Report2 := aliased(cls), Naics, Artifact)
             .join(Report2, cls.company_norm == Report2.company_norm)
             .join(Report2.naics, isouter=True)
             .join(cls.artifacts, isouter=True)
             .where(*filters)
-            .order_by(cls.id, Naics.code, Artifact.id)
-            .options(joinfunc(Report2.naics))
-            .options(joinfunc(cls.artifacts)))
-        if lazy:
-            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
-            stmt = stmt.execution_options(yield_per=yield_per)
+            .order_by(cls.id, Naics.code, Artifact.id))
+        stmt = _lazify(stmt, lazy, (Report2.naics, cls.artifacts))
         return stmt
 
     @classmethod
@@ -188,9 +185,7 @@ class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
             .join(Report.naics, isouter=True)
             .where(*filters)
             .order_by(cls.name_norm, cls.name))
-        if lazy:
-            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
-            stmt = stmt.execution_options(yield_per=yield_per)
+        stmt = _lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -250,10 +245,14 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
                 isouter=True)
             .where(*filters)
             .order_by(cls.id, Report.company_norm, Company.name_norm))
-        if lazy:
-            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
-            stmt = stmt.execution_options(yield_per=yield_per)
+        stmt = _lazify(stmt, lazy)
         return stmt
+
+    @classmethod
+    def reduce_init(cls, row, memo):
+        inst = super().reduce_init(row, memo)
+        inst.root = int(str(inst.id)[:2])
+        return inst
 
     @classmethod
     def reduce_row(cls, inst, row, memo):
@@ -292,9 +291,7 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
             .join(cls.reports, isouter=True)
             .where(*filters)
             .order_by(cls.id))
-        if lazy:
-            yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
-            stmt = stmt.execution_options(yield_per=yield_per)
+        stmt = _lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -320,37 +317,42 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
                 change = True
         return change
 
-def migrate() -> None:
-    import alembic.command
-    from alembic.config import Config
-    config = Config(settings.ALEMBIC_INI)
-    with engine.begin() as connection:
-        config.attributes['connection'] = connection
-        alembic.command.upgrade(config, 'head')
-    with SessionLocal() as session:
-        exists = bool(
-            session
-            .execute(select(Naics.id).limit(1))
-            .scalar_one_or_none())
-    if not exists:
-        load_naics()
+def _lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Select[RT]:
+    if lazy:
+        joinfunc = selectinload
+        yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
+        stmt = stmt.execution_options(yield_per=yield_per)
+    else:
+        joinfunc = joinedload
+    if joins:
+        for column in joins:
+            stmt = stmt.options(joinfunc(column))
+    return stmt
 
-def load_naics() -> None:
-    logger.info(f'Loading NAICS')
-    import requests
-    rep = requests.get(settings.NAICS_DOWNLOAD)
-    rep.raise_for_status()
-    records = (
-        dict(
-            id=entry['code'],
-            code=entry['code_raw'],
-            title=entry['title'])
-        for entry in rep.json())
+def load_naics(if_not_exists: bool = False) -> None:
     with SessionLocal() as session:
+        if if_not_exists:
+            exists = bool(
+                session
+                .execute(select(Naics.id).limit(1))
+                .scalar_one_or_none())
+            if exists:
+                logger.info(f'NAICS already loaded')
+                return
+        logger.info(f'Loading NAICS')
+        import requests
+        rep = requests.get(settings.NAICS_DOWNLOAD)
+        rep.raise_for_status()
+        records = (
+            dict(
+                id=entry['code'],
+                code=entry['code_raw'],
+                title=entry['title'])
+            for entry in rep.json())
         session.add_all(Naics(**record) for record in records)
         session.commit()
 
-actions = dict(migrate=migrate, naics=load_naics)
+actions = dict(naics=load_naics)
 
 class Command(utils.BaseCommand):
 

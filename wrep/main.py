@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
 
@@ -17,12 +19,23 @@ from .routers import api, dt, feed
 logger = utils.get_logger('main')
 templates = Jinja2Templates(env=utils.jinja_env())
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.DB_AUTO_MIGRATE:
+        logger.info(f'Running auto migrate')
+        from .migrations.migrate import migrate
+        migrate()
+    utils.build_css()
+    app.mount('/static/scss', StaticFiles(directory=settings.CSS_BUILD_DIR))
+    app.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name='static')
+    yield
+
 app = FastAPI(
+    lifespan=lifespan,
     title='warnreports API',
     docs_url='/api/docs/swagger',
     redoc_url='/api/docs/redoc')
-static = StaticFiles(directory=settings.STATIC_DIR)
-app.mount('/static', static, name='static')
 
 router = APIRouter()
 
@@ -41,15 +54,28 @@ async def api_home(req: Request) -> HTMLResponse:
     return templates.TemplateResponse(req, 'api.jinja')
 
 @router.get('/api/docs')
-async def api_home(req: Request) -> HTMLResponse:
+async def api_docs(req: Request) -> HTMLResponse:
     return templates.TemplateResponse(req, 'docs/rapidoc.jinja')
 
 @router.get('/about')
 async def about(req: Request) -> HTMLResponse:
     stats = await search.search_stats()
     states = await search.search(StateDetail)
-    context = dict(stats=stats, states=states)
+    naics = await search.search(NaicsDetail, dict(reports_count_min=1))
+    naics = rollup_naics(naics)
+    context = dict(stats=stats, states=states, naics=naics)
     return templates.TemplateResponse(req, 'about.jinja', context)
+
+def rollup_naics(naics: list[NaicsDetail]) -> list[NaicsDetail]:
+    counts = defaultdict(int)
+    roots: dict[int, NaicsDetail] = {}
+    for naic in naics:
+        counts[naic.root] += naic.reports_count
+        if naic.root == naic.id:
+            roots[naic.id] = naic
+    for root, naic in roots.items():
+        naic.reports_count = counts[root]
+    return list(roots.values())
 
 @router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
@@ -81,10 +107,6 @@ app.include_router(feed.router, prefix='/feed', include_in_schema=False)
 app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 
 def cmd(*args, **kw):
-    if settings.DB_AUTO_MIGRATE:
-        logger.info(f'Running auto migrate')
-        from .backends import orm
-        orm.migrate()
     logger.info(f'Starting uvicorn')
     return uvicorn.main.callback('wrep.main:app', *args, **kw)
 

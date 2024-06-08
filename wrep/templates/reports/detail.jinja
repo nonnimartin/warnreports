@@ -53,12 +53,12 @@
         <h3>Artifacts</h3>
         <table>
             <tbody>
-            {%- for artifact in report.artifacts %}
+                {%- for artifact in report.artifacts %}
                 <tr>
                     <td><a href="/v/{{ artifact.id }}" target="_blank">{{ artifact.name }}</a></td>
                     <td><a href="/d/{{ artifact.id }}" target="_blank">download</a></td>
                 </tr>
-            {%- endfor %}
+                {%- endfor %}
             </tbody>
         </table>
     </div>
@@ -68,12 +68,12 @@
         <h3>NAICS</h3>
         <table>
             <tbody>
-            {%- for naics in report.naics %}
+                {%- for naics in report.naics %}
                 <tr>
                     <td>{{ naics.id }}</td>
                     <td>{{ naics.title }}</td>
                 </tr>
-            {%- endfor %}
+                {%- endfor %}
             </tbody>
         </table>
     </div>

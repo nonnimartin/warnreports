@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.operations import IndexModel
 
 from . import settings, utils
-from .backends import orm
+from . import orm
 from .models import *
 
 __all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
@@ -211,6 +211,7 @@ collections: dict[str, CollectionDefn] = dict(
         {'id': 1},
         {'code': 1},
         {'title': 1},
+        {'root': 1},
         {'companies_count': 1},
         {'reports_count': 1},
         {'reports_count': -1},

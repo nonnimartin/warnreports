@@ -20,10 +20,12 @@ Pgadmin is available at http://127.0.0.1:8082/ (blank password)
 Example commands:
 
 ```sh
-# Create schema
-docker compose exec app wrep models migrate
-
 # Run pipeline
 docker compose exec app wrep pipeline all
-```
 
+# Run migrations
+docker compose exec app wrep migrations.migrate
+
+# Generate migration
+docker compose exec app wrep migrations.auto
+```

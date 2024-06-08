@@ -1,31 +1,16 @@
 {%- extends 'base.jinja' %}
 {%- block content %}
 <h2>Collection Stats</h2>
-<table class="table table-striped">
-    <thead>
-        <tr>
-            <th>Name</th>
-            <th>Records</th>
-            <th>Size</th>
-        </tr>
-    </thead>
-    <tbody>
-        {%- for name, stats in stats.items() %}
-        <tr>
-            <td>{{ name }}</td>
-            <td>{{ '{:,}'.format(stats.count) }}</td>
-            <td>{{ '{:,}'.format(stats.size) }}</td>
-        </tr>
-        {%- endfor %}
-    </tbody>
-</table>
+{%- include 'stats/collections.jinja' %}
 <h2>State Stats</h2>
-{%- include 'states/table.jinja' %}
-{%- endblock %}
+{%- include 'stats/states.jinja' %}
+<h2>NAICS Stats</h2>
+{%- include 'stats/naics.jinja' %}
+{%- endblock content %}
 {%- block scripts %}
 <script>
 $(() => {
-    $('#states_table').DataTable({
+    $('table').DataTable({
         paging: false,
         filter: false,
         layout: {
@@ -34,4 +19,4 @@ $(() => {
     })
 });
 </script>
-{%- endblock %}
+{%- endblock scripts %}

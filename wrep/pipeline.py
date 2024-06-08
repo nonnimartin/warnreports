@@ -10,9 +10,9 @@ from itertools import batched
 from typing import Any, Iterable
 
 from . import settings, utils
-from .backends import orm
+from . import orm
 from .backends.etl import *
-from .backends.orm import *
+from .orm import *
 from .models import *
 from .ref import normls
 from .scrapers import scrapers
