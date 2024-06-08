@@ -17,10 +17,10 @@ from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
 
-from .. import settings, utils
-from ..models import (DM, ArtifactData, ArtifactDetail, CompanyDetail,
+from . import settings, utils
+from .models import (DM, ArtifactData, ArtifactDetail, CompanyDetail,
                       NaicsData, NaicsDetail, ReportData, StateDetail)
-from ..ref import normls
+from .ref import normls
 
 __all__ = [
     'Artifact',
@@ -31,7 +31,7 @@ __all__ = [
     'StateStat']
 
 RT = TypeVar('RT')
-logger = utils.get_logger('backends.orm')
+logger = utils.get_logger('orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
 DEFAULT_YIELD_PER = 1000
@@ -39,19 +39,6 @@ DEFAULT_YIELD_PER = 1000
 class Base(DeclarativeBase, Generic[DM, RT]):
 
     data_model: type[DM]
-
-    @classmethod
-    def map_reduce_exec(cls, session: Session, *filters, lazy: bool|int = True) -> Iterator[DM]:
-        it = session.execute(cls.reduce_select(*filters, lazy=lazy))
-        if not lazy:
-            it = it.unique()
-        return cls.map_reduce(it)
-
-    @classmethod
-    def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
-        stmt = select(cls).where(*filters)
-        stmt = _lazify(stmt, lazy)
-        return stmt
 
     @classmethod
     def map_reduce(cls, it: Iterable[RT]) -> Iterator[DM]:
@@ -69,8 +56,21 @@ class Base(DeclarativeBase, Generic[DM, RT]):
             yield inst
 
     @classmethod
+    def map_reduce_exec(cls, session: Session, *filters, lazy: bool|int = True) -> Iterator[DM]:
+        it = session.execute(cls.reduce_select(*filters, lazy=lazy))
+        if not lazy:
+            it = it.unique()
+        return cls.map_reduce(it)
+
+    @classmethod
+    def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
+        stmt = select(cls).where(*filters)
+        stmt = _lazify(stmt, lazy)
+        return stmt
+
+    @classmethod
     def reduce_init(cls, row: RT, memo: dict[str, set]) -> DM:
-        'Create a DataModel instance from a result row'
+        'Create a new DataModel instance from the first result row'
         return cls.data_model.model_validate(row[0])
 
     @classmethod
@@ -329,37 +329,30 @@ def _lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Se
             stmt = stmt.options(joinfunc(column))
     return stmt
 
-def migrate() -> None:
-    import alembic.command
-    from alembic.config import Config
-    config = Config(settings.ALEMBIC_INI)
-    with engine.begin() as connection:
-        config.attributes['connection'] = connection
-        alembic.command.upgrade(config, 'head')
+def load_naics(if_not_exists: bool = False) -> None:
     with SessionLocal() as session:
-        exists = bool(
-            session
-            .execute(select(Naics.id).limit(1))
-            .scalar_one_or_none())
-    if not exists:
-        load_naics()
-
-def load_naics() -> None:
-    logger.info(f'Loading NAICS')
-    import requests
-    rep = requests.get(settings.NAICS_DOWNLOAD)
-    rep.raise_for_status()
-    records = (
-        dict(
-            id=entry['code'],
-            code=entry['code_raw'],
-            title=entry['title'])
-        for entry in rep.json())
-    with SessionLocal() as session:
+        if if_not_exists:
+            exists = bool(
+                session
+                .execute(select(Naics.id).limit(1))
+                .scalar_one_or_none())
+            if exists:
+                logger.info(f'NAICS already loaded')
+                return
+        logger.info(f'Loading NAICS')
+        import requests
+        rep = requests.get(settings.NAICS_DOWNLOAD)
+        rep.raise_for_status()
+        records = (
+            dict(
+                id=entry['code'],
+                code=entry['code_raw'],
+                title=entry['title'])
+            for entry in rep.json())
         session.add_all(Naics(**record) for record in records)
         session.commit()
 
-actions = dict(migrate=migrate, naics=load_naics)
+actions = dict(naics=load_naics)
 
 class Command(utils.BaseCommand):
 

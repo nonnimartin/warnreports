@@ -233,17 +233,3 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
     result_model: ClassVar = ArtifactDetail
     order_fields: ClassVar = {'name'}
     default_ordering: ClassVar = [('name', 1)]
-
-
-class Command(utils.BaseCommand):
-
-    @classmethod
-    def add_arguments(cls, parser) -> None:
-        parser.add_argument('action', choices=['migrate', 'naics'])
-
-    def run(self):
-        from .backends.orm import actions
-        actions[self.opts.action]()
-
-if __name__ == '__main__':
-    Command.main()

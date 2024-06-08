@@ -24,8 +24,8 @@ templates = Jinja2Templates(env=utils.jinja_env())
 async def lifespan(app: FastAPI):
     if settings.DB_AUTO_MIGRATE:
         logger.info(f'Running auto migrate')
-        from .backends import orm
-        orm.migrate()
+        from .migrations.migrate import migrate
+        migrate()
     utils.build_css()
     app.mount('/static/scss', StaticFiles(directory=settings.CSS_BUILD_DIR))
     app.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name='static')
@@ -66,6 +66,17 @@ async def about(req: Request) -> HTMLResponse:
     context = dict(stats=stats, states=states, naics=naics)
     return templates.TemplateResponse(req, 'about.jinja', context)
 
+def rollup_naics(naics: list[NaicsDetail]) -> list[NaicsDetail]:
+    counts = defaultdict(int)
+    roots: dict[int, NaicsDetail] = {}
+    for naic in naics:
+        counts[naic.root] += naic.reports_count
+        if naic.root == naic.id:
+            roots[naic.id] = naic
+    for root, naic in roots.items():
+        naic.reports_count = counts[root]
+    return list(roots.values())
+
 @router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
     report = await search.retrieve404(ReportData, id=id)
@@ -98,17 +109,6 @@ app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 def cmd(*args, **kw):
     logger.info(f'Starting uvicorn')
     return uvicorn.main.callback('wrep.main:app', *args, **kw)
-
-def rollup_naics(naics: list[NaicsDetail]) -> list[NaicsDetail]:
-    counts = defaultdict(int)
-    roots: dict[int, NaicsDetail] = {}
-    for naic in naics:
-        counts[naic.root] += naic.reports_count
-        if naic.root == naic.id:
-            roots[naic.id] = naic
-    for root, naic in roots.items():
-        naic.reports_count = counts[root]
-    return list(roots.values())
 
 main = click.Command(
     name='main',
