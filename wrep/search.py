@@ -178,7 +178,7 @@ mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
 
 class CollectionDefn:
 
-    def __init__(self, model: type[DataModel], orm_model: type[orm.Base], indexes: Iterable[dict]) -> None:
+    def __init__(self, model: type[DataModel], orm_model: type[orm.MapReduceBase], indexes: Iterable[dict]) -> None:
         self.model = model
         self.indexes = list(map(IndexModel, indexes))
         self.orm_model = orm_model

@@ -5,7 +5,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Generic, Iterable, Iterator, TypeVar
+from typing import ClassVar, Generic, Iterable, Iterator, TypeVar
 
 from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
@@ -19,7 +19,7 @@ from sqlalchemy.sql import func
 
 from . import settings, utils
 from .models import (DM, ArtifactData, ArtifactDetail, CompanyDetail,
-                      NaicsData, NaicsDetail, ReportData, StateDetail)
+                     NaicsData, NaicsDetail, ReportData, StateDetail)
 from .ref import normls
 
 __all__ = [
@@ -31,14 +31,27 @@ __all__ = [
     'StateStat']
 
 RT = TypeVar('RT')
+type ReportRowType = tuple[Report, Report, Naics|None, Artifact|None]
+type StateStatRowType = tuple[StateStat]
+type CompanyRowType = tuple[Company, Report, Naics|None]
+type NaicsRowType = tuple[Naics, Report|None, Company|None]
+type ArtifactRowType = tuple[Artifact, Report|None]
+DEFAULT_YIELD_PER = 1000
 logger = utils.get_logger('orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
-DEFAULT_YIELD_PER = 1000
 
-class Base(DeclarativeBase, Generic[DM, RT]):
+class Base(DeclarativeBase):
 
-    data_model: type[DM]
+    def __init_subclass__(cls, **kw) -> None:
+        if not cls.__dict__.get('__abstract__'):
+            cls.__tablename__ = cls.__name__.lower()
+            cls.__abstract__ = False
+        super().__init_subclass__(**kw)
+
+class MapReduceBase(Base, Generic[DM, RT]):
+    __abstract__ = True
+    data_model: ClassVar[type[DM]]
 
     @classmethod
     def map_reduce(cls, it: Iterable[RT]) -> Iterator[DM]:
@@ -89,7 +102,6 @@ class Base(DeclarativeBase, Generic[DM, RT]):
         return inst.id == row[0].id
 
     def __init_subclass__(cls, **kw) -> None:
-        cls.__tablename__ = cls.__name__.lower()
         cls.data_model = cls.__orig_bases__[0].__args__[0]
         super().__init_subclass__(**kw)
 
@@ -107,7 +119,7 @@ ArtifactReport = Table(
 
 nowopts = dict(server_default=func.now(), default=utils.now)
 
-class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|None']]):
+class Report(MapReduceBase[ReportData, ReportRowType]):
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm: Mapped[str] = mapped_column(String(512), index=True)
@@ -156,7 +168,7 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
     def reduce_finish(cls, inst, memo):
         inst.naics.sort(key=lambda x: (x.code, x.id))
 
-class StateStat(Base[StateDetail, tuple['StateStat']]):
+class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
     id: Mapped[str] = mapped_column(String(2), primary_key=True)
     last_reported: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     reports_count: Mapped[int] = mapped_column(Integer(), default=0)
@@ -170,7 +182,7 @@ class StateStat(Base[StateDetail, tuple['StateStat']]):
         if latest:
             self.last_reported = latest
 
-class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
+class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
     NS = uuid.uuid5(settings.NAMESPACE, 'Company')
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(512), unique=True)
@@ -228,7 +240,7 @@ class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
         inst.naics.sort(key=lambda x: (x.code, x.id))
         inst.states.sort()
 
-class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
+class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
     title: Mapped[str] = mapped_column(String(255), index=True)
@@ -269,7 +281,7 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
             inst.companies_count += 1
             memo['companies'].add(company.name_norm)
 
-class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
+class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     path: Mapped[str] = mapped_column(String(2083), unique=True)
     url: Mapped[str] = mapped_column(String(2083))

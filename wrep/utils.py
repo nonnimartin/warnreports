@@ -71,15 +71,7 @@ def parse_int(value: str) -> int|None:
         pass
 
 def get_mimetype(value: Any) -> str:
-    res = mimetypes.guess_type(value)[0]
-    if res:
-        return res
-    if isinstance(value, Path):
-        value = value.name
-    if isinstance(value, str):
-        if value.endswith('.xlsx'):
-            return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    return 'application/octet-stream'
+    return mimetypes.guess_type(value)[0] or 'application/octet-stream'
 
 def render(template: str, *args, **kw) -> str:
     return get_template(template).render(*args, **kw)
