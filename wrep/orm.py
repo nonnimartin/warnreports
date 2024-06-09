@@ -27,6 +27,7 @@ __all__ = [
     'Company',
     'Naics',
     'Report',
+    'ReportMod',
     'SessionLocal',
     'StateStat']
 
@@ -328,6 +329,11 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
                 setattr(self, field, value)
                 change = True
         return change
+
+class ReportMod(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
+    ns: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
+    first_scraped: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 def _lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Select[RT]:
     if lazy:

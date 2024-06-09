@@ -102,6 +102,7 @@ class MongoETBase(StageBackend):
     collection_name: str
     ordering = []
     clean_keys = []
+    stat_clean_keys = ['scrape_time']
 
     @property
     def collection(self):
@@ -117,13 +118,19 @@ class MongoETBase(StageBackend):
 
     async def stat(self):
         async with self.reader() as reader:
-            return await docs_stat(reader)
+            it = (self.clean_stat_doc(doc) async for doc in reader)
+            return await docs_stat(it)
 
     def get_filter(self) -> dict[str, Any]:
         return {}
 
     def clean_doc(self, doc: dict) -> dict:
         for key in self.clean_keys:
+            doc.pop(key, None)
+        return doc
+
+    def clean_stat_doc(self, doc: dict) -> dict:
+        for key in self.stat_clean_keys:
             doc.pop(key, None)
         return doc
 

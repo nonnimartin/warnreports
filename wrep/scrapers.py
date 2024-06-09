@@ -650,22 +650,25 @@ class MO(Scraper, state='MO'):
         return list(map(Path, files))
 
 class NJ(Scraper, state='NJ'):
-    index_url = "https://www.nj.gov/labor/assets/PDFs/WARN/WARN_Notice_Archive.xlsx"
+    index_url = 'https://www.nj.gov/labor/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
 
     async def scrape(self):
         await self.cache_download('latest.xlsx', self.index_url)
 
     async def stat(self):
-        return hashstat(self.cache.glob('latest.xlsx'))
+        return hashstat([self.cache.topath('latest.xlsx')])
 
     async def clean(self):
-        for file in self.cache.glob('*.xlsx', '*.csv'):
-            file.unlink()
+        self.cache.delete('latest.xlsx')
 
     @contextmanager
     def extract(self):
-        wb = openpyxl.load_workbook(self.cache.topath('latest.xlsx'), read_only=True)
-        yield chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
+        file = self.cache.topath('latest.xlsx')
+        scrape_time = datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
+        extra = dict(scrape_time=scrape_time.isoformat())
+        wb = openpyxl.load_workbook(file, read_only=True)
+        it = chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
+        yield (row|extra for row in it)
 
     def extract_xlsx_worksheet(self, ws: openpyxl.worksheet.worksheet.Worksheet):
         extra = dict(worksheet_name=ws.title)
