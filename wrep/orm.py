@@ -79,7 +79,7 @@ class MapReduceBase(Base, Generic[DM, RT]):
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
         stmt = select(cls).where(*filters)
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -144,7 +144,7 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
             .join(cls.artifacts, isouter=True)
             .where(*filters)
             .order_by(cls.id, Naics.code, Artifact.id))
-        stmt = _lazify(stmt, lazy, (Report2.naics, cls.artifacts))
+        stmt = lazify(stmt, lazy, (Report2.naics, cls.artifacts))
         return stmt
 
     @classmethod
@@ -198,7 +198,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
             .join(Report.naics, isouter=True)
             .where(*filters)
             .order_by(cls.name_norm, cls.name))
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -258,7 +258,7 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
                 isouter=True)
             .where(*filters)
             .order_by(cls.id, Report.company_norm, Company.name_norm))
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -304,7 +304,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
             .join(cls.reports, isouter=True)
             .where(*filters)
             .order_by(cls.id))
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -335,7 +335,7 @@ class ReportMod(Base):
     ns: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
     first_scraped: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-def _lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Select[RT]:
+def lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Select[RT]:
     if lazy:
         joinfunc = selectinload
         yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
@@ -370,7 +370,22 @@ def load_naics(if_not_exists: bool = False) -> None:
         session.add_all(Naics(**record) for record in records)
         session.commit()
 
-actions = dict(naics=load_naics)
+def dump_repmod():
+    import csv
+    file = settings.BUILD_DIR/'dump'/'reportmod.csv'
+    logger.info(f'Writing {file}')
+    file.parent.mkdir(parents=True, exist_ok=True)
+    stmt = select(ReportMod).order_by(ReportMod.id)
+    fields = [col.name for col in ReportMod.__table__.columns]
+    with SessionLocal() as session:
+        it = session.scalars(lazify(stmt, True))
+        with file.open('w') as f:
+            writer = csv.DictWriter(f, fields, extrasaction='ignore')
+            writer.writeheader()
+            for repmod in it:
+                writer.writerow(repmod.__dict__)
+
+actions = dict(naics=load_naics, repmod=dump_repmod)
 
 class Command(utils.BaseCommand):
 
