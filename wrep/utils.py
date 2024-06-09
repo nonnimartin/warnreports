@@ -5,7 +5,7 @@ import enum
 import logging
 import mimetypes
 from argparse import ArgumentParser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
@@ -72,6 +72,9 @@ def parse_int(value: str) -> int|None:
 
 def get_mimetype(value: Any) -> str:
     return mimetypes.guess_type(value)[0] or 'application/octet-stream'
+
+def file_mtime(file: Path) -> datetime:
+    return datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
 
 def render(template: str, *args, **kw) -> str:
     return get_template(template).render(*args, **kw)

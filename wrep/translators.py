@@ -1166,12 +1166,12 @@ class UT(Translator, state='UT'):
     default_url = 'https://jobs.utah.gov/employer/business/warnnotices.html'
     headermap = {
         'Company Name': 'company',
-        'Date of Notice': 'reported',
+        'Date of Notice': ['reported', 'starting'],
         'Location': 'location',
         'Affected Workers': 'employees',
-        'Layoff Type': 'action',
-        'Layoff Date': 'starting'
+        'scrape_time': 'scrape_time',
     }
+    values_hash_exclude = ['scrape_time']
     rewrites = dict(
         company=[
             (_r(r'â'), ''),

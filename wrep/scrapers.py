@@ -650,7 +650,8 @@ class MO(Scraper, state='MO'):
         return list(map(Path, files))
 
 class NJ(Scraper, state='NJ'):
-    index_url = 'https://www.nj.gov/labor/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
+    base_url = 'https://www.nj.gov/labor'
+    index_url = '/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
 
     async def scrape(self):
         await self.cache_download('latest.xlsx', self.index_url)
@@ -664,8 +665,7 @@ class NJ(Scraper, state='NJ'):
     @contextmanager
     def extract(self):
         file = self.cache.topath('latest.xlsx')
-        scrape_time = datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
-        extra = dict(scrape_time=scrape_time.isoformat())
+        extra = dict(scrape_time=utils.file_mtime(file).isoformat())
         wb = openpyxl.load_workbook(file, read_only=True)
         it = chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
         yield (row|extra for row in it)
@@ -1155,8 +1155,11 @@ class UT(Scraper, state='UT'):
 
     @contextmanager
     def extract(self):
-        it = bs(self.cache.read('latest.html')).find_all('table')
-        yield chain.from_iterable(map(self.read_table, it))
+        file = self.cache.topath('latest.html')
+        extra = dict(scrape_time=utils.file_mtime(file).isoformat())
+        tables = bs(file.read_text()).find_all('table')
+        it = chain.from_iterable(map(self.read_table, tables))
+        yield (row|extra for row in it)
 
     def read_table(self, table: Soup) -> Iterator[dict[str, str]]:
         it = (
