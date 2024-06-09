@@ -231,8 +231,15 @@ class MongoSearchIndex(SearchIndexBackend):
 async def update_collection(coll: AsyncIOMotorCollection, source: Iterable[DM], get_filter: Callable[[DM], dict[str, Any]]) -> tuple[int, int, int]:
     count, created, updated = 0, 0, 0
     for inst in source:
+        doc = inst.as_doc()
         filt = get_filter(inst)
-        res = await coll.replace_one(filt, inst.as_doc(), True)
+        if '_id' not in filt:
+            old = await coll.find_one(filt)
+            if old:
+                idfilt = dict(_id=old['_id'])
+                filt |= idfilt
+                doc = idfilt|doc
+        res = await coll.replace_one(filt, doc, True)
         if res.upserted_id:
             created += 1
         elif res.modified_count:
