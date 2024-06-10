@@ -5,7 +5,7 @@ import functools
 import operator
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import batched
 from typing import Any, Iterable
 
@@ -231,14 +231,12 @@ class Pipeline:
             save = save.Update
         if save is not save.Nochange:
             self.session.add(report)
-        if save is save.Nochange and company_save is not save.Nochange:
-            save = save.Update
         naics_save = self.save_naics(report, naics, industry)
-        if save is save.Nochange:
-            save = naics_save
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
-            save = artifacts_save
+            values = (company_save, naics_save, artifacts_save)
+            if any(value is not save.Nochange for value in values):
+                save = save.Update
         return save
 
     def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
@@ -337,9 +335,10 @@ class Pipeline:
             .where(Report.state == self.state))
 
     def from_json(self, field: str, value: Any) -> Any:
-        if field in self.json_types:
-            if isinstance(value, str):
-                value = self.json_types[field](value)
+        if isinstance(value, str) and field in self.json_types:
+            value = self.json_types[field](value)
+        if isinstance(value, datetime) and not value.tzinfo:
+            value = value.replace(tzinfo=timezone.utc)
         return value
 
 class PipelineRunner:

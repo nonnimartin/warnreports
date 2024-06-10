@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Generic, Iterable, Iterator, TypeVar
+from typing import Any, ClassVar, Generic, Iterable, Iterator, TypeVar
 
 from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
@@ -19,7 +21,7 @@ from sqlalchemy.sql import func
 
 from . import settings, utils
 from .models import (DM, ArtifactData, ArtifactDetail, CompanyDetail,
-                      NaicsData, NaicsDetail, ReportData, StateDetail)
+                     NaicsData, NaicsDetail, ReportData, StateDetail)
 from .ref import normls
 
 __all__ = [
@@ -27,18 +29,32 @@ __all__ = [
     'Company',
     'Naics',
     'Report',
+    'ReportMod',
     'SessionLocal',
     'StateStat']
 
 RT = TypeVar('RT')
+type ReportRowType = tuple[Report, Report, Naics|None, Artifact|None]
+type StateStatRowType = tuple[StateStat]
+type CompanyRowType = tuple[Company, Report, Naics|None]
+type NaicsRowType = tuple[Naics, Report|None, Company|None]
+type ArtifactRowType = tuple[Artifact, Report|None]
+DEFAULT_YIELD_PER = 1000
 logger = utils.get_logger('orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
-DEFAULT_YIELD_PER = 1000
 
-class Base(DeclarativeBase, Generic[DM, RT]):
+class Base(DeclarativeBase):
 
-    data_model: type[DM]
+    def __init_subclass__(cls, **kw) -> None:
+        if not cls.__dict__.get('__abstract__'):
+            cls.__tablename__ = cls.__name__.lower()
+            cls.__abstract__ = False
+        super().__init_subclass__(**kw)
+
+class MapReduceBase(Base, Generic[DM, RT]):
+    __abstract__ = True
+    data_model: ClassVar[type[DM]]
 
     @classmethod
     def map_reduce(cls, it: Iterable[RT]) -> Iterator[DM]:
@@ -65,7 +81,7 @@ class Base(DeclarativeBase, Generic[DM, RT]):
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
         stmt = select(cls).where(*filters)
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -89,7 +105,6 @@ class Base(DeclarativeBase, Generic[DM, RT]):
         return inst.id == row[0].id
 
     def __init_subclass__(cls, **kw) -> None:
-        cls.__tablename__ = cls.__name__.lower()
         cls.data_model = cls.__orig_bases__[0].__args__[0]
         super().__init_subclass__(**kw)
 
@@ -107,7 +122,7 @@ ArtifactReport = Table(
 
 nowopts = dict(server_default=func.now(), default=utils.now)
 
-class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|None']]):
+class Report(MapReduceBase[ReportData, ReportRowType]):
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm: Mapped[str] = mapped_column(String(512), index=True)
@@ -124,14 +139,15 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True):
+        Report2 = aliased(cls)
         stmt = (
-            select(cls, Report2 := aliased(cls), Naics, Artifact)
+            select(cls, Report2, Naics, Artifact)
             .join(Report2, cls.company_norm == Report2.company_norm)
             .join(Report2.naics, isouter=True)
             .join(cls.artifacts, isouter=True)
             .where(*filters)
             .order_by(cls.id, Naics.code, Artifact.id))
-        stmt = _lazify(stmt, lazy, (Report2.naics, cls.artifacts))
+        stmt = lazify(stmt, lazy, (Report2.naics, cls.artifacts))
         return stmt
 
     @classmethod
@@ -156,7 +172,7 @@ class Report(Base[ReportData, tuple['Report', 'Report', 'Naics|None', 'Artifact|
     def reduce_finish(cls, inst, memo):
         inst.naics.sort(key=lambda x: (x.code, x.id))
 
-class StateStat(Base[StateDetail, tuple['StateStat']]):
+class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
     id: Mapped[str] = mapped_column(String(2), primary_key=True)
     last_reported: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     reports_count: Mapped[int] = mapped_column(Integer(), default=0)
@@ -170,7 +186,7 @@ class StateStat(Base[StateDetail, tuple['StateStat']]):
         if latest:
             self.last_reported = latest
 
-class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
+class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
     NS = uuid.uuid5(settings.NAMESPACE, 'Company')
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(512), unique=True)
@@ -185,7 +201,7 @@ class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
             .join(Report.naics, isouter=True)
             .where(*filters)
             .order_by(cls.name_norm, cls.name))
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -228,7 +244,7 @@ class Company(Base[CompanyDetail, tuple['Company', Report, 'Naics|None']]):
         inst.naics.sort(key=lambda x: (x.code, x.id))
         inst.states.sort()
 
-class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
+class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
     title: Mapped[str] = mapped_column(String(255), index=True)
@@ -245,7 +261,7 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
                 isouter=True)
             .where(*filters)
             .order_by(cls.id, Report.company_norm, Company.name_norm))
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -269,7 +285,7 @@ class Naics(Base[NaicsDetail, tuple['Naics', Report|None, Company|None]]):
             inst.companies_count += 1
             memo['companies'].add(company.name_norm)
 
-class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
+class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     path: Mapped[str] = mapped_column(String(2083), unique=True)
     url: Mapped[str] = mapped_column(String(2083))
@@ -291,7 +307,7 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
             .join(cls.reports, isouter=True)
             .where(*filters)
             .order_by(cls.id))
-        stmt = _lazify(stmt, lazy)
+        stmt = lazify(stmt, lazy)
         return stmt
 
     @classmethod
@@ -317,7 +333,12 @@ class Artifact(Base[ArtifactDetail, tuple['Artifact', Report|None]]):
                 change = True
         return change
 
-def _lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Select[RT]:
+class ReportMod(Base):
+    id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
+    ns: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
+    first_scraped: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+def lazify(stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None) -> Select[RT]:
     if lazy:
         joinfunc = selectinload
         yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
@@ -329,39 +350,70 @@ def _lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Se
             stmt = stmt.options(joinfunc(column))
     return stmt
 
-def load_naics(if_not_exists: bool = False) -> None:
+def load_naics() -> None:
     with SessionLocal() as session:
-        if if_not_exists:
-            exists = bool(
-                session
-                .execute(select(Naics.id).limit(1))
-                .scalar_one_or_none())
-            if exists:
-                logger.info(f'NAICS already loaded')
-                return
+        exists = bool(
+            session
+            .execute(select(Naics.id).limit(1))
+            .scalar_one_or_none())
+        if exists:
+            logger.info(f'NAICS already loaded')
+            return
         logger.info(f'Loading NAICS')
         import requests
         rep = requests.get(settings.NAICS_DOWNLOAD)
         rep.raise_for_status()
-        records = (
-            dict(
+        session.add_all(
+            Naics(
                 id=entry['code'],
                 code=entry['code_raw'],
                 title=entry['title'])
             for entry in rep.json())
-        session.add_all(Naics(**record) for record in records)
         session.commit()
 
-actions = dict(naics=load_naics)
+def dump_csv(table: Table, f: io.TextIOWrapper, session: Session) -> None:
+    stmt = table.select().order_by(*table.primary_key.columns)
+    writer = csv.writer(f)
+    writer.writerow(c.name for c in table.columns)
+    writer.writerows(session.execute(lazify(stmt)).tuples())
+
+def dump_update(table: Table, file: Path|None = None) -> None:
+    if not file:
+        file = settings.BUILD_DIR/'dump'/f'{table.name}.csv'
+    if file.exists():
+        with file.open('rb') as f:
+            hash_old = hashlib.file_digest(f, 'sha1')
+    else:
+        hash_old = None
+        file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(f'{file}.tmp')
+    logger.info(f'Dumping table {table.name}')
+    with SessionLocal() as session:
+        with tmp.open('w') as f:
+            dump_csv(table, f, session)
+    with tmp.open('rb') as f:
+        hash_new = hashlib.file_digest(f, 'sha1')
+    if hash_old and hash_old.digest() == hash_new.digest():
+        logger.info(f'No change')
+        tmp.unlink()
+    else:
+        logger.info(f'Writing {file}')
+        tmp.rename(file)
 
 class Command(utils.BaseCommand):
 
     @classmethod
-    def add_arguments(cls, parser) -> None:
-        parser.add_argument('action', choices=actions)
+    def add_subparsers(cls, subparsers) -> None:
+        subparser = subparsers.add_parser('dump')
+        subparser.add_argument('table', type=lambda x: Base.metadata.tables[x.lower()])
+        subparser.add_argument('file', nargs='?', type=Path)
+        subparser = subparsers.add_parser('naics')
 
     def run(self):
-        actions[self.opts.action]()
+        if self.subparser == 'naics':
+            load_naics()
+        elif self.subparser == 'dump':
+            dump_update(**vars(self.opts))
 
 if __name__ == '__main__':
     Command.main()

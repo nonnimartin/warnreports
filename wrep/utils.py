@@ -4,8 +4,8 @@ import asyncio
 import enum
 import logging
 import mimetypes
-from argparse import ArgumentParser
-from datetime import datetime, timedelta
+from argparse import ArgumentParser, _SubParsersAction
+from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
@@ -71,15 +71,10 @@ def parse_int(value: str) -> int|None:
         pass
 
 def get_mimetype(value: Any) -> str:
-    res = mimetypes.guess_type(value)[0]
-    if res:
-        return res
-    if isinstance(value, Path):
-        value = value.name
-    if isinstance(value, str):
-        if value.endswith('.xlsx'):
-            return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    return 'application/octet-stream'
+    return mimetypes.guess_type(value)[0] or 'application/octet-stream'
+
+def file_mtime(file: Path) -> datetime:
+    return datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
 
 def render(template: str, *args, **kw) -> str:
     return get_template(template).render(*args, **kw)
@@ -160,10 +155,16 @@ class BaseCommand:
     def parser(cls) -> ArgumentParser:
         parser = ArgumentParser(description=cls.__doc__)
         cls.add_arguments(parser)
+        subparsers = parser.add_subparsers(dest='_subparser')
+        cls.add_subparsers(subparsers)
         return parser
 
     @classmethod
     def add_arguments(cls, parser: ArgumentParser) -> None:
+        pass
+
+    @classmethod
+    def add_subparsers(cls, subparsers: _SubParsersAction[ArgumentParser]) -> None:
         pass
 
     @classmethod
@@ -176,6 +177,8 @@ class BaseCommand:
 
     def __init__(self, opts):
         self.opts = opts
+        self.subparser: str|None = opts._subparser
+        del opts._subparser
         self.setup(opts)
 
     def setup(self, opts):

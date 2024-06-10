@@ -10,8 +10,9 @@ from typing import Any
 
 from pydantic import HttpUrl
 
-from . import settings, utils
+from . import orm, settings, utils
 from .models import ValidationError
+from .orm import ReportMod
 from .ref.tz import zoneinfos
 
 NAMESPACE = uuid.uuid5(settings.NAMESPACE, 'Report')
@@ -36,6 +37,7 @@ class Translator:
     tz = timezone.utc
     headermap: dict[str, str] = {}
     default_url: str|None = None
+    values_hash_exclude: list[str] = []
     rewrites: dict[str, list[tuple[str|re.Pattern, str]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
@@ -60,8 +62,6 @@ class Translator:
                 if value is not None and value != '':
                     entry[field] = value
         self.finish(entry, row)
-        entry['id'] = self.entry_uuid(entry, row)
-        entry['values_id'] = self.values_hash_uuid(row)
         return entry
 
     def value(self, field: str, value: str) -> Any:
@@ -131,6 +131,9 @@ class Translator:
             artifacts[path] = url
         return artifacts
 
+    def value_scrape_time(self, value: str) -> datetime|None:
+        return utils.parse_date(value)
+
     def sanitize(self, value: str) -> str:
         return value.translate(ASCII_TRANS).strip()
 
@@ -146,6 +149,40 @@ class Translator:
     def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
         if not entry.get('url') and self.default_url:
             entry['url'] = self.default_url
+        values_id = self.values_hash_uuid(row)
+        report_id = entry.get('report_id')
+        if report_id:
+            report_id = uuid.uuid5(self.namespace, report_id)
+        else:
+            report_id = values_id
+        entry.update(id=report_id, values_id=values_id)
+        self._fill_mod(entry)
+
+    def _fill_mod(self, entry: dict[str, Any]) -> None:
+        scrape_time: datetime|None = entry.pop('scrape_time', None)
+        if scrape_time:
+            stmt = orm.select(ReportMod).where(ReportMod.id == entry['id'])
+            with orm.SessionLocal() as session:
+                repmod = session.scalar(stmt)
+                if not repmod:
+                    repmod = ReportMod(id=entry['id'], ns=self.namespace)
+                if not repmod.first_scraped or scrape_time < repmod.first_scraped:
+                    repmod.first_scraped = scrape_time
+                    session.add(repmod)
+                    session.commit()
+                scraped = repmod.first_scraped
+            reported = entry.get('reported')
+            if reported and scraped < reported:
+                reported = scraped.replace(tzinfo=self.tz)
+                offset = reported.utcoffset()
+                if offset:
+                    reported += offset
+                reported = reported.replace(
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0)
+                entry['reported'] = reported
 
     def parse_date(self, value: str) -> datetime|None:
         dt = utils.parse_date(value)
@@ -166,13 +203,11 @@ class Translator:
         it = map(self.parse_date, PAT_SPACES.split(value))
         return list(filter(None, it))
 
-    def entry_uuid(self, entry: dict[str, Any], row: dict[str, str]) -> uuid.UUID:
-        src = entry.get('report_id')
-        if src:
-            return uuid.uuid5(self.namespace, src)
-        return self.values_hash_uuid(row)
-
     def values_hash_uuid(self, row: dict[str, str]) -> uuid.UUID:
+        if self.values_hash_exclude:
+            row = dict(row)
+            for header in self.values_hash_exclude:
+                row.pop(header, None)
         return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
 
     def __init_subclass__(cls, state: str|None = None) -> None:
@@ -833,7 +868,9 @@ class NJ(Translator, state='NJ'):
         'City': 'location',
         'Effective Date': 'starting',
         'Workforce Affected': 'employees',
+        'scrape_time': 'scrape_time',
     }
+    values_hash_exclude = ['scrape_time']
 
     def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
         month: str|None = row.get('Month Posted')
@@ -1129,12 +1166,12 @@ class UT(Translator, state='UT'):
     default_url = 'https://jobs.utah.gov/employer/business/warnnotices.html'
     headermap = {
         'Company Name': 'company',
-        'Date of Notice': 'reported',
+        'Date of Notice': ['reported', 'starting'],
         'Location': 'location',
         'Affected Workers': 'employees',
-        'Layoff Type': 'action',
-        'Layoff Date': 'starting'
+        'scrape_time': 'scrape_time',
     }
+    values_hash_exclude = ['scrape_time']
     rewrites = dict(
         company=[
             (_r(r'â'), ''),

@@ -24,7 +24,7 @@ templates = Jinja2Templates(env=utils.jinja_env())
 async def lifespan(app: FastAPI):
     if settings.DB_AUTO_MIGRATE:
         logger.info(f'Running auto migrate')
-        from .migrations.migrate import migrate
+        from .migrations import migrate
         migrate()
     utils.build_css()
     app.mount('/static/scss', StaticFiles(directory=settings.CSS_BUILD_DIR))
