@@ -351,6 +351,7 @@ def lazify(stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None)
     return stmt
 
 def load_naics() -> None:
+    'Load NAICS data'
     with SessionLocal() as session:
         exists = bool(
             session
@@ -378,6 +379,7 @@ def dump_csv(table: Table, f: io.TextIOWrapper, session: Session) -> None:
     writer.writerows(session.execute(lazify(stmt)).tuples())
 
 def dump_update(table: Table, file: Path|None = None) -> None:
+    'Dump table CSV'
     if not file:
         file = settings.BUILD_DIR/'dump'/f'{table.name}.csv'
     if file.exists():
@@ -400,20 +402,19 @@ def dump_update(table: Table, file: Path|None = None) -> None:
         logger.info(f'Writing {file}')
         tmp.rename(file)
 
-class Command(utils.BaseCommand):
+class NaicsCommand(utils.FuncCommand(load_naics)):
+    pass
+
+class DumpCommand(utils.FuncCommand(dump_update)):
 
     @classmethod
-    def add_subparsers(cls, subparsers) -> None:
-        subparser = subparsers.add_parser('dump')
-        subparser.add_argument('table', type=lambda x: Base.metadata.tables[x.lower()])
-        subparser.add_argument('file', nargs='?', type=Path)
-        subparser = subparsers.add_parser('naics')
+    def add_arguments(cls, parser):
+        parser.add_argument('table', type=lambda x: Base.metadata.tables[x.lower()])
+        parser.add_argument('file', nargs='?', type=Path)
 
-    def run(self):
-        if self.subparser == 'naics':
-            load_naics()
-        elif self.subparser == 'dump':
-            dump_update(**vars(self.opts))
+class Command(utils.BaseCommand):
+    'ORM/SQL commands'
+    commands = dict(dump=DumpCommand, naics=NaicsCommand)
 
 if __name__ == '__main__':
     Command.main()

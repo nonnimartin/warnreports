@@ -4,5 +4,5 @@ cd /code
 if [[ "$#" -eq 0 ]] ; then
   exec python
 else
-  exec python -m wrep.$@
+  exec python -m wrep $@
 fi
