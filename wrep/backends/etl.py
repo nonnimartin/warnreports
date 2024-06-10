@@ -102,7 +102,7 @@ class MongoETBase(StageBackend):
     collection_name: str
     ordering = []
     clean_keys = []
-    stat_clean_keys = ['scrape_time']
+    stat_clean_keys = []
 
     @property
     def collection(self):
@@ -141,6 +141,7 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
     collection_name = 'extractions'
     ordering = ['_i']
     clean_keys = ['_id', '_i', 'state']
+    stat_clean_keys = ['scrape_time']
 
     async def update(self, source):
         await self.clean()

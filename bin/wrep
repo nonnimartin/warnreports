@@ -4,4 +4,4 @@ if [ "$#" -eq 0 ] ; then
   exit 1
 fi
 cd "$(dirname "$0")/.."
-exec python -m wrep.$@
+exec python -m wrep $@

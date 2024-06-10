@@ -11,6 +11,7 @@ from pymongo.operations import IndexModel
 from . import settings, utils
 from . import orm
 from .models import *
+from .utils import BaseCommand, FuncCommand
 
 __all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
 
@@ -227,6 +228,7 @@ collections_map: dict[type[DataModel], str] = {
     defn.data_model: name for name, defn in collections.items()}
 
 async def search_stats(*names: str) -> dict[str, dict[str, int]]:
+    'Get collection stats'
     names = names or collections
     stats = {}
     for name in names:
@@ -235,6 +237,7 @@ async def search_stats(*names: str) -> dict[str, dict[str, int]]:
     return stats
 
 async def search_init(*names: str) -> None:
+    'Init collections'
     names = names or collections
     defns = {name: collections[name] for name in names}
     for name, defn in defns.items():
@@ -242,6 +245,7 @@ async def search_init(*names: str) -> None:
         await mongo.get_collection(name).create_indexes(defn.indexes)
 
 async def search_clean(*names: str) -> None:
+    'Clean collections'
     names = names or collections
     for name in names:
         stat = (await search_stats(name))[name]
@@ -249,6 +253,7 @@ async def search_clean(*names: str) -> None:
         await mongo.get_collection(name).drop()
 
 async def search_build(*names: str) -> None:
+    'Build collections'
     names = names or collections
     defns = {name: collections[name] for name in names}
     with orm.SessionLocal() as session:
@@ -262,24 +267,25 @@ async def search_build(*names: str) -> None:
             stat = (await search_stats(name))[name]
             logger.info(f'Built {name} {stat=}')
 
-actions = dict(
-    stats=search_stats,
-    init=search_init,
-    build=search_build,
-    clean=search_clean)
-
-class Command(utils.BaseCommand):
+class SubCommand(BaseCommand):
 
     @classmethod
-    def add_subparsers(cls, subparsers):
-        for action in actions:
-            subparsers.add_parser(action).add_argument('names', nargs='*')
+    def add_arguments(cls, parser):
+        parser.add_argument('names', nargs='*')
 
     async def run(self):
-        res = await actions[self.subparser](*self.opts.names)
+        res = await self.func(*self.opts.names)
         if res is not None:
             import json
             print(json.dumps(res, indent=2))
+
+class Command(BaseCommand):
+    'Search collection commands'
+    commands = dict(
+        stats=FuncCommand(search_stats, SubCommand),
+        init=FuncCommand(search_init, SubCommand),
+        build=FuncCommand(search_build, SubCommand),
+        clean=FuncCommand(search_clean, SubCommand))
 
 if __name__ == '__main__':
     Command.main()

@@ -4,12 +4,12 @@ import asyncio
 import enum
 import logging
 import mimetypes
-from argparse import ArgumentParser, _SubParsersAction
+from argparse import ArgumentParser
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
-from typing import (Any, AsyncIterable, AsyncIterator, Callable, Iterable,
-                    Iterator, TypeVar)
+from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
+                    Iterable, Iterator, TypeVar)
 from uuid import UUID
 
 import dateutil.parser
@@ -98,6 +98,11 @@ def sync(ret):
         ret = asyncio.run(ret)
     return ret
 
+async def wait(ret):
+    if asyncio.iscoroutine(ret):
+        ret = await ret
+    return ret
+
 from .backends.email import instances as email_backends
 
 
@@ -150,22 +155,39 @@ class StrEnum(str, enum.Enum):
         return self.value
 
 class BaseCommand:
+    prog: ClassVar[str|None] = None
+    commands: ClassVar[dict[str, type[BaseCommand]]] = {}
+    command_metavar: ClassVar[str] = 'command'
+    command: BaseCommand|None = None
 
     @classmethod
     def parser(cls) -> ArgumentParser:
-        parser = ArgumentParser(description=cls.__doc__)
-        cls.add_arguments(parser)
-        subparsers = parser.add_subparsers(dest='_subparser')
-        cls.add_subparsers(subparsers)
+        parser = ArgumentParser()
+        cls.init_parser(parser)
         return parser
+
+    @classmethod
+    def init_parser(cls, parser: ArgumentParser) -> None:
+        parser.description = cls.__doc__
+        parser.prog = cls.prog or parser.prog
+        cls.add_arguments(parser)
+        cls.add_commands(parser)
 
     @classmethod
     def add_arguments(cls, parser: ArgumentParser) -> None:
         pass
 
     @classmethod
-    def add_subparsers(cls, subparsers: _SubParsersAction[ArgumentParser]) -> None:
-        pass
+    def add_commands(cls, parser: ArgumentParser) -> None:
+        if not cls.commands:
+            return
+        subparsers = parser.add_subparsers(
+            dest=cls.command_opt,
+            metavar=cls.command_metavar,
+            help=', '.join(cls.commands),
+            required=True)
+        for name, cmd in cls.commands.items():
+            cmd.init_parser(subparsers.add_parser(name))
 
     @classmethod
     def main(cls, args=None):
@@ -175,14 +197,35 @@ class BaseCommand:
     def parse(cls, args=None):
         return cls.parser().parse_args(args)
 
+    @property
+    def command_name(self) -> str|None:
+        return getattr(self.opts, self.command_opt, None)
+
     def __init__(self, opts):
         self.opts = opts
-        self.subparser: str|None = opts._subparser
-        del opts._subparser
+        if hasattr(opts, self.command_opt):
+            self.command = self.commands[self.command_name](opts)
+            delattr(opts, self.command_opt)
         self.setup(opts)
 
     def setup(self, opts):
         pass
 
     async def run(self):
-        pass
+        if self.command:
+            await wait(self.command.run())
+
+    def __init_subclass__(cls) -> None:
+        cls.command_opt = f'_command_{abs(hash(cls))}'
+
+def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
+    class Base:
+
+        async def run(self):
+            await wait(self.func(**vars(self.opts)))
+
+    class Command(*bases, Base, BaseCommand):
+        __doc__ = f.__doc__
+        func = staticmethod(f)
+
+    return Command
