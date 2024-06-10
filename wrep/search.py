@@ -178,13 +178,13 @@ mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
 
 class CollectionDefn:
 
-    def __init__(self, model: type[DataModel], orm_model: type[orm.MapReduceBase], indexes: Iterable[dict]) -> None:
-        self.model = model
-        self.indexes = list(map(IndexModel, indexes))
+    def __init__(self, orm_model: type[orm.MapReduceBase], indexes: Iterable[dict]) -> None:
         self.orm_model = orm_model
+        self.data_model: type[DataModel] = orm_model.data_model
+        self.indexes = list(map(IndexModel, indexes))
 
 collections: dict[str, CollectionDefn] = dict(
-    reports=CollectionDefn(ReportData, orm.Report, [
+    reports=CollectionDefn(orm.Report, [
         {'company': 'text'},
         {'company_id': 'hashed'},
         {'reported': 1},
@@ -194,7 +194,7 @@ collections: dict[str, CollectionDefn] = dict(
         {'naics.code': 1},
         {'naics.id': 1},
         {'state': 'hashed'}]),
-    companies=CollectionDefn(CompanyDetail, orm.Company, [
+    companies=CollectionDefn(orm.Company, [
         {'aliases': 'text'},
         {'name': 1},
         {'aliases': 1},
@@ -206,7 +206,7 @@ collections: dict[str, CollectionDefn] = dict(
         {'reports_count': 1},
         {'reports_count': -1},
         {'employees_sum': -1}]),
-    naics=CollectionDefn(NaicsDetail, orm.Naics, [
+    naics=CollectionDefn(orm.Naics, [
         {'id': 'hashed'},
         {'id': 1},
         {'code': 1},
@@ -216,15 +216,15 @@ collections: dict[str, CollectionDefn] = dict(
         {'reports_count': 1},
         {'reports_count': -1},
         {'employees_sum': -1}]),
-    artifacts=CollectionDefn(ArtifactDetail, orm.Artifact, [
+    artifacts=CollectionDefn(orm.Artifact, [
         {'name': 1}]),
-    states=CollectionDefn(StateDetail, orm.StateStat, [
+    states=CollectionDefn(orm.StateStat, [
         {'id': 'hashed'},
         {'last_reported': -1},
         {'reports_count': -1}]))
 
 collections_map: dict[type[DataModel], str] = {
-    defn.model: name for name, defn in collections.items()}
+    defn.data_model: name for name, defn in collections.items()}
 
 async def search_stats(*names: str) -> dict[str, dict[str, int]]:
     names = names or collections
@@ -256,9 +256,8 @@ async def search_build(*names: str) -> None:
             await search_clean(name)
             await search_init(name)
             logger.info(f'Building {name}')
-            model = defn.orm_model
-            it = model.map_reduce_exec(session)
-            it = map(defn.model.as_doc, it)
+            it = defn.orm_model.map_reduce_exec(session)
+            it = map(defn.data_model.as_doc, it)
             await mongo.get_collection(name).insert_many(it)
             stat = (await search_stats(name))[name]
             logger.info(f'Built {name} {stat=}')
@@ -272,14 +271,13 @@ actions = dict(
 class Command(utils.BaseCommand):
 
     @classmethod
-    def add_arguments(cls, parser) -> None:
-        parser.add_argument('action', choices=actions)
-        parser.add_argument('args', nargs='*')
+    def add_subparsers(cls, subparsers):
+        for action in actions:
+            subparsers.add_parser(action).add_argument('names', nargs='*')
 
     async def run(self):
-        action: str = self.opts.action
-        res = await actions[action](*self.opts.args)
-        if action == 'stats':
+        res = await actions[self.subparser](*self.opts.names)
+        if res is not None:
             import json
             print(json.dumps(res, indent=2))
 

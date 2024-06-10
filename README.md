@@ -24,8 +24,8 @@ Example commands:
 docker compose exec app wrep pipeline all
 
 # Run migrations
-docker compose exec app wrep migrations.migrate
+docker compose exec app wrep migrations migrate
 
 # Generate migration
-docker compose exec app wrep migrations.auto
+docker compose exec app wrep migrations auto
 ```

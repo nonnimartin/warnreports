@@ -4,7 +4,7 @@ import asyncio
 import enum
 import logging
 import mimetypes
-from argparse import ArgumentParser
+from argparse import ArgumentParser, _SubParsersAction
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
@@ -155,10 +155,16 @@ class BaseCommand:
     def parser(cls) -> ArgumentParser:
         parser = ArgumentParser(description=cls.__doc__)
         cls.add_arguments(parser)
+        subparsers = parser.add_subparsers(dest='_subparser')
+        cls.add_subparsers(subparsers)
         return parser
 
     @classmethod
     def add_arguments(cls, parser: ArgumentParser) -> None:
+        pass
+
+    @classmethod
+    def add_subparsers(cls, subparsers: _SubParsersAction[ArgumentParser]) -> None:
         pass
 
     @classmethod
@@ -171,6 +177,8 @@ class BaseCommand:
 
     def __init__(self, opts):
         self.opts = opts
+        self.subparser: str|None = opts._subparser
+        del opts._subparser
         self.setup(opts)
 
     def setup(self, opts):

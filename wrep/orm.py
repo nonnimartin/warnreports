@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import ClassVar, Generic, Iterable, Iterator, TypeVar
+from typing import Any, ClassVar, Generic, Iterable, Iterator, TypeVar
 
 from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
@@ -137,8 +139,9 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True):
+        Report2 = aliased(cls)
         stmt = (
-            select(cls, Report2 := aliased(cls), Naics, Artifact)
+            select(cls, Report2, Naics, Artifact)
             .join(Report2, cls.company_norm == Report2.company_norm)
             .join(Report2.naics, isouter=True)
             .join(cls.artifacts, isouter=True)
@@ -335,7 +338,7 @@ class ReportMod(Base):
     ns: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
     first_scraped: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-def lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Select[RT]:
+def lazify(stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None) -> Select[RT]:
     if lazy:
         joinfunc = selectinload
         yield_per = lazy if lazy > 1 else DEFAULT_YIELD_PER
@@ -347,54 +350,70 @@ def lazify(stmt: Select[RT], lazy: bool|int, joins: Iterable|None = None) -> Sel
             stmt = stmt.options(joinfunc(column))
     return stmt
 
-def load_naics(if_not_exists: bool = False) -> None:
+def load_naics() -> None:
     with SessionLocal() as session:
-        if if_not_exists:
-            exists = bool(
-                session
-                .execute(select(Naics.id).limit(1))
-                .scalar_one_or_none())
-            if exists:
-                logger.info(f'NAICS already loaded')
-                return
+        exists = bool(
+            session
+            .execute(select(Naics.id).limit(1))
+            .scalar_one_or_none())
+        if exists:
+            logger.info(f'NAICS already loaded')
+            return
         logger.info(f'Loading NAICS')
         import requests
         rep = requests.get(settings.NAICS_DOWNLOAD)
         rep.raise_for_status()
-        records = (
-            dict(
+        session.add_all(
+            Naics(
                 id=entry['code'],
                 code=entry['code_raw'],
                 title=entry['title'])
             for entry in rep.json())
-        session.add_all(Naics(**record) for record in records)
         session.commit()
 
-def dump_repmod():
-    import csv
-    file = settings.BUILD_DIR/'dump'/'reportmod.csv'
-    logger.info(f'Writing {file}')
-    file.parent.mkdir(parents=True, exist_ok=True)
-    stmt = select(ReportMod).order_by(ReportMod.id)
-    fields = [col.name for col in ReportMod.__table__.columns]
-    with SessionLocal() as session:
-        it = session.scalars(lazify(stmt, True))
-        with file.open('w') as f:
-            writer = csv.DictWriter(f, fields, extrasaction='ignore')
-            writer.writeheader()
-            for repmod in it:
-                writer.writerow(repmod.__dict__)
+def dump_csv(table: Table, f: io.TextIOWrapper, session: Session) -> None:
+    stmt = table.select().order_by(*table.primary_key.columns)
+    writer = csv.writer(f)
+    writer.writerow(c.name for c in table.columns)
+    writer.writerows(session.execute(lazify(stmt)).tuples())
 
-actions = dict(naics=load_naics, repmod=dump_repmod)
+def dump_update(table: Table, file: Path|None = None) -> None:
+    if not file:
+        file = settings.BUILD_DIR/'dump'/f'{table.name}.csv'
+    if file.exists():
+        with file.open('rb') as f:
+            hash_old = hashlib.file_digest(f, 'sha1')
+    else:
+        hash_old = None
+        file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(f'{file}.tmp')
+    logger.info(f'Dumping table {table.name}')
+    with SessionLocal() as session:
+        with tmp.open('w') as f:
+            dump_csv(table, f, session)
+    with tmp.open('rb') as f:
+        hash_new = hashlib.file_digest(f, 'sha1')
+    if hash_old and hash_old.digest() == hash_new.digest():
+        logger.info(f'No change')
+        tmp.unlink()
+    else:
+        logger.info(f'Writing {file}')
+        tmp.rename(file)
 
 class Command(utils.BaseCommand):
 
     @classmethod
-    def add_arguments(cls, parser) -> None:
-        parser.add_argument('action', choices=actions)
+    def add_subparsers(cls, subparsers) -> None:
+        subparser = subparsers.add_parser('dump')
+        subparser.add_argument('table', type=lambda x: Base.metadata.tables[x.lower()])
+        subparser.add_argument('file', nargs='?', type=Path)
+        subparser = subparsers.add_parser('naics')
 
     def run(self):
-        actions[self.opts.action]()
+        if self.subparser == 'naics':
+            load_naics()
+        elif self.subparser == 'dump':
+            dump_update(**vars(self.opts))
 
 if __name__ == '__main__':
     Command.main()
