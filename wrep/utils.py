@@ -158,6 +158,7 @@ class BaseCommand:
     prog: ClassVar[str|None] = None
     commands: ClassVar[dict[str, type[BaseCommand]]] = {}
     command_metavar: ClassVar[str] = 'command'
+    command_name: str|None = None
     command: BaseCommand|None = None
 
     @classmethod
@@ -197,15 +198,12 @@ class BaseCommand:
     def parse(cls, args=None):
         return cls.parser().parse_args(args)
 
-    @property
-    def command_name(self) -> str|None:
-        return getattr(self.opts, self.command_opt, None)
-
     def __init__(self, opts):
         self.opts = opts
         if hasattr(opts, self.command_opt):
-            self.command = self.commands[self.command_name](opts)
+            self.command_name = getattr(opts, self.command_opt)
             delattr(opts, self.command_opt)
+            self.command = self.commands[self.command_name](opts)
         self.setup(opts)
 
     def setup(self, opts):
