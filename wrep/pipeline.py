@@ -136,7 +136,8 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         async with source.reader() as reader:
-            count = await backend.run(self.translator, reader)
+            it = utils.amap(self.translator.entry, reader)
+            count = await backend.update(it)
         cur = await backend.stat()
         nochange = cur == prev if cur else None
         return dict(count=count, prev=prev, cur=cur, nochange=nochange)
@@ -433,7 +434,7 @@ class PipelineRunner:
 
 
 class Command(utils.BaseCommand):
-    'Run a pipeline'
+    'Run pipelines'
 
     @classmethod
     def add_arguments(cls, parser):

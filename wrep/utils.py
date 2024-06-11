@@ -103,6 +103,9 @@ async def wait(ret):
         ret = await ret
     return ret
 
+def amap(func, it):
+    return (func(x) async for x in it)
+
 from .backends.email import instances as email_backends
 
 
