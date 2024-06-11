@@ -17,6 +17,7 @@ from .ref.tz import zoneinfos
 
 NAMESPACE = uuid.uuid5(settings.NAMESPACE, 'Report')
 PAT_SPACES = re.compile(r'\s+')
+PAT_NONALPHANUM = re.compile(r'[^a-z0-9]+', re.I)
 PAT_NONDIGITS = re.compile(r'[^\d]+')
 ASCII_TRANS = {
     0x0009: ' ',
@@ -26,6 +27,8 @@ ASCII_TRANS = {
     0x00a0: ' ',
     0x2013: '-',
     0x2019: "'",
+    0x201c: '"',
+    0x201d: '"',
 }
 logger = utils.get_logger('translators')
 translators: dict[str, type[Translator]] = {}
@@ -38,6 +41,7 @@ class Translator:
     headermap: dict[str, str] = {}
     default_url: str|None = None
     values_hash_exclude: list[str] = []
+    report_id_extra: list[str] = []
     rewrites: dict[str, list[tuple[str|re.Pattern, str]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
@@ -150,6 +154,7 @@ class Translator:
         if not entry.get('url') and self.default_url:
             entry['url'] = self.default_url
         values_id = self.values_hash_uuid(row)
+        self._extend_report_id(entry)
         report_id = entry.get('report_id')
         if report_id:
             report_id = uuid.uuid5(self.namespace, report_id)
@@ -157,6 +162,18 @@ class Translator:
             report_id = values_id
         entry.update(id=report_id, values_id=values_id, state=self.state, row=row)
         self._fill_mod(entry)
+
+    def _extend_report_id(self, entry: dict[str, Any]) -> None:
+        if (report_id := entry.get('report_id')):
+            parts = [report_id]
+            for value in map(entry.get, self.report_id_extra):
+                if isinstance(value, datetime):
+                    parts.append(value.strftime(f'%Y-%m-%d'))
+                elif isinstance(value, int):
+                    parts.append(str(value))
+                elif isinstance(value, str):
+                    parts.append(PAT_NONALPHANUM.sub('', value).upper())
+            entry['report_id'] = '_'.join(parts)
 
     def _fill_mod(self, entry: dict[str, Any]) -> None:
         scrape_time: datetime|None = entry.pop('scrape_time', None)
@@ -517,6 +534,8 @@ class GA(Translator, state='GA'):
             ('Sm\\', ''),
         ]
     )
+    # One observed case of duplicate GA WARN ID for unrelated reports.
+    report_id_extra = ['company']
 
     def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
         """
@@ -970,6 +989,10 @@ class OH(Translator, state='OH'):
             REWRITE_COMPACT_DATERANGE,
         ]
     )
+    # Amendments use the same Notice ID. The employees count on the
+    # amendment is additive, not cumulative, which means we can treat
+    # them as separate reports without overcounting in stats.
+    report_id_extra = ['reported']
 
 class OK(Translator, state='OK'):
     default_url = 'https://okjobmatch.com/search/warn_lookups/new'
@@ -1015,6 +1038,8 @@ class OR(Translator, state='OR'):
             (_r(r'^(\d+)$'), f'{base_url}/UploadIndex/\\1'),
         ]
     )
+    # Duplicate WARN# values for unrelated reports
+    report_id_extra = ['reported', 'starting', 'employees', 'location', 'company']
 
 class RI(Translator, state='RI'):
     default_url = 'https://dlt.ri.gov/employers/worker-adjustment-and-retraining-notification-warn'
@@ -1129,6 +1154,7 @@ class TN(Translator, state='TN'):
             ('.', ''),
         ]
     )
+    report_id_extra = ['reported', 'starting', 'employees', 'location']
 
 class TX(Translator, state='TX'):
     default_url = 'https://www.twc.texas.gov/data-reports/warn-notice'

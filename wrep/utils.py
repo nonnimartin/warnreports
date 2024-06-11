@@ -4,7 +4,7 @@ import asyncio
 import enum
 import logging
 import mimetypes
-from argparse import ArgumentParser
+from argparse import ArgumentParser, _SubParsersAction
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
@@ -17,6 +17,7 @@ import dateutil.parser
 from . import settings
 
 T = TypeVar('T')
+type SubParsers = _SubParsersAction[ArgumentParser]
 
 def get_logger(name: str|None = None) -> logging.Logger:
     if name:
@@ -93,11 +94,6 @@ def init_logging() -> None:
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level)
 
-def sync(ret):
-    if asyncio.iscoroutine(ret):
-        ret = asyncio.run(ret)
-    return ret
-
 async def wait(ret):
     if asyncio.iscoroutine(ret):
         ret = await ret
@@ -158,6 +154,7 @@ class StrEnum(str, enum.Enum):
         return self.value
 
 class BaseCommand:
+    description: ClassVar[str|None] = None
     prog: ClassVar[str|None] = None
     commands: ClassVar[dict[str, type[BaseCommand]]] = {}
     command_metavar: ClassVar[str] = 'command'
@@ -172,7 +169,10 @@ class BaseCommand:
 
     @classmethod
     def init_parser(cls, parser: ArgumentParser) -> None:
-        parser.description = cls.__doc__
+        parser.description = (
+            cls.__dict__.get('description') or
+            cls.__doc__ or
+            cls.description)
         parser.prog = cls.prog or parser.prog
         cls.add_arguments(parser)
         cls.add_commands(parser)
@@ -185,17 +185,24 @@ class BaseCommand:
     def add_commands(cls, parser: ArgumentParser) -> None:
         if not cls.commands:
             return
-        subparsers = parser.add_subparsers(
+        subparsers = cls.create_subparsers(parser)
+        for name, cmd in cls.commands.items():
+            subparser = subparsers.add_parser(name)
+            cmd.init_parser(subparser)
+            if not subparser.description:
+                subparser.description = f'{name} command'
+
+    @classmethod
+    def create_subparsers(cls, parser: ArgumentParser) -> SubParsers:
+        return parser.add_subparsers(
             dest=cls.command_opt,
             metavar=cls.command_metavar,
             help=', '.join(cls.commands),
             required=True)
-        for name, cmd in cls.commands.items():
-            cmd.init_parser(subparsers.add_parser(name))
 
     @classmethod
     def main(cls, args=None):
-        sync(cls(cls.parse(args)).run())
+        asyncio.run(wait(cls(cls.parse(args)).run()))
 
     @classmethod
     def parse(cls, args=None):
@@ -220,13 +227,13 @@ class BaseCommand:
         cls.command_opt = f'_command_{abs(hash(cls))}'
 
 def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
-    class Base:
+    class Base(BaseCommand):
 
         async def run(self):
             await wait(self.func(**vars(self.opts)))
 
-    class Command(*bases, Base, BaseCommand):
-        __doc__ = f.__doc__
+    class Command(*bases, Base):
+        description = f.__doc__
         func = staticmethod(f)
 
     return Command
