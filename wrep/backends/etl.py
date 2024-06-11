@@ -26,6 +26,8 @@ __all__ = [
     'TranslationBackend',
 ]
 
+type Doc = dict[str, Any]
+type AnyIterable[T] = Iterable[T]|AsyncIterable[T]
 logger = utils.get_logger('backends.etl')
 mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
 
@@ -33,7 +35,7 @@ class ReaderMixin:
 
     @abstractmethod
     @asynccontextmanager
-    async def reader(self) -> AsyncGenerator[AsyncIterable[dict[str, Any]]]: ...
+    async def reader(self) -> AsyncGenerator[AsyncIterable[Doc]]: ...
 
 class PipelineLogBackend:
 
@@ -59,7 +61,7 @@ class ExtractionBackend(StageBackend, ReaderMixin):
 class TranslationBackend(StageBackend, ReaderMixin):
 
     @abstractmethod
-    async def update(self, source: AsyncIterable[dict[str, Any]]) -> int: ...
+    async def update(self, source: AsyncIterable[Doc]) -> tuple[int, int, int]: ...
 
 class SearchIndexBackend(StageBackend):
 
@@ -120,20 +122,20 @@ class MongoETBase(StageBackend):
             it = utils.amap(self.clean_stat_doc, reader)
             return await docs_stat(it)
 
-    def get_filter(self) -> dict[str, Any]:
+    def get_filter(self) -> Doc:
         return {}
 
-    def clean_doc(self, doc: dict) -> dict:
+    def clean_doc(self, doc: Doc) -> Doc:
         for key in self.clean_keys:
             doc.pop(key, None)
         return doc
 
-    def clean_stat_doc(self, doc: dict) -> dict:
+    def clean_stat_doc(self, doc: Doc) -> Doc:
         for key in self.stat_clean_keys:
             doc.pop(key, None)
         return doc
 
-    def get_filter(self) -> dict[str, Any]:
+    def get_filter(self) -> Doc:
         return dict(state=self.state)
 
 class MongoExtraction(MongoETBase, ExtractionBackend):
@@ -164,12 +166,10 @@ class MongoTranslation(MongoETBase, TranslationBackend):
 
     async def update(self, source):
         await self.collection.create_indexes(self.indexes)
-        count = 0
-        async for entry in source:
-            count += 1
-            filt = {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
-            await self.collection.replace_one(filt, entry, True)
-        return count
+        return await update_collection(self.collection, source, self.get_replace_filter)
+
+    def get_replace_filter(self, entry: Doc) -> Doc:
+        return {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
 
     indexes = [
         IndexModel({'id': 'hashed'}),
@@ -204,40 +204,30 @@ class MongoSearchIndex(SearchIndexBackend):
         return await docs_stat(it)
 
     async def update_reports(self, source):
-        def get_filter(inst: ReportData):
-            return dict(_id=inst.id)
-        return await self.update_collection('reports', source, get_filter)
+        return await self.update_collection('reports', source)
 
     async def update_states(self, source):
-        def get_filter(inst: StateDetail):
-            return dict(id=inst.id)
-        return await self.update_collection('states', source, get_filter)
+        return await self.update_collection('states', source, key='id')
 
     async def update_companies(self, source):
-        def get_filter(inst: CompanyDetail):
-            return dict(_id=inst.id)
-        return await self.update_collection('companies', source, get_filter)
+        return await self.update_collection('companies', source)
 
     async def update_naics(self, source):
-        def get_filter(inst: NaicsDetail):
-            return dict(id=inst.id)
-        return await self.update_collection('naics', source, get_filter)
+        return await self.update_collection('naics', source, key='id')
 
     async def update_artifacts(self, source):
-        def get_filter(inst: ArtifactDetail):
-            return dict(_id=inst.id)
-        return await self.update_collection('artifacts', source, get_filter)
+        return await self.update_collection('artifacts', source)
 
-    async def update_collection(self, name: str, source: Iterable[DM], get_filter: Callable[[DM], dict[str, Any]]) -> tuple[int, int, int]:
+    async def update_collection(self, name: str, source: Iterable[DM], key: str = '_id') -> tuple[int, int, int]:
         coll = self.mongo.get_collection(name)
         await coll.create_indexes(search.collections[name].indexes)
-        return await update_collection(coll, source, get_filter)
+        it = (inst.as_doc() for inst in source)
+        return await update_collection(coll, it, lambda doc: {key: doc[key]})
 
-async def update_collection(coll: AsyncIOMotorCollection, source: Iterable[DM], get_filter: Callable[[DM], dict[str, Any]]) -> tuple[int, int, int]:
+async def update_collection(coll: AsyncIOMotorCollection, it: AnyIterable[Doc], get_filter: Callable[[Doc], Doc]) -> tuple[int, int, int]:
     count, created, updated = 0, 0, 0
-    for inst in source:
-        doc = inst.as_doc()
-        filt = get_filter(inst)
+    async for doc in utils.as_aiter(it):
+        filt = get_filter(doc)
         if '_id' not in filt:
             old = await coll.find_one(filt)
             if old:
@@ -252,7 +242,7 @@ async def update_collection(coll: AsyncIOMotorCollection, source: Iterable[DM], 
         count += 1
     return count, created, updated
 
-async def docs_stat(it: AsyncIterable[dict[str, Any]]):
+async def docs_stat(it: AsyncIterable[Doc]) -> Doc:
     h = hashlib.sha1()
     size, count = 0, 0
     async for doc in it:

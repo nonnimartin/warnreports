@@ -137,10 +137,11 @@ class Pipeline:
             await self.clean(stage)
         async with source.reader() as reader:
             it = utils.amap(self.translator.entry, reader)
-            count = await backend.update(it)
+            count, created, updated = await backend.update(it)
         cur = await backend.stat()
         nochange = cur == prev if cur else None
-        return dict(count=count, prev=prev, cur=cur, nochange=nochange)
+        counts = dict(count=count, created=created, updated=updated)
+        return counts | dict(prev=prev, cur=cur, nochange=nochange)
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
