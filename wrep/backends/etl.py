@@ -13,7 +13,6 @@ from wrep.models import ReportData, StateDetail
 
 from .. import search, settings, utils
 from ..models import *
-from ..translators import Translator
 
 __all__ = [
     'ExtractionBackend',
@@ -60,7 +59,7 @@ class ExtractionBackend(StageBackend, ReaderMixin):
 class TranslationBackend(StageBackend, ReaderMixin):
 
     @abstractmethod
-    async def run(self, translator: Translator, source: AsyncIterable[dict[str, str]]) -> int: ...
+    async def update(self, source: AsyncIterable[dict[str, Any]]) -> int: ...
 
 class SearchIndexBackend(StageBackend):
 
@@ -114,11 +113,11 @@ class MongoETBase(StageBackend):
     @asynccontextmanager
     async def reader(self):
         it = self.collection.find(self.get_filter()).sort(self.ordering)
-        yield (self.clean_doc(doc) async for doc in it)
+        yield utils.amap(self.clean_doc, it)
 
     async def stat(self):
         async with self.reader() as reader:
-            it = (self.clean_stat_doc(doc) async for doc in reader)
+            it = utils.amap(self.clean_stat_doc, reader)
             return await docs_stat(it)
 
     def get_filter(self) -> dict[str, Any]:
@@ -163,13 +162,11 @@ class MongoTranslation(MongoETBase, TranslationBackend):
     ordering = ['id']
     clean_keys = ['_id', 'row']
 
-    async def run(self, translator, source):
+    async def update(self, source):
         await self.collection.create_indexes(self.indexes)
         count = 0
-        async for row in source:
+        async for entry in source:
             count += 1
-            entry = translator.entry(row)
-            entry.update(state=self.state, row=row)
             filt = {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
             await self.collection.replace_one(filt, entry, True)
         return count

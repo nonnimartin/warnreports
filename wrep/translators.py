@@ -155,7 +155,7 @@ class Translator:
             report_id = uuid.uuid5(self.namespace, report_id)
         else:
             report_id = values_id
-        entry.update(id=report_id, values_id=values_id)
+        entry.update(id=report_id, values_id=values_id, state=self.state, row=row)
         self._fill_mod(entry)
 
     def _fill_mod(self, entry: dict[str, Any]) -> None:
@@ -214,6 +214,7 @@ class Translator:
         cls.rewrites = Translator.rewrites | cls.rewrites
         if state:
             state = state.upper()
+            cls.state = state
             cls.tz = zoneinfos[state]
             cls.namespace = uuid.uuid5(NAMESPACE, state)
             translators[state] = cls
