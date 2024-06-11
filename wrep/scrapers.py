@@ -845,7 +845,7 @@ class OH(Scraper, state='OH'):
             yield chain(
                 chain.from_iterable(
                     self.read_data_file(file, index, sources[file.name]) for file in files),
-                self.read_historical(csv.reader(file)))
+                self.read_historical(csv.reader(file), index))
 
     def read_data_file(self, file: Path, index: dict[str, dict[str, str]], source: str) -> Iterator[dict[str, str]]:
         with file.open() as f:
@@ -864,11 +864,13 @@ class OH(Scraper, state='OH'):
                     row['artifacts_json'] = json.dumps(index[notice_id])
                 yield row
 
-    def read_historical(self, data: Iterable[list[str]]) -> Iterator[dict[str, str]]:
+    def read_historical(self, data: Iterable[list[str]], index: dict[str, dict[str, str]]) -> Iterator[dict[str, str]]:
         it = iter(data)
         headers = [self.legacy_header_map.get(header, header) for header in next(it)]
         for values in it:
-            yield dict(zip(headers, values))
+            row = dict(zip(headers, values))
+            if (notice_id := row.get('Notice ID')) and notice_id not in index:
+                yield row
 
     def extract_json(self, page: Soup) -> dict[str, Any]:
         div = page.find('div', {'id': 'js-placeholder-json-data'})
