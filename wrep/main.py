@@ -6,7 +6,6 @@ from pathlib import Path
 from uuid import UUID
 
 import click
-import uvicorn
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,12 +29,6 @@ async def lifespan(app: FastAPI):
     app.mount('/static/scss', StaticFiles(directory=settings.CSS_BUILD_DIR))
     app.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name='static')
     yield
-
-app = FastAPI(
-    lifespan=lifespan,
-    title='warnreports API',
-    docs_url='/api/docs/swagger',
-    redoc_url='/api/docs/redoc')
 
 router = APIRouter()
 
@@ -101,20 +94,26 @@ async def artifact(id: UUID, disposition: str) -> FileResponse:
         filename=artifact.name,
         content_disposition_type=disposition)
 
+
+app = FastAPI(
+    lifespan=lifespan,
+    title='warnreports API',
+    docs_url='/api/docs/swagger',
+    redoc_url='/api/docs/redoc')
 app.include_router(router, include_in_schema=False)
 app.include_router(api.router, prefix='/api/v0')
 app.include_router(feed.router, prefix='/feed', include_in_schema=False)
 app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 
-def cmd(*args, **kw):
-    logger.info(f'Starting uvicorn')
-    return uvicorn.main.callback('wrep.main:app', *args, **kw)
-
-main = click.Command(
-    name='main',
-    callback=cmd,
-    params=uvicorn.main.params[1:],
-    context_settings=uvicorn.main.context_settings)
 
 if __name__ == '__main__':
+    import uvicorn
+    def cmd(*args, **kw):
+        logger.info(f'Starting uvicorn')
+        return uvicorn.main.callback('wrep.main:app', *args, **kw)
+    main = click.Command(
+        name='main',
+        callback=cmd,
+        params=uvicorn.main.params[1:],
+        context_settings=uvicorn.main.context_settings)
     main()
