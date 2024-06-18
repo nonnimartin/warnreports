@@ -66,7 +66,6 @@ async def atom_query(params: FeedSearchParams) -> HTMLResponse:
 async def atom_permalink(id: str) -> HTMLResponse:
     return await feed_permalink('atom', id)
 
-from ..main import app
 
 
 async def feed_query(fmt: str, params: FeedSearchParams) -> HTMLResponse:
@@ -139,6 +138,7 @@ def id_decode(id: str) -> dict[str, Any]:
         for k, v in params.items()}
 
 def id_permalink(id: str, fmt: str) -> str:
+    from ..main import app
     if id:
         href = app.url_path_for(f'{fmt}_permalink', id=id)
     else:
@@ -146,4 +146,5 @@ def id_permalink(id: str, fmt: str) -> str:
     return settings.SITE_URL + href
 
 def report_link(report: ReportData) -> str:
+    from ..main import app
     return settings.SITE_URL + app.url_path_for('report_view', id=report.id)
