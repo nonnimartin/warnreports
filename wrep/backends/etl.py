@@ -90,10 +90,10 @@ class MongoPipelineLog(PipelineLogBackend):
         await coll.insert_many(runs)
 
     indexes = [
-        IndexModel({'runner.id': 'hashed'}),
+        IndexModel({'runner.id': 1}),
         IndexModel({'jobseq': 1}),
-        IndexModel({'stage': 'hashed'}),
-        IndexModel({'state': 'hashed'}),
+        IndexModel({'stage': 1}),
+        IndexModel({'state': 1}),
         IndexModel({'start': -1}),
         IndexModel({'elapsed': -1}),
     ]
@@ -155,7 +155,7 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
         return it.count
 
     indexes = [
-        IndexModel({'state': 'hashed'}),
+        IndexModel({'state': 1}),
         IndexModel({'_i': 1}),
     ]
 
@@ -172,10 +172,9 @@ class MongoTranslation(MongoETBase, TranslationBackend):
         return {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
 
     indexes = [
-        IndexModel({'id': 'hashed'}),
-        IndexModel({'values_id': 'hashed'}),
         IndexModel({'id': 1}),
-        IndexModel({'state': 'hashed'}),
+        IndexModel({'values_id': 1}),
+        IndexModel({'state': 1}),
     ]
 
 class MongoSearchIndex(SearchIndexBackend):

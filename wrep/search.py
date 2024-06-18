@@ -187,14 +187,14 @@ class CollectionDefn:
 collections: dict[str, CollectionDefn] = dict(
     reports=CollectionDefn(orm.Report, [
         {'company': 'text'},
-        {'company_id': 'hashed'},
+        {'company_id': 1},
         {'reported': 1},
         {'reported': -1},
         {'employees': 1},
         {'employees': -1},
         {'naics.code': 1},
         {'naics.id': 1},
-        {'state': 'hashed'}]),
+        {'state': 1}]),
     companies=CollectionDefn(orm.Company, [
         {'aliases': 'text'},
         {'name': 1},
@@ -208,7 +208,6 @@ collections: dict[str, CollectionDefn] = dict(
         {'reports_count': -1},
         {'employees_sum': -1}]),
     naics=CollectionDefn(orm.Naics, [
-        {'id': 'hashed'},
         {'id': 1},
         {'code': 1},
         {'title': 1},
@@ -220,7 +219,7 @@ collections: dict[str, CollectionDefn] = dict(
     artifacts=CollectionDefn(orm.Artifact, [
         {'name': 1}]),
     states=CollectionDefn(orm.StateStat, [
-        {'id': 'hashed'},
+        {'id': 1},
         {'last_reported': -1},
         {'reports_count': -1}]))
 
