@@ -88,11 +88,7 @@ class Pipeline:
         elif stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Load:
-            filters = {
-                Report: [Report.state == self.state],
-                Company: [self.get_companies_delete_pred()],
-                Artifact: [Artifact.path.startswith(f'{self.state.lower()}/')],
-                StateStat: [StateStat.id == self.state]}
+            filters = self.get_orm_clean_filters()
             stmts = (
                 orm.delete(model).where(*filters)
                 for model, filters in filters.items())
@@ -107,9 +103,11 @@ class Pipeline:
         logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
+        stage = Stage.Scrape
         prev = await self.scraper.stat()
+        logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
-            await self.clean(Stage.Scrape)
+            await self.clean(stage)
         await self.scraper.scrape()
         cur = await self.scraper.stat()
         nochange = cur == prev if cur else None
@@ -123,7 +121,7 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         with self.scraper.extract() as source:
-            count = await backend.update(source)
+            count, _, _ = await backend.update(source)
         cur = await backend.stat()
         nochange = cur == prev if cur else None
         return dict(count=count, prev=prev, cur=cur, nochange=nochange)
@@ -133,6 +131,7 @@ class Pipeline:
         backend: TranslationBackend = self.backends[stage]
         source: ExtractionBackend = self.backends[Stage.Extract]
         prev = await backend.stat()
+        logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
         async with source.reader() as reader:
@@ -169,22 +168,16 @@ class Pipeline:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: SearchIndexBackend = self.backends[stage]
-        filters = dict(
-            reports=[Report.state == self.state],
-            companies=[self.get_companies_update_pred()],
-            artifacts=[self.get_artifacts_pred()],
-            states=[StateStat.id == self.state],
-            naics=[])
-        from .search import collections
+        backend: MongoSearchIndex = self.backends[stage]
+        filters = self.get_orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
-            for name, defn in collections.items():
+            for name, defn in backend.collections.items():
                 it = defn.orm_model.map_reduce_exec(
                     session,
-                    *filters[name],
+                    *filters[defn.orm_model],
                     lazy=bool(self.opts.get('lazy', True)))
-                results[name] = await getattr(backend, f'update_{name}')(it)
+                results[name] = await backend.update(name, it)
         nochange = True
         counts: dict[str, dict[str, int]] = {}
         totals: dict[str, int] = defaultdict(int)
@@ -320,6 +313,18 @@ class Pipeline:
             report.artifacts.append(artifact)
             save = save.Update
         return save
+
+    def get_orm_clean_filters(self) -> dict[type[orm.MapReduceBase], list]:
+        return {
+            Report: [Report.state == self.state],
+            Company: [self.get_companies_delete_pred()],
+            Artifact: [self.get_artifacts_pred()],
+            StateStat: [StateStat.id == self.state]}
+
+    def get_orm_select_filters(self) -> dict[type[orm.MapReduceBase], list]:
+        return self.get_orm_clean_filters() | {
+            Company: [self.get_companies_update_pred()],
+            Naics: []}
 
     def get_artifacts_pred(self):
         return Artifact.path.startswith(f'{self.state.lower()}/')

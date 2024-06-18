@@ -9,10 +9,9 @@ from typing import Any, AsyncGenerator, AsyncIterable, Callable, Iterable
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 from pymongo.operations import IndexModel
 
-from wrep.models import ReportData, StateDetail
-
 from .. import search, settings, utils
 from ..models import *
+from ..utils import EitherIterable
 
 __all__ = [
     'ExtractionBackend',
@@ -27,7 +26,6 @@ __all__ = [
 ]
 
 type Doc = dict[str, Any]
-type AnyIterable[T] = Iterable[T]|AsyncIterable[T]
 logger = utils.get_logger('backends.etl')
 mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
 
@@ -44,8 +42,9 @@ class PipelineLogBackend:
 
 class StageBackend:
 
-    def __init__(self, state: StateCode):
+    def __init__(self, state: StateCode, **context):
         self.state = state.upper()
+        self.context = context
 
     @abstractmethod
     async def clean(self) -> None: ...
@@ -56,30 +55,17 @@ class StageBackend:
 class ExtractionBackend(StageBackend, ReaderMixin):
 
     @abstractmethod
-    async def update(self, source: Iterable[dict[str, str]]) -> int: ...
+    async def update(self, source: EitherIterable[Doc]) -> tuple[int, int, int]: ...
 
 class TranslationBackend(StageBackend, ReaderMixin):
 
     @abstractmethod
-    async def update(self, source: AsyncIterable[Doc]) -> tuple[int, int, int]: ...
+    async def update(self, source: EitherIterable[Doc]) -> tuple[int, int, int]: ...
 
 class SearchIndexBackend(StageBackend):
 
     @abstractmethod
-    async def update_reports(self, source: Iterable[ReportData]) -> tuple[int, int, int]: ...
-
-    @abstractmethod
-    async def update_states(self, detail: Iterable[StateDetail]) -> tuple[int, int, int]: ...
-
-    @abstractmethod
-    async def update_companies(self, source: Iterable[CompanyDetail]) -> tuple[int, int, int]: ...
-
-    @abstractmethod
-    async def update_naics(self, source: Iterable[NaicsDetail]) -> tuple[int, int, int]: ...
-
-    @abstractmethod
-    async def update_artifacts(self, source: Iterable[ArtifactDetail]) -> tuple[int, int, int]: ...
-
+    async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
 
 class MongoPipelineLog(PipelineLogBackend):
     mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
@@ -99,6 +85,7 @@ class MongoPipelineLog(PipelineLogBackend):
     ]
 
 class MongoETBase(StageBackend):
+    'Common base class for MongoExraction & MongoTranslation'
     mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
     collection_name: str
     ordering = []
@@ -147,12 +134,12 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
     async def update(self, source):
         await self.clean()
         await self.collection.create_indexes(self.indexes)
-        it = utils.CountingIter(source)
-        docs = (
-            dict(state=self.state, _i=i) | doc
-            for i, doc in enumerate(it))
-        await self.collection.insert_many(docs)
-        return it.count
+        it = utils.aenumerate(source)
+        it = (dict(state=self.state, _i=i) | doc async for i, doc in it)
+        return await update_collection(self.collection, it, self.get_replace_filter)
+
+    def get_replace_filter(self, doc: Doc) -> Doc:
+        return dict(_i=doc['_i'])
 
     indexes = [
         IndexModel({'state': 1}),
@@ -179,9 +166,10 @@ class MongoTranslation(MongoETBase, TranslationBackend):
 
 class MongoSearchIndex(SearchIndexBackend):
     mongo = search.mongo
+    collections = search.collections
 
     async def clean(self) -> None:
-        for name in search.collections:
+        for name in self.collections:
             coll = self.mongo.get_collection(name)
             if name == 'naics':
                 coro = coll.drop()
@@ -202,28 +190,14 @@ class MongoSearchIndex(SearchIndexBackend):
         it = self.mongo.reports.find(dict(state=self.state)).sort('id')
         return await docs_stat(it)
 
-    async def update_reports(self, source):
-        return await self.update_collection('reports', source)
-
-    async def update_states(self, source):
-        return await self.update_collection('states', source, key='id')
-
-    async def update_companies(self, source):
-        return await self.update_collection('companies', source)
-
-    async def update_naics(self, source):
-        return await self.update_collection('naics', source, key='id')
-
-    async def update_artifacts(self, source):
-        return await self.update_collection('artifacts', source)
-
-    async def update_collection(self, name: str, source: Iterable[DM], key: str = '_id') -> tuple[int, int, int]:
+    async def update(self, name, source):
         coll = self.mongo.get_collection(name)
-        await coll.create_indexes(search.collections[name].indexes)
-        it = (inst.as_doc() for inst in source)
+        await coll.create_indexes(self.collections[name].indexes)
+        it = (inst.as_doc() async for inst in utils.as_aiter(source))
+        key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
 
-async def update_collection(coll: AsyncIOMotorCollection, it: AnyIterable[Doc], get_filter: Callable[[Doc], Doc]) -> tuple[int, int, int]:
+async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc], get_filter: Callable[[Doc], Doc]) -> tuple[int, int, int]:
     count, created, updated = 0, 0, 0
     async for doc in utils.as_aiter(it):
         filt = get_filter(doc)
