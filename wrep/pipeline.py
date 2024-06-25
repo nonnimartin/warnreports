@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from itertools import batched
 from typing import Any, Iterable
 
-from . import settings, utils
-from . import orm
+from sentry_sdk import capture_exception
+
+from . import orm, settings, utils
 from .backends.etl import *
-from .orm import *
 from .models import *
+from .orm import *
 from .ref import normls
 from .scrapers import scrapers
 from .translators import translators
@@ -363,6 +364,7 @@ class PipelineRunner:
         states: Iterable[StateCode],
         clean: bool = False,
         clean_only: bool = False,
+        fail: bool = False,
         incremental: bool = False,
         concurrent: bool = False,
         lazy: bool|int = True,
@@ -374,9 +376,11 @@ class PipelineRunner:
         self.clean_only = clean_only
         self.incremental = incremental
         self.concurrent = concurrent
+        self.fail = fail
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
         self.pipelines = [Pipeline(state, lazy=lazy) for state in self.states]
+        self.errors: list[tuple[StateCode, Stage, Exception]] = []
         self.size = len(self.pipelines) * len(self.stages)
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
         self.grouping: tuple[list[Stage], ...] = [], [], []
@@ -413,20 +417,33 @@ class PipelineRunner:
                     group.create_task(self.run_pipeline(pipeline, *stages))
 
     async def run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
+        failed = False
         for stage in stages:
             start = utils.now()
             state = pipeline.state
             res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
             self.jobseq += 1
             res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
-            if self._should_skip(state):
+            if failed:
+                logger.info(f'{state}:{stage}:skip Previous stage failed')
+                res.update(skip=True, last_failed=True)
+            elif self._should_skip(state):
                 logger.info(f'{state}:{stage}:skip')
                 res.update(skip=True, nochange=True)
             elif self.clean_only:
                 await pipeline.clean(stage)
                 res.update(clean_only=True)
             else:
-                res.update(await pipeline.run(stage, clean=self.clean))
+                try:
+                    res.update(await pipeline.run(stage, clean=self.clean))
+                except Exception as err:
+                    if self.fail:
+                        raise
+                    failed = True
+                    res.update(failed=True, error=f'{type(err).__name__}: {err}')
+                    self.errors.append((state, stage, err))
+                    logger.exception(f'{state}:{stage}:fail')
+                    capture_exception()
             end = utils.now()
             res.update(end=end, elapsed=(end - start).total_seconds())
             self.runs[pipeline.state].append(res)
@@ -438,7 +455,6 @@ class PipelineRunner:
             (runs := self.runs[state]) and
             runs[-1].get('nochange'))
 
-
 class Command(utils.BaseCommand):
     'Run pipelines'
 
@@ -448,6 +464,7 @@ class Command(utils.BaseCommand):
         parser.add_argument('states', nargs='*', metavar='state')
         parser.add_argument('--clean', '-c', action='store_true')
         parser.add_argument('--clean-only', '-x', action='store_true')
+        parser.add_argument('--nofail', '-n', action='store_false', dest='fail')
         parser.add_argument('--incremental', '-i', action='store_true')
         parser.add_argument('--concurrent', '-t', action='store_true')
         parser.add_argument('--eager', '-e', dest='lazy', action='store_false')
@@ -458,6 +475,8 @@ class Command(utils.BaseCommand):
 
     async def run(self):
         await self.runner.run()
+        for state, stage, err in self.runner.errors:
+            logger.warning(f'{state}:{stage} FAIL: {type(err).__name__}: {err}')
 
     @staticmethod
     def stages_opt(value: str) -> list[Stage]:
