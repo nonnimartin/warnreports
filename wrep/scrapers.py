@@ -40,6 +40,7 @@ class Scraper:
     base_url: str|None = None
     user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
     request_delay = 0
+    ssl_verify = True
 
     def __init__(self):
         self.runner = Runner(self.state)
@@ -91,6 +92,7 @@ class Scraper:
         url = self.absurl(url)
         kw.setdefault('session', self.session)
         kw.setdefault('user_agent', self.session.headers.get('User-Agent', self.user_agent))
+        kw.setdefault('verify', self.ssl_verify)
         rep = warn.utils.get_url(url, **kw)
         self.request_count += 1
         rep.raise_for_status()
@@ -602,7 +604,13 @@ class MO(Scraper, state='MO'):
             if self.cache.exists(key) and year < now.year - 1:
                 continue
             url = f'{self.archive_url}/{key}'
-            rep = await self.cache_download(key, url)
+            try:
+                rep = await self.cache_download(key, url)
+            except AssertionError:
+                if year == now.year:
+                    logger.warning(f'Current year download failed, skipping {url=}')
+                    continue
+                raise
             if year == now.year:
                 dt = utils.parse_date(rep.headers.get('Last-Modified'))
                 if not dt:
@@ -1100,6 +1108,7 @@ class TX(Scraper, state='TX'):
     href_pat = re.compile(r'^/sites/default/files/oei/docs/warn-act-listings-')
     year_pat = re.compile(r'.*-(\d{4})-')
     archive_url = 'https://archive.warnreports.org/s/TX/tx_historical.xlsx'
+    ssl_verify = False
 
     async def scrape(self):
         page = bs(await self.cache_fetch('latest.html', self.index_url))
