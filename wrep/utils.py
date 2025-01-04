@@ -17,6 +17,7 @@ import dateutil.parser
 from . import settings
 
 T = TypeVar('T')
+type EitherIterable[T] = Iterable[T]|AsyncIterable[T]
 type SubParsers = _SubParsersAction[ArgumentParser]
 
 def get_logger(name: str|None = None) -> logging.Logger:
@@ -47,13 +48,18 @@ def unique(it: Iterable[T]) -> Iterator[T]:
             yield value
             done.add(value)
 
-async def as_aiter(it: Iterable[T]|AsyncIterable[T]) -> AsyncIterator[T]:
-    if isinstance(it, AsyncIterable):
-        async for x in it:
-            yield x
-    else:
-        for x in it:
-            yield x
+def as_aiter(it: EitherIterable[T]) -> AsyncIterable[T]:
+    return it if isinstance(it, AsyncIterable) else _to_aiter(it)
+
+async def _to_aiter(it: Iterable[T]) -> AsyncIterator[T]:
+    for x in it:
+        yield x
+
+async def aenumerate(it: EitherIterable[T]) -> AsyncIterator[tuple[int, T]]:
+    i = 0
+    async for x in as_aiter(it):
+        yield i, x
+        i += 1
 
 def parse_date(value: str) -> datetime|None:
     value = value or ''
@@ -95,12 +101,11 @@ def init_logging() -> None:
     logging.basicConfig(level=level)
 
 async def wait(ret):
-    if asyncio.iscoroutine(ret):
-        ret = await ret
-    return ret
+    return await ret if asyncio.iscoroutine(ret) else ret
 
-def amap(func, it):
-    return (func(x) async for x in it)
+async def amap(func, it):
+    async for x in as_aiter(it):
+        yield await wait(func(x))
 
 from .backends.email import instances as email_backends
 
@@ -135,18 +140,6 @@ def build_css():
         file.write(sass.compile(string=content))
     with Path(outdir, 'bootstrap.min.css').open('w') as file:
         file.write(sass.compile(string=content, output_style='compressed'))
-
-
-class CountingIter:
-
-    def __init__(self, it: Iterable[T]):
-        self.it = it
-
-    def __iter__(self) -> Iterator[T]:
-        self.count = 0
-        for x in self.it:
-            self.count += 1
-            yield x
 
 class StrEnum(str, enum.Enum):
 

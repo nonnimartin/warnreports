@@ -20,8 +20,12 @@ uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
 html5lib
+pyopenssl
 tenacity
 xlrd
 retry
+selenium
+xvfbwrapper
+webdriver-manager
 
 urllib3==1.26.18

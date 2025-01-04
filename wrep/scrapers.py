@@ -40,6 +40,7 @@ class Scraper:
     base_url: str|None = None
     user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
     request_delay = 0
+    ssl_verify = True
 
     def __init__(self):
         self.runner = Runner(self.state)
@@ -91,6 +92,7 @@ class Scraper:
         url = self.absurl(url)
         kw.setdefault('session', self.session)
         kw.setdefault('user_agent', self.session.headers.get('User-Agent', self.user_agent))
+        kw.setdefault('verify', self.ssl_verify)
         rep = warn.utils.get_url(url, **kw)
         self.request_count += 1
         rep.raise_for_status()
@@ -588,7 +590,7 @@ class MD(Scraper, state='MD'):
 class MO(Scraper, state='MO'):
     start_year = 2019
     base_url = 'https://jobs.mo.gov/warn'
-    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/MO'
+    archive_url = 'https://archive.warnreports.org/s/MO'
     headers_species = {
         10: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'Notes', 'url'],
         9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
@@ -602,7 +604,13 @@ class MO(Scraper, state='MO'):
             if self.cache.exists(key) and year < now.year - 1:
                 continue
             url = f'{self.archive_url}/{key}'
-            rep = await self.cache_download(key, url)
+            try:
+                rep = await self.cache_download(key, url)
+            except AssertionError:
+                if year == now.year:
+                    logger.warning(f'Current year download failed, skipping {url=}')
+                    continue
+                raise
             if year == now.year:
                 dt = utils.parse_date(rep.headers.get('Last-Modified'))
                 if not dt:
@@ -682,7 +690,7 @@ class NY(Scraper, state='NY'):
         '2023.html': '/2023-warn-notices',
         '2022.html': '/2022-warn-notices',
         '2021.html': '/warn-notices-2021',
-        'ny_historical.xlsx': 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/NY/ny_historical.xlsx'}
+        'ny_historical.xlsx': 'https://archive.warnreports.org/s/NY/ny_historical.xlsx'}
     pdf_keytrans = {
         'L ayoff End Date': 'Layoff End Date',
     }
@@ -770,7 +778,7 @@ class NY(Scraper, state='NY'):
 
 class OH(Scraper, state='OH'):
     base_url = 'https://jfs.ohio.gov'
-    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/OH/oh_historical.csv'
+    archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
     index_url = '/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures'
     request_delay = 1
     atext_pat = re.compile(r'^\s*(\d{4}) Public Notices')
@@ -1099,7 +1107,8 @@ class TX(Scraper, state='TX'):
     index_url = '/data-reports/warn-notice'
     href_pat = re.compile(r'^/sites/default/files/oei/docs/warn-act-listings-')
     year_pat = re.compile(r'.*-(\d{4})-')
-    archive_url = 'http://warn-public.s3-website-us-west-2.amazonaws.com/s/TX/tx_historical.xlsx'
+    archive_url = 'https://archive.warnreports.org/s/TX/tx_historical.xlsx'
+    ssl_verify = False
 
     async def scrape(self):
         page = bs(await self.cache_fetch('latest.html', self.index_url))

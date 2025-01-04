@@ -66,7 +66,6 @@ async def atom_query(params: FeedSearchParams) -> HTMLResponse:
 async def atom_permalink(id: str) -> HTMLResponse:
     return await feed_permalink('atom', id)
 
-from ..main import app
 
 
 async def feed_query(fmt: str, params: FeedSearchParams) -> HTMLResponse:
@@ -113,7 +112,7 @@ def query_description(params: FeedSearchParams) -> str:
     if (naics := params.pop('naics', None)) is not None:
         descs.append(f'NAICS={','.join(map(str, naics))}')
     if (text := params.pop('text', None)):
-        descs.append(text)
+        descs.append(str(text))
     descs.extend(filter(None, urlencode(params).split('&')))
     return ' '.join(descs)
 
@@ -122,7 +121,7 @@ def id_encode(params: FeedSearchParams) -> str:
     for k in sorted(params):
         if (v := params[k]) is not None:
             if not isinstance(v, list):
-                v = list[v]
+                v = [v]
             for value in v:
                 items.append((k, value))
     q = urlencode(items)
@@ -135,10 +134,11 @@ def id_decode(id: str) -> dict[str, Any]:
         if key in params:
             params[key] = list(map(int, params[key]))
     return {
-        k: v if key == 'naics' or key == 'state' else v[0]
+        k: v if k in ('naics', 'state') else v[0]
         for k, v in params.items()}
 
 def id_permalink(id: str, fmt: str) -> str:
+    from ..main import app
     if id:
         href = app.url_path_for(f'{fmt}_permalink', id=id)
     else:
@@ -146,4 +146,5 @@ def id_permalink(id: str, fmt: str) -> str:
     return settings.SITE_URL + href
 
 def report_link(report: ReportData) -> str:
+    from ..main import app
     return settings.SITE_URL + app.url_path_for('report_view', id=report.id)

@@ -2,14 +2,14 @@ FROM python:3.12-alpine
 VOLUME /build
 VOLUME /srv/artifacts
 WORKDIR /code
-CMD python -m wrep.main
+CMD ["python", "-m", "wrep.main"]
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
 ENV CSS_BUILD_DIR=/srv/css
 ENV BOOTSTRAP_DIR=/usr/local/src/bootstrap
 ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
-RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
+RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev xvfb &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
 RUN ./scripts/download-warn-scraper.sh &&\
