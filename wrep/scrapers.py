@@ -1192,6 +1192,10 @@ class VA(Scraper, state='VA'):
     
     NB: there are about 50 pages. you can filter by year. there is a select box that lists them.
     """
+    csv_url = 'https://www.virginiaworks.gov/warn_notices.csv'
+
+    async def scrape(self):
+        await self.cache_download(self.runner.file, self.csv_url)
 
 class Cache(warn.cache.Cache):
 

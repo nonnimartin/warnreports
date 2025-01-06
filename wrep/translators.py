@@ -1215,25 +1215,32 @@ class UT(Translator, state='UT'):
 
 class VA(Translator, state='VA'):
     default_url = 'https://www.vec.virginia.gov/warn-notices'
-    action_headers = ['Closure', 'Layoff', 'Permanent Reduction', 'Realignment']
+    # action_headers = ['Closure', 'Layoff', 'Permanent Reduction', 'Realignment']
     headermap = {
+        'Company': 'company',
         'Company Name': 'company',
         'Notice Date': 'reported',
+        'Location': 'location',
         'Location City': 'location',
         'Employees Affected': 'employees',
-        'Impact Date': 'starting'
+        'Impact Date': 'starting',
+        'Reduction in Force': 'action',
     }
     rewrites = dict(
         starting=[
             ('10/01/1973', '2020-10-01'),
         ],
+        action=[
+            (_r(r'<br>'), ' '),
+            (_r(r' $'), ''),
+        ]
     )
 
-    def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
-        entry['action'] = '/'.join(
-            v for v in self.action_headers
-            if row.get(v) == 'Yes')
-        super().finish(entry, row)
+    # def finish(self, entry: dict[str, Any], row: dict[str, str]) -> None:
+    #     entry['action'] = '/'.join(
+    #         v for v in self.action_headers
+    #         if row.get(v) == 'Yes')
+    #     super().finish(entry, row)
 
 class VT(Translator, state='VT'):
     default_url = 'https://www.vermontjoblink.com/search/warn_lookups/new'
