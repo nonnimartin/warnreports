@@ -1,4 +1,4 @@
-# warn_reporter
+# warnreports
 
 ## Install
 
