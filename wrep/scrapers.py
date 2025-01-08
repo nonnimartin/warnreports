@@ -22,6 +22,8 @@ import requests
 from bs4 import BeautifulSoup as Soup
 from bs4.element import PageElement, ResultSet, Tag
 from openpyxl.worksheet.worksheet import Worksheet
+from requests.exceptions import HTTPError
+from retry import retry
 from typing_extensions import Buffer
 
 import warn.cache
@@ -90,12 +92,18 @@ class Scraper:
         if self.request_delay and self.request_count:
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
-        kw.setdefault('session', self.session)
-        kw.setdefault('user_agent', self.session.headers.get('User-Agent', self.user_agent))
         kw.setdefault('verify', self.ssl_verify)
-        rep = warn.utils.get_url(url, **kw)
+        check = kw.pop('check', True)
+        try:
+            rep = _req_get(self.session, url, check, **kw)
+        except Exception as err:
+            if isinstance(err, HTTPError) and err.response is not None:
+                status = err.response.status_code
+            else:
+                status = None
+            logger.error(f'Failed to get {url=} {status=}')
+            raise
         self.request_count += 1
-        rep.raise_for_status()
         if not kw.get('stream'):
             await asyncio.sleep(0)
         return rep
@@ -389,7 +397,6 @@ class GA(Scraper, state='GA'):
         text = await self.cache_fetch('latest.html', self.index_url)
         doc = bs(text, 'html5lib')
         payload = dict(self.payload, nonce=self.extract_nonce(doc))
-        self.session.headers = {'User-Agent': self.user_agent}
         rep = self.session.post(self.api_url, data=payload)
         rep.raise_for_status()
         index = {}
@@ -606,7 +613,7 @@ class MO(Scraper, state='MO'):
             url = f'{self.archive_url}/{key}'
             try:
                 rep = await self.cache_download(key, url)
-            except AssertionError:
+            except HTTPError:
                 if year == now.year:
                     logger.warning(f'Current year download failed, skipping {url=}')
                     continue
@@ -687,6 +694,7 @@ class NY(Scraper, state='NY'):
     base_url = 'https://dol.ny.gov'
     index_url = '/warn-notices'
     past_urls = {
+        '2024.html': '/2024-warn-notices',
         '2023.html': '/2023-warn-notices',
         '2022.html': '/2022-warn-notices',
         '2021.html': '/warn-notices-2021',
@@ -1192,6 +1200,10 @@ class VA(Scraper, state='VA'):
     
     NB: there are about 50 pages. you can filter by year. there is a select box that lists them.
     """
+    csv_url = 'https://www.virginiaworks.gov/warn_notices.csv'
+
+    async def scrape(self):
+        await self.cache_download(self.runner.file, self.csv_url)
 
 class Cache(warn.cache.Cache):
 
@@ -1280,6 +1292,12 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
     hash = h.hexdigest() if size else None
     return dict(hash=hash, size=size)
 
+@retry(tries=3, delay=15, backoff=2)
+def _req_get(session: requests.Session, url: str, check: bool, **kw) -> requests.Response:
+    rep = session.get(url, **kw)
+    if check:
+        rep.raise_for_status()
+    return rep
 
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
