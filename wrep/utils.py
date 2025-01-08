@@ -141,6 +141,10 @@ def build_css():
     with Path(outdir, 'bootstrap.min.css').open('w') as file:
         file.write(sass.compile(string=content, output_style='compressed'))
 
+def assets_build():
+    'Build static web assets'
+    build_css()
+
 class StrEnum(str, enum.Enum):
 
     def __str__(self):

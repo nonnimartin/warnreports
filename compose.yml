@@ -30,7 +30,8 @@ services:
       - .:/code
     ports: [127.0.0.1:8000:8000]
     environment:
-      UVICORN_RELOAD: 'true'
+      UVICORN_RELOAD: true
+      ASSETS_AUTO_BUILD: true
       MONGODB_URL: &mongourl ${MOGNODB_URL:-mongodb://root:wrep@mongo:27017/}
       DB_URL: ${DB_URL:-postgresql://wrep@postgres/wrep}
       CSS_BUILD_DIR: ${CSS_BUILD_DIR:-/build/css}

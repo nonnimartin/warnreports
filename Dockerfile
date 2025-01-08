@@ -1,4 +1,4 @@
-FROM python:3.12-alpine
+FROM docker.io/python:3.12-alpine
 VOLUME /build
 VOLUME /srv/artifacts
 WORKDIR /code
@@ -9,7 +9,7 @@ ENV CSS_BUILD_DIR=/srv/css
 ENV BOOTSTRAP_DIR=/usr/local/src/bootstrap
 ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
-RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev xvfb &&\
+RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
 RUN ./scripts/download-warn-scraper.sh &&\
@@ -17,3 +17,4 @@ RUN ./scripts/download-warn-scraper.sh &&\
 COPY ./requirements.txt ./
 RUN pip install -qqq --no-cache-dir --no-input -r requirements.txt
 COPY . .
+RUN wrep assets

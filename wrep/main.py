@@ -25,7 +25,8 @@ async def lifespan(app: FastAPI):
         logger.info(f'Running auto migrate')
         from .migrations import migrate
         migrate()
-    utils.build_css()
+    if settings.ASSETS_AUTO_BUILD:
+        utils.assets_build()
     app.mount('/static/scss', StaticFiles(directory=settings.CSS_BUILD_DIR))
     app.mount('/static', StaticFiles(directory=settings.STATIC_DIR), name='static')
     yield

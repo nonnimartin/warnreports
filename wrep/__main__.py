@@ -9,7 +9,8 @@ class Command(utils.BaseCommand):
         pipeline=pipeline.Command,
         search=search.Command,
         migrations=migrations.Command,
-        orm=orm.Command)
+        orm=orm.Command,
+        assets=utils.FuncCommand(utils.assets_build))
 
 if __name__ == '__main__':
     Command.main()

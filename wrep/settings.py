@@ -10,6 +10,7 @@ ALEMBIC_INI = REPODIR/'alembic.ini'
 BUILD_DIR = Path(getenv('BUILD_DIR', REPODIR/'build'))
 ARTIFACTS_DIR = Path(getenv('ARTIFACTS_DIR', BUILD_DIR/'artifacts'))
 BOOTSTRAP_DIR = Path(getenv('BOOTSTRAP_DIR', REPODIR/'lib'/'bootstrap'))
+ASSETS_AUTO_BUILD = getenv('ASSETS_AUTO_BUILD', '').lower() == 'true'
 CSS_BUILD_DIR = Path(getenv('CSS_BUILD_DIR', BUILD_DIR/'css'))
 NAICS_DOWNLOAD = 'https://github.com/owings1/naics/raw/2022-1/build/2022.min.json'
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
