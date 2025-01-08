@@ -1013,6 +1013,9 @@ class SC(Scraper, state='SC'):
         page = bs(text)
         for a in page.find_all('a'):
             href = a.get('href', '')
+            if href.endswith('2024_0.pdf'):
+                # Duplicate data
+                continue
             if href.endswith('.pdf'):
                 year = int(href.split('/')[-1][:4])
                 index.append((year, href))

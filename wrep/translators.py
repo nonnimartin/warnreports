@@ -1099,6 +1099,7 @@ class SC(Translator, state='SC'):
             (_r(r'^(/.*)$'), f'{base_url}\\1')
         ],
     )
+    values_hash_exclude = ['url']
 
     def value_artifacts(self, value):
         year = int(value.split('/')[-1][:4])
