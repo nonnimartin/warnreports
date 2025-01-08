@@ -22,10 +22,10 @@ uvicorn[standard]
 html5lib
 pyopenssl
 tenacity
-xlrd
+# xlrd
 retry
-selenium
-xvfbwrapper
-webdriver-manager
+# selenium
+# xvfbwrapper
+# webdriver-manager
 
 urllib3==1.26.18
