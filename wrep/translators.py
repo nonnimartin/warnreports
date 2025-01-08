@@ -982,6 +982,9 @@ class OH(Translator, state='OH'):
         'artifacts_json': 'artifacts',
     }
     rewrites=dict(
+        company=[
+            (_r(r'&amp;'), '&'),
+        ],
         reported=[
             ('01/30/201 7', '2017-01-30'),
         ],
