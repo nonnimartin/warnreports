@@ -986,6 +986,9 @@ class OH(Translator, state='OH'):
         'artifacts_json': 'artifacts',
     }
     rewrites=dict(
+        reported=[
+            ('01/30/201 7', '2017-01-30'),
+        ],
         starting=[
             REWRITE_COMPACT_DATERANGE,
         ]
