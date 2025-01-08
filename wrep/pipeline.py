@@ -81,6 +81,28 @@ class Pipeline:
         logger.info(f'{self.state}:{stage}:complete {summary}')
         return summary
 
+    async def stat(self, stage: Stage) -> dict:
+        stage = Stage(stage)
+        if stage in self.backends:
+            return await self.backends[stage].stat()
+        if stage is stage.Scrape:
+            return await self.scraper.stat()
+        if stage is stage.Load:
+            stat: dict[str, int] = {}
+            backend: MongoSearchIndex = self.backends[stage.Index]
+            filters = self.get_orm_select_filters()
+            with SessionLocal() as session:
+                for name, defn in backend.collections.items():
+                    if name in ('naics', 'states'):
+                        continue
+                    it = defn.orm_model.map_reduce_exec(
+                        session,
+                        *filters[defn.orm_model],
+                        lazy=bool(self.opts.get('lazy', True)))
+                    stat[name] = sum(1 for _ in it)
+            return stat
+        raise ValueError(stage)
+        
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'{self.state}:{stage}:clean')
@@ -105,25 +127,25 @@ class Pipeline:
 
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
-        prev = await self.scraper.stat()
+        prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
         await self.scraper.scrape()
-        cur = await self.scraper.stat()
+        cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         return dict(prev=prev, cur=cur, nochange=nochange)
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
         backend: ExtractionBackend = self.backends[stage]
-        prev = await backend.stat()
+        prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
         with self.scraper.extract() as source:
             count, _, _ = await backend.update(source)
-        cur = await backend.stat()
+        cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         return dict(count=count, prev=prev, cur=cur, nochange=nochange)
 
@@ -131,14 +153,14 @@ class Pipeline:
         stage = Stage.Translate
         backend: TranslationBackend = self.backends[stage]
         source: ExtractionBackend = self.backends[Stage.Extract]
-        prev = await backend.stat()
+        prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
         async with source.reader() as reader:
             it = utils.amap(self.translator.entry, reader)
             count, created, updated = await backend.update(it)
-        cur = await backend.stat()
+        cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         counts = dict(count=count, created=created, updated=updated)
         return counts | dict(prev=prev, cur=cur, nochange=nochange)
@@ -364,16 +386,20 @@ class PipelineRunner:
         states: Iterable[StateCode],
         clean: bool = False,
         clean_only: bool = False,
+        stat_only: bool = False,
         fail: bool = False,
         incremental: bool = False,
         concurrent: bool = False,
         lazy: bool|int = True,
     ):
-        if clean_only and (clean or incremental):
-            raise ValueError(f'Cannot specify clean_only with clean or incremental')
+        if clean_only and (clean or incremental or stat_only):
+            raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
+        if stat_only and (clean or incremental or clean_only):
+            raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
         self.id = uuid.uuid4()
         self.clean = clean
         self.clean_only = clean_only
+        self.stat_only = stat_only
         self.incremental = incremental
         self.concurrent = concurrent
         self.fail = fail
@@ -433,6 +459,10 @@ class PipelineRunner:
             elif self.clean_only:
                 await pipeline.clean(stage)
                 res.update(clean_only=True)
+            elif self.stat_only:
+                stat = await pipeline.stat(stage)
+                logger.info(f'{state}:{stage}:stat {stat}')
+                res.update(stat_only=True)
             else:
                 try:
                     res.update(await pipeline.run(stage, clean=self.clean))
@@ -464,6 +494,7 @@ class Command(utils.BaseCommand):
         parser.add_argument('states', nargs='*', metavar='state')
         parser.add_argument('--clean', '-c', action='store_true')
         parser.add_argument('--clean-only', '-x', action='store_true')
+        parser.add_argument('--stat-only', '-s', action='store_true')
         parser.add_argument('--nofail', '-n', action='store_false', dest='fail')
         parser.add_argument('--incremental', '-i', action='store_true')
         parser.add_argument('--concurrent', '-t', action='store_true')
