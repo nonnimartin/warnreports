@@ -43,6 +43,9 @@ class Scraper:
     user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
     request_delay = 0
     ssl_verify = True
+    retry_tries = 3
+    retry_delay = 10
+    retry_backoff = 2
 
     def __init__(self):
         self.runner = Runner(self.state)
@@ -51,6 +54,13 @@ class Scraper:
         self.cache = Cache(self.state)
         self.artifacts = Artifacts(self.state)
         self.request_count = 0
+        @retry(tries=self.retry_tries, delay=self.request_delay, backoff=self.retry_backoff)
+        def req_get_retry(url: str, check: bool = True, **kw) -> requests.Response:
+            rep = self.session.get(url, **kw)
+            if check:
+                rep.raise_for_status()
+            return rep
+        self._req_get_retry = req_get_retry
 
     async def clean(self) -> None:
         self.runner.file.unlink(missing_ok=True)
@@ -96,9 +106,8 @@ class Scraper:
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
         kw.setdefault('verify', self.ssl_verify)
-        check = kw.pop('check', True)
         try:
-            rep = _req_get(self.session, url, check, **kw)
+            rep = self._req_get_retry(url, **kw)
         except Exception as err:
             if isinstance(err, HTTPError) and err.response is not None:
                 status = err.response.status_code
@@ -606,6 +615,7 @@ class MD(Scraper, state='MD'):
     # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
     index_url = '/warn.shtml'
+    retry_tries = 5
 
     async def scrape(self):
         page = bs(await self.cache_fetch('latest.html', self.index_url))
@@ -646,9 +656,7 @@ class MD(Scraper, state='MD'):
             yield bs(file.read_bytes(), 'html5lib').find('table')
 
     def list_page_files(self) -> list[Path]:
-        it = self.cache.files('.', '*.html')
-        it = map(self.cache.topath, it)
-        return sorted(it, reverse=True)
+        return sorted(self.cache.glob('*.html'), reverse=True)
 
 class MO(Scraper, state='MO'):
     start_year = 2019
@@ -1350,13 +1358,6 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
             size += len(buf)
     hash = h.hexdigest() if size else None
     return dict(hash=hash, size=size)
-
-@retry(tries=3, delay=15, backoff=2)
-def _req_get(session: requests.Session, url: str, check: bool, **kw) -> requests.Response:
-    rep = session.get(url, **kw)
-    if check:
-        rep.raise_for_status()
-    return rep
 
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
