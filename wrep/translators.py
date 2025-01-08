@@ -935,6 +935,7 @@ class NY(Translator, state='NY'):
         'Closure Start Date': 'starting',
         'Closing Date': 'starting',
         'Layoff Date': 'starting',
+        'Layoff Start Date': 'starting',
         'City': 'location',
         'Region': 'location',
         'date_posted': 'location',
