@@ -66,6 +66,14 @@ COMPANY_NAME: Norms = {
     ]},
     'Tesla Inc': 'Tesla',
     'Amazon.com': 'Amazon',
+    _r(r'^a\.\s*o\.\s+smith(\s.*|$)', re.I): 'A. O. Smith',
+    **{value: 'Advanced Micro Devices' for value in [
+        'Advanced Micro Devices (AMD)',
+        'Advanced Micro Devices Inc',
+        'AMD Inc',
+    ]},
+    _r(r'^.*Levi Strauss & Co.*$'): 'Levi Strauss & Company',
+    _r(r'^Leviton (Manufacturing|Mfg).*', re.I): 'Leviton Manufacturing Company',
 }
 
 PAT_NONALPHA = _r(r'[^a-z\d\s]')
