@@ -97,7 +97,9 @@ class MongoETBase(StageBackend):
         return self.mongo.get_collection(self.collection_name)
 
     async def clean(self) -> None:
-        await self.collection.delete_many(self.get_filter())
+        filt = self.get_filter()
+        res = await self.collection.delete_many(filt)
+        logger.debug(f'{filt=} {res=}')
 
     @asynccontextmanager
     async def reader(self):
@@ -108,9 +110,6 @@ class MongoETBase(StageBackend):
         async with self.reader() as reader:
             it = utils.amap(self.clean_stat_doc, reader)
             return await docs_stat(it)
-
-    def get_filter(self) -> Doc:
-        return {}
 
     def clean_doc(self, doc: Doc) -> Doc:
         for key in self.clean_keys:
@@ -139,7 +138,7 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
         return await update_collection(self.collection, it, self.get_replace_filter)
 
     def get_replace_filter(self, doc: Doc) -> Doc:
-        return dict(_i=doc['_i'])
+        return dict(_i=doc['_i'], state=self.state)
 
     indexes = [
         IndexModel({'state': 1}),
