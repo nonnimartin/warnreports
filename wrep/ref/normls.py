@@ -66,6 +66,20 @@ COMPANY_NAME: Norms = {
     ]},
     'Tesla Inc': 'Tesla',
     'Amazon.com': 'Amazon',
+    _r(r'^a\.\s*o\.\s+smith(\s.*|$)', re.I): 'A. O. Smith',
+    **{value: 'Advanced Micro Devices' for value in [
+        'Advanced Micro Devices (AMD)',
+        'Advanced Micro Devices Inc',
+        'AMD Inc',
+    ]},
+    _r(r'^.*Levi Strauss & Co.*$'): 'Levi Strauss & Company',
+    _r(r'^Leviton (Manufacturing|Mfg).*', re.I): 'Leviton Manufacturing Company',
+    _r(r'^Levy Premium Food\s*service.*', re.I): 'Levy Premium Foodservice',
+    _r(r'^Lockheed Martin.*$', re.I): 'Lockheed Martin',
+    _r(r'^Lord\s*(&|\+|and)\s*(Taylor|Tyalor)(\s.*|$)', re.I): 'Lord & Taylor',
+    _r(r'^LSC Communications.*', re.I): 'LSC Communications',
+    _r(r'^LTF Club Management.*', re.I): 'LTF Club Management Company',
+    _r(r'^Radisson .*', re.I): 'Radisson Hotel',
 }
 
 PAT_NONALPHA = _r(r'[^a-z\d\s]')

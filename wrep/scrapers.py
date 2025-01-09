@@ -9,7 +9,7 @@ import shutil
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from itertools import chain
+from itertools import chain, filterfalse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
 from urllib.parse import urlparse
@@ -43,6 +43,9 @@ class Scraper:
     user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
     request_delay = 0
     ssl_verify = True
+    retry_tries = 3
+    retry_delay = 10
+    retry_backoff = 2
 
     def __init__(self):
         self.runner = Runner(self.state)
@@ -51,6 +54,13 @@ class Scraper:
         self.cache = Cache(self.state)
         self.artifacts = Artifacts(self.state)
         self.request_count = 0
+        @retry(tries=self.retry_tries, delay=self.request_delay, backoff=self.retry_backoff)
+        def req_get_retry(url: str, check: bool = True, **kw) -> requests.Response:
+            rep = self.session.get(url, **kw)
+            if check:
+                rep.raise_for_status()
+            return rep
+        self._req_get_retry = req_get_retry
 
     async def clean(self) -> None:
         self.runner.file.unlink(missing_ok=True)
@@ -68,7 +78,10 @@ class Scraper:
 
     async def fetch(self, url: str, **kw) -> str:
         rep = await self.req_get(url, **kw)
-        return rep.content.decode()
+        try:
+            return rep.content.decode()
+        except UnicodeDecodeError:
+            return rep.text
 
     async def cache_fetch(self, key: str, url: str, **kw) -> str:
         text = await self.fetch(url, **kw)
@@ -93,9 +106,8 @@ class Scraper:
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
         kw.setdefault('verify', self.ssl_verify)
-        check = kw.pop('check', True)
         try:
-            rep = _req_get(self.session, url, check, **kw)
+            rep = self._req_get_retry(url, **kw)
         except Exception as err:
             if isinstance(err, HTTPError) and err.response is not None:
                 status = err.response.status_code
@@ -545,11 +557,65 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
+class LA(Scraper, state='LA'):
+    base_url = 'https://www.laworks.net'
+    index_url = f'/Downloads/Downloads_WFD.asp'
+    # PDFs no longer available for download after site redesign.
+    historical_urls = [
+        f'https://archive.warnreports.org/s/LA/historical/WarnNotices{y}.pdf'
+        for y in range(2007, 2024)]
+
+    async def scrape(self):
+        index = {}
+        page = bs(await self.cache_fetch('latest.html', self.index_url))
+        recent = (utils.now().year, utils.now().year - 1)
+        for a in page.find_all('a'):
+            url = a.get('href', '')
+            if 'WARN Notices' in a.text and url.endswith('.pdf'):
+                key = url.split('/')[-1]
+                if (
+                    not self.cache.exists(key) or
+                    any(str(y) in key for y in recent)
+                ):
+                    await self.cache_download(key, url)
+                index[key] = self.absurl(url)
+        for url in self.historical_urls:
+            key = url.split('/')[-1]
+            if not self.cache.exists(key):
+                await self.cache_download(key, url)
+            if key not in index:
+                index[key] = url
+        index = {key: index[key] for key in sorted(index, reverse=True)}
+        self.cache.write_json('index.json', index, indent=2)
+
+    async def stat(self):
+        return hashstat(self.cache.glob('*.pdf'))
+
+    async def clean(self):
+        self.cache.delete(*self.cache.glob('*.pdf', '*.html', '*.csv', '*.json'))
+
+    @contextmanager
+    def extract(self):
+        from warn.scrapers import la
+        index = self.cache.read_json('index.json')
+        headers: list[str] = []
+        def readfile(key: str):
+            url = index[key]
+            rows = la._process_pdf(self.cache.topath(key))
+            if not headers:
+                headers.extend(next(filter(la._is_clean_header, rows)))
+                headers.append('url')
+            for values in filterfalse(la._is_header, rows):
+                values.append(url)
+                yield dict(zip(headers, values))
+        yield chain.from_iterable(map(readfile, index))
+
 class MD(Scraper, state='MD'):
     # Scrape time: 3s
     # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
     index_url = '/warn.shtml'
+    retry_tries = 5
 
     async def scrape(self):
         page = bs(await self.cache_fetch('latest.html', self.index_url))
@@ -590,9 +656,7 @@ class MD(Scraper, state='MD'):
             yield bs(file.read_bytes(), 'html5lib').find('table')
 
     def list_page_files(self) -> list[Path]:
-        it = self.cache.files('.', '*.html')
-        it = map(self.cache.topath, it)
-        return sorted(it, reverse=True)
+        return sorted(self.cache.glob('*.html'), reverse=True)
 
 class MO(Scraper, state='MO'):
     start_year = 2019
@@ -957,6 +1021,9 @@ class SC(Scraper, state='SC'):
         page = bs(text)
         for a in page.find_all('a'):
             href = a.get('href', '')
+            if href.endswith('2024_0.pdf'):
+                # Duplicate data
+                continue
             if href.endswith('.pdf'):
                 year = int(href.split('/')[-1][:4])
                 index.append((year, href))
@@ -1291,13 +1358,6 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
             size += len(buf)
     hash = h.hexdigest() if size else None
     return dict(hash=hash, size=size)
-
-@retry(tries=3, delay=15, backoff=2)
-def _req_get(session: requests.Session, url: str, check: bool, **kw) -> requests.Response:
-    rep = session.get(url, **kw)
-    if check:
-        rep.raise_for_status()
-    return rep
 
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):

@@ -757,9 +757,10 @@ class KY(Translator, state='KY'):
         ],
     )
 
-class LA(ReportedYearToUrl, state='LA'):
+class LA(Translator, state='LA'):
     base_url = 'https://www.laworks.net'
     default_url = base_url
+    values_hash_exclude = ['url', 'starting', 'industry']
     headermap = {
         'Company Name': 'company',
         'Notice Date': 'reported',
@@ -767,25 +768,20 @@ class LA(ReportedYearToUrl, state='LA'):
         'Employees Affected': 'employees',
         'Layoff Date': 'starting',
         'Industry': 'industry',
-        # TODO: action
+        'url': 'url',
     }
     rewrites = dict(
         starting=[
             REWRITE_COMPACT_DATERANGE,
             ('6/31/09', '2009-06-30'),
             ('5/1820', '2020-05-18'),
+            ('10/3124', '2024-10-31'),
         ],
         industry=[
             ('Department Store', 'Department Stores'),
             ('Pre-fabricated Buildings', '332311'),
         ]
     )
-
-    def get_reported_year_url(self, year: int) -> str:
-        return f'{self.base_url}/Downloads/WFD/WarnNotices{year}.pdf'
-
-    def is_valid_url_year(self, year: int) -> bool:
-        return year >= 2007
 
 class MD(Translator, state='MD'):
     default_url = 'https://www.dllr.state.md.us/employment/warn.shtml'
@@ -935,6 +931,7 @@ class NY(Translator, state='NY'):
         'Closure Start Date': 'starting',
         'Closing Date': 'starting',
         'Layoff Date': 'starting',
+        'Layoff Start Date': 'starting',
         'City': 'location',
         'Region': 'location',
         'date_posted': 'location',
@@ -985,6 +982,12 @@ class OH(Translator, state='OH'):
         'artifacts_json': 'artifacts',
     }
     rewrites=dict(
+        company=[
+            (_r(r'&amp;'), '&'),
+        ],
+        reported=[
+            ('01/30/201 7', '2017-01-30'),
+        ],
         starting=[
             REWRITE_COMPACT_DATERANGE,
         ]
@@ -1099,6 +1102,7 @@ class SC(Translator, state='SC'):
             (_r(r'^(/.*)$'), f'{base_url}\\1')
         ],
     )
+    values_hash_exclude = ['url']
 
     def value_artifacts(self, value):
         year = int(value.split('/')[-1][:4])
