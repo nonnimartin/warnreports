@@ -403,11 +403,11 @@ class PipelineRunner:
         self.incremental = incremental
         self.concurrent = concurrent
         self.fail = fail
+        self.lazy = lazy
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
-        self.pipelines = [Pipeline(state, lazy=lazy) for state in self.states]
         self.errors: list[tuple[StateCode, Stage, Exception]] = []
-        self.size = len(self.pipelines) * len(self.stages)
+        self.size = len(self.states) * len(self.stages)
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
         self.grouping: tuple[list[Stage], ...] = [], [], []
         for stage in self.stages:
@@ -433,24 +433,23 @@ class PipelineRunner:
         await run_concurrently(*next(it))
 
     async def run_consecutively(self, *stages: Stage) -> None:
-        for pipeline in self.pipelines:
-            await self.run_pipeline(pipeline, *stages)
+        for state in self.states:
+            await self.run_pipeline(state, *stages)
 
     async def run_concurrently(self, *stages: Stage) -> None:
-        for pipelines in batched(self.pipelines, 4):
+        for states in batched(self.states, 4):
             async with asyncio.TaskGroup() as group:
-                for pipeline in pipelines:
-                    group.create_task(self.run_pipeline(pipeline, *stages))
+                for state in states:
+                    group.create_task(self.run_pipeline(state, *stages))
 
-    async def run_pipeline(self, pipeline: Pipeline, *stages: Stage) -> None:
-        failed = False
+    async def run_pipeline(self, state: StateCode, *stages: Stage) -> None:
         for stage in stages:
             start = utils.now()
-            state = pipeline.state
             res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
             self.jobseq += 1
             res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
-            if failed:
+            pipeline = Pipeline(state, lazy=self.lazy)
+            if self._last_failed(state):
                 logger.info(f'{state}:{stage}:skip Previous stage failed')
                 res.update(skip=True, last_failed=True)
             elif self._should_skip(state):
@@ -469,15 +468,21 @@ class PipelineRunner:
                 except Exception as err:
                     if self.fail:
                         raise
-                    failed = True
                     res.update(failed=True, error=f'{type(err).__name__}: {err}')
                     self.errors.append((state, stage, err))
                     logger.exception(f'{state}:{stage}:fail')
                     capture_exception()
             end = utils.now()
             res.update(end=end, elapsed=(end - start).total_seconds())
-            self.runs[pipeline.state].append(res)
-            await self.logbackend.save([res])
+            self.runs[state].append(res)
+            if not self.stat_only:
+                await self.logbackend.save([res])
+
+    def _last_failed(self, state: StateCode) -> bool:
+        if (runs := self.runs[state]):
+            res = runs[-1]
+            return bool(res.get('failed') or res.get('last_failed'))
+        return False
 
     def _should_skip(self, state: StateCode) -> bool:
         return bool(
@@ -511,11 +516,11 @@ class Command(utils.BaseCommand):
 
     @staticmethod
     def stages_opt(value: str) -> list[Stage]:
+        value = value.lower()
         if value == 'all':
             return list(Stage)
-        values = map(str.lower, value.split(','))
         stages = []
-        for value in values:
+        for value in value.split(','):
             if len(value) == 1:
                 for stage in Stage:
                     if stage[0] == value:
