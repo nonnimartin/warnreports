@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from html import unescape as html_unescape
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import HttpUrl
 
@@ -37,12 +38,12 @@ translators: dict[str, type[Translator]] = {}
 
 class Translator:
 
-    tz = timezone.utc
-    headermap: dict[str, str] = {}
-    default_url: str|None = None
-    values_hash_exclude: list[str] = []
-    report_id_extra: list[str] = []
-    rewrites: dict[str, list[tuple[str|re.Pattern, str]]] = dict(
+    tz: ClassVar = timezone.utc
+    headermap: ClassVar[dict[str, str]] = {}
+    default_url: ClassVar[str|None] = None
+    values_hash_exclude: ClassVar[list[str]] = []
+    report_id_extra: ClassVar[list[str]] = []
+    rewrites: ClassVar[dict[str, list[tuple[str|re.Pattern, str]]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
             (_r(r'\d{1,2}/\d{1,2}/\d{2,4}'), ''), # remove dates M/D/Y
@@ -50,6 +51,20 @@ class Translator:
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
         ]
     )
+    _session: orm.Session|None = None
+
+    @property
+    @contextmanager
+    def session(self):
+        if self._session:
+            yield self._session
+        else:
+            with orm.SessionLocal() as session:
+                yield session
+
+    @session.setter
+    def session(self, value: orm.Session|None) -> None:
+        self._session = value
 
     def entry(self, row: dict[str, Any]) -> dict[str, Any]:
         'Translate a source row to an entry'
@@ -179,7 +194,7 @@ class Translator:
         scrape_time: datetime|None = entry.pop('scrape_time', None)
         if scrape_time:
             stmt = orm.select(ReportMod).where(ReportMod.id == entry['id'])
-            with orm.SessionLocal() as session:
+            with self.session as session:
                 repmod = session.scalar(stmt)
                 if not repmod:
                     repmod = ReportMod(id=entry['id'], ns=self.namespace)

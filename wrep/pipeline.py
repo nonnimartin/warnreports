@@ -158,8 +158,11 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         async with source.reader() as reader:
-            it = utils.amap(self.translator.entry, reader)
-            count, created, updated = await backend.update(it)
+            with SessionLocal() as session:
+                self.translator.session = session
+                it = utils.amap(self.translator.entry, reader)
+                count, created, updated = await backend.update(it)
+            self.translator.session = None
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         counts = dict(count=count, created=created, updated=updated)
