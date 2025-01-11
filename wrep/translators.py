@@ -1043,6 +1043,9 @@ class OR(Translator):
     # Duplicate WARN# values for unrelated reports
     report_id_extra = ['reported', 'starting', 'employees', 'location', 'company']
 
+class PA(Translator):
+    ...
+
 class RI(Translator):
     default_url = 'https://dlt.ri.gov/employers/worker-adjustment-and-retraining-notification-warn'
     headermap = {

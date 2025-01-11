@@ -988,6 +988,23 @@ class OH(Scraper):
             index[notice_id] = artifacts
         return dict(index)
 
+class PA(Scraper):
+    base_url = 'https://www.pa.gov'
+    index_url = '/agencies/dli/programs-services/workforce-development-home/warn-requirements/warn-notices.html'
+
+    async def scrape(self) -> None:
+        await self.cache_download('latest.html', self.index_url)
+
+    async def clean(self) -> None:
+        self.cache.delete('latest.html')
+
+    def statobjs(self):
+        yield self.cache.topath('latest.html')
+
+    @contextmanager
+    def extract(self):
+        yield ()
+
 class SC(Scraper):
     base_url = 'https://scworks.org'
     index_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
