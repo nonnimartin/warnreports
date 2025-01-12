@@ -524,6 +524,7 @@ class FL(ReportedYearToUrl):
     rewrites = dict(
         company=[
             (_r(r'\n.*'), ''),
+            ('Sikorsky, a', 'Sikorsky'),
         ],
         url=[
             (_r(r'^(.+)$'), f'{base_url}/WarnList/DownloadAzureFile?file=\\1'),
@@ -1259,6 +1260,10 @@ class TX(Translator):
             (_r(r"'$"), ''),
             # TODO: Dallas4 Plano2 etc.
             (_r(r'(dallas|plano|austin|antonio|houston|worth|el paso)\d', re.I), r'\1'),
+            (_r(r'^Sprint-.*'), 'Sprint'),
+        ],
+        location=[
+            (_r(r'^ft\.? worth$', re.I), 'Fort Worth'),
         ],
         starting=[
             ('1930-03-30 00:00:00', '2020-03-30'),
