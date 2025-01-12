@@ -44,6 +44,9 @@ COMPANY_NAMES = {
     'Avis Budget': [
         _r(r'^Avis Budget.*', re.I),
     ],
+    'BAE Systems': [
+        _r(r'^BAE Systems.*', re.I),
+    ],
     'Bank of America': [
         _r(r'^Bank of America.*', re.I),
     ],
@@ -63,6 +66,9 @@ COMPANY_NAMES = {
     'Dollar Express': [
         _r(r'^Dollar Express.*', re.I),
     ],
+    'Enterprise Holdings': [
+        _r(r'^Enterprise Holdings.*', re.I),
+    ],
     'Ericsson Inc': [
         _r(r'^Ericsson,? Inc.*', re.I),
     ],
@@ -72,11 +78,17 @@ COMPANY_NAMES = {
     'Goodwill': [
         _r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
     ],
+    'Hawker Beechcraft': [
+        _r(r'^Hawker Beechcraft Corp.*', re.I),
+    ],
     'Hostess Brands': [
         _r(r'^Hostess( Brand.*)?$', re.I),
     ],
     'Intel Corporation': [
         _r(r'^Intel( Corp.*)?$', re.I),
+    ],
+    'Jabil': [
+        _r(r'^(Nypro .*)?Jabil( .*)$', re.I),
     ],
     'Kaiser Foundation': [
         _r(r'^Kaiser Foundation.*', re.I),
@@ -115,6 +127,9 @@ COMPANY_NAMES = {
     "P.F. Chang's": [
         _r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
     ],
+    'Qualcomm': [
+        _r(r'^Qualcomm.*', re.I),
+    ],
     'Radisson Hotel': [
         _r(r'^Radisson .*', re.I),
     ],
@@ -152,6 +167,9 @@ COMPANY_NAMES = {
     ],
     'SunPower': [
         _r(r'^SunPower( Corp.*)?$', re.I),
+    ],
+    'Symantec': [
+        _r(r'^Symantec( -.*|Corp.*)?$', re.I),
     ],
     'Tesla': [
         'Tesla Inc',
