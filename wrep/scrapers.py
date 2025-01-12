@@ -9,6 +9,7 @@ import shutil
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
@@ -69,7 +70,10 @@ class Scraper:
         self.runner.scrape()
 
     async def stat(self) -> dict[str, Any]:
-        return self.runner.stat()
+        return hashstat(self.statobjs())
+
+    def statobjs(self) -> Iterable[Any]:
+        yield from self.runner.statobjs()
 
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
@@ -121,13 +125,13 @@ class Scraper:
         return rep
 
     def absurl(self, url: str) -> str:
-        if not url.startswith('http://') and not url.startswith('https://') and self.base_url:
+        if self.base_url and not any(map(url.startswith, ('http://', 'https://'))):
             url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
         return url
 
-    def __init_subclass__(cls, state: str|None = None) -> None:
-        if state:
-            cls.state = state.upper()
+    def __init_subclass__(cls) -> None:
+        if len(name := cls.__name__.upper()) == 2:
+            cls.state = name
             scrapers[cls.state] = cls
 
 def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
@@ -139,9 +143,7 @@ def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
     headers = next(it)
     for values in filter(any, it):
         row = {}
-        for k, v in zip(headers, values):
-            if not (k or v):
-                continue
+        for k, v in filter(any, zip(headers, values)):
             if v is None:
                 v = ''
             elif isinstance(v, datetime):
@@ -151,10 +153,10 @@ def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
             row[k] = v
         yield row
 
-class AK(Scraper, state='AK'):
+class AK(Scraper):
     base_url = 'https://jobs.alaska.gov'
     index_url = '/RR/WARN_notices.htm'
-    space_pat = re.compile(r'[\s\n]+')
+    space_pat = _r(r'[\s\n]+')
 
     async def scrape(self) -> None:
         await self.cache_download('latest.html', self.index_url)
@@ -162,12 +164,9 @@ class AK(Scraper, state='AK'):
     async def clean(self):
         self.cache.delete('latest.html')
 
-    async def stat(self):
-        objs = []
+    def statobjs(self):
         if self.cache.exists('latest.html'):
-            page = bs(self.cache.read('latest.html'))
-            objs.append(page.find('table').text)
-        return hashstat(objs)
+            yield bs(self.cache.read('latest.html')).find('table')
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
@@ -195,7 +194,7 @@ class AK(Scraper, state='AK'):
             return self.base_url + a['href']
         return ''
 
-class CA(Scraper, state='CA'):
+class CA(Scraper):
     base_url = 'https://edd.ca.gov'
     index_url = '/Jobs_and_Training/Layoff_Services_WARN.htm'
     hrefpat = re.compile(r'warn[-_]?report', re.I)
@@ -217,10 +216,9 @@ class CA(Scraper, state='CA'):
     async def clean(self):
         self.cache.delete('latest.html', 'index.json')
 
-    async def stat(self):
-        files = self.list_record_files()
-        files += [self.cache.topath('index.json')]
-        return hashstat(files)
+    def statobjs(self):
+        yield from self.list_record_files()
+        yield self.cache.topath('index.json')
 
     @contextmanager
     def extract(self):
@@ -246,7 +244,7 @@ class CA(Scraper, state='CA'):
     def load_index(self) -> dict[str, str]:
         return self.cache.read_json('index.json')
 
-class CO(Scraper, state='CO'):
+class CO(Scraper):
 
     async def scrape(self):
         self.runner.scrape()
@@ -265,20 +263,19 @@ class CO(Scraper, state='CO'):
     async def clean(self):
         self.cache.delete('normalized.csv')
 
-    async def stat(self):
-        files = [self.cache.topath('normalized.csv')]
-        return hashstat(files)
+    def statobjs(self):
+        yield self.cache.topath('normalized.csv')
 
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
         with self.cache.open('normalized.csv') as file:
             yield csv.DictReader(file, restkey='__')
 
-class CT(Scraper, state='CT'):
+class CT(Scraper):
     ...
     # TODO: get record url and pdf artifacts
 
-class DE(Scraper, state='DE'):
+class DE(Scraper):
     base_url = 'https://joblink.delaware.gov'
     index_url = '/search/warn_lookups?commit=Search&page=1&q%5Bs%5D=notice_on+desc'
     request_delay = 1
@@ -321,10 +318,9 @@ class DE(Scraper, state='DE'):
         for path in self.list_page_files():
             path.unlink()
 
-    async def stat(self):
-        files = [self.cache.topath('index.json')]
-        files += self.list_record_files()
-        return hashstat(files)
+    def statobjs(self):
+        yield self.cache.topath('index.json')
+        yield from self.list_record_files()
 
     @contextmanager
     def extract(self):
@@ -358,7 +354,7 @@ class DE(Scraper, state='DE'):
         files.sort(reverse=True)
         return list(map(Path, files))
 
-class FL(Scraper, state='FL'):
+class FL(Scraper):
 
     async def scrape(self) -> None:
         self.runner.scrape()
@@ -396,7 +392,7 @@ class FL(Scraper, state='FL'):
     def row_key(self, values: Iterable[str]) -> str:
         return ''.join(re.sub(r'\s', '', value) for value in values)
 
-class GA(Scraper, state='GA'):
+class GA(Scraper):
     base_url = 'https://www.tcsg.edu'
     index_url = '/warn-public-view/'
     api_url = f'{base_url}/wp-admin/admin-ajax.php'
@@ -424,10 +420,9 @@ class GA(Scraper, state='GA'):
         await super().clean()
         self.cache.delete('latest.html', 'index.json')
 
-    async def stat(self):
-        files = [self.cache.topath('index.json')]
-        files += self.list_record_files()
-        return hashstat(files)
+    def statobjs(self):
+        yield self.cache.topath('index.json')
+        yield from self.list_record_files()
 
     @contextmanager
     def extract(self):
@@ -485,7 +480,7 @@ class GA(Scraper, state='GA'):
         setUrlOnSearch=True,
         shortcode_atts=dict(id=77460))
 
-class IL(Scraper, state='IL'):
+class IL(Scraper):
     # Scrape time: ~20s
     # Extract time: ~7s
     source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export?search=&layoffTypes=&trade=0&dateReportedStart=Invalid%20Date&dateReportedEnd=Invalid%20Date&statuses=4&reasons=&eventCauses=&naicsCodes=1&naicIndustries=&naics=&unionsInvolved=0&geolocation=1&cities=&counties=&lwias=&includeAdditionalLwias=false&edrs=&lat=0&lng=0&distance=.5&memberType=1&users=&accessList=&bookmarked=false'
@@ -494,8 +489,8 @@ class IL(Scraper, state='IL'):
         await self.cache_download('export.xlsx', self.source_url)
         self.artifacts.add('export.xlsx', self.cache.topath('export.xlsx'))
 
-    async def stat(self):
-        return hashstat([self.cache.topath('export.xlsx')])
+    def statobjs(self):
+        yield self.cache.topath('export.xlsx')
 
     async def clean(self):
         self.cache.delete('export.xlsx')
@@ -506,7 +501,7 @@ class IL(Scraper, state='IL'):
         it = extract_xlsx(self.cache.topath('export.xlsx'))
         yield (row|extra for row in it)
 
-class IN(Scraper, state='IN'):
+class IN(Scraper):
     # Scrape time: < 2s
     # Extract time: < 2s
     base_url = 'https://www.in.gov'
@@ -518,12 +513,9 @@ class IN(Scraper, state='IN'):
     async def clean(self) -> None:
         self.cache.delete('latest.html')
 
-    async def stat(self):
+    def statobjs(self):
         if self.cache.exists('latest.html'):
-            it = bs(self.cache.read('latest.html')).find_all('table')
-        else:
-            it = ()
-        return hashstat(it)
+            yield from bs(self.cache.read('latest.html')).find_all('table')
 
     @contextmanager
     def extract(self):
@@ -557,7 +549,7 @@ class IN(Scraper, state='IN'):
             return self.base_url + a['href']
         return cell.text.strip()
 
-class LA(Scraper, state='LA'):
+class LA(Scraper):
     base_url = 'https://www.laworks.net'
     index_url = f'/Downloads/Downloads_WFD.asp'
     # PDFs no longer available for download after site redesign.
@@ -588,8 +580,8 @@ class LA(Scraper, state='LA'):
         index = {key: index[key] for key in sorted(index, reverse=True)}
         self.cache.write_json('index.json', index, indent=2)
 
-    async def stat(self):
-        return hashstat(self.cache.glob('*.pdf'))
+    def statobjs(self):
+        yield from self.cache.glob('*.pdf')
 
     async def clean(self):
         self.cache.delete(*self.cache.glob('*.pdf', '*.html', '*.csv', '*.json'))
@@ -610,7 +602,7 @@ class LA(Scraper, state='LA'):
                 yield dict(zip(headers, values))
         yield chain.from_iterable(map(readfile, index))
 
-class MD(Scraper, state='MD'):
+class MD(Scraper):
     # Scrape time: 3s
     # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
@@ -631,8 +623,8 @@ class MD(Scraper, state='MD'):
         for file in self.list_page_files():
             file.unlink()
 
-    async def stat(self):
-        return hashstat(self.get_tables())
+    def statobjs(self):
+        yield from self.get_tables()
 
     @contextmanager
     def extract(self):
@@ -658,7 +650,7 @@ class MD(Scraper, state='MD'):
     def list_page_files(self) -> list[Path]:
         return sorted(self.cache.glob('*.html'), reverse=True)
 
-class MO(Scraper, state='MO'):
+class MO(Scraper):
     start_year = 2019
     base_url = 'https://jobs.mo.gov/warn'
     archive_url = 'https://archive.warnreports.org/s/MO'
@@ -693,11 +685,9 @@ class MO(Scraper, state='MO'):
         for path in self.list_page_files():
             path.unlink()
 
-    async def stat(self):
-        it = self.list_page_files()
-        it = (bs(file.read_bytes()) for file in it)
-        it = (page.find('table').text for page in it)
-        return hashstat(it)
+    def statobjs(self):
+        for file in self.list_page_files():
+            yield bs(file.read_bytes()).find('table')
 
     @contextmanager
     def extract(self):
@@ -728,15 +718,15 @@ class MO(Scraper, state='MO'):
         files.sort(reverse=True)
         return list(map(Path, files))
 
-class NJ(Scraper, state='NJ'):
+class NJ(Scraper):
     base_url = 'https://www.nj.gov/labor'
     index_url = '/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
 
     async def scrape(self):
         await self.cache_download('latest.xlsx', self.index_url)
 
-    async def stat(self):
-        return hashstat([self.cache.topath('latest.xlsx')])
+    def statobjs(self):
+        yield self.cache.topath('latest.xlsx')
 
     async def clean(self):
         self.cache.delete('latest.xlsx')
@@ -754,7 +744,7 @@ class NJ(Scraper, state='NJ'):
         it = extract_xlsx_worksheet(ws)
         return (row|extra for row in it)
 
-class NY(Scraper, state='NY'):
+class NY(Scraper):
     base_url = 'https://dol.ny.gov'
     index_url = '/warn-notices'
     past_urls = {
@@ -789,12 +779,10 @@ class NY(Scraper, state='NY'):
     async def clean(self):
         self.cache.delete('latest.html', 'artifacts.json', *self.past_urls)
 
-    async def stat(self):
-        objs = list(map(self.cache.topath, self.past_urls))
+    def statobjs(self):
+        yield from map(self.cache.topath, self.past_urls)
         if self.cache.exists('latest.html'):
-            table = self.find_table(bs(self.cache.read('latest.html')))
-            objs.append(table.text)
-        return hashstat(objs)
+            yield self.find_table(bs(self.cache.read('latest.html')))
 
     @contextmanager
     def extract(self):
@@ -848,7 +836,7 @@ class NY(Scraper, state='NY'):
             key = self.pdf_keytrans.get(key, key)
             yield key, value
 
-class OH(Scraper, state='OH'):
+class OH(Scraper):
     base_url = 'https://jfs.ohio.gov'
     archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
     index_url = '/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures'
@@ -913,8 +901,8 @@ class OH(Scraper, state='OH'):
         for file in self.cache.glob('*.html', '*.json', '*.csv'):
             file.unlink()
 
-    async def stat(self):
-        return hashstat(sorted(self.cache.glob('*.json', 'oh_historical.csv')))
+    def statobjs(self):
+        yield from sorted(self.cache.glob('*.json', 'oh_historical.csv'))
 
     @contextmanager
     def extract(self):
@@ -1001,7 +989,118 @@ class OH(Scraper, state='OH'):
             index[notice_id] = artifacts
         return dict(index)
 
-class SC(Scraper, state='SC'):
+class PA(Scraper):
+    base_url = 'https://www.pa.gov'
+    index_url = '/agencies/dli/programs-services/workforce-development-home/warn-requirements/warn-notices.html'
+    pat_ol = _r(r'^[1-9][0-9]*\.\s')
+
+    def __init__(self, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        # No warn-scraper implementation
+        del self.runner
+
+    async def scrape(self) -> None:
+        await self.cache_download('latest.html', self.index_url)
+
+    async def clean(self) -> None:
+        self.cache.delete('latest.html')
+
+    def statobjs(self):
+        if self.cache.exists('latest.html'):
+            yield self.find_main_div(bs(self.cache.read('latest.html')))
+
+    @contextmanager
+    def extract(self):
+        yield self.read_records()
+
+    def read_records(self) -> Iterator[dict[str, str]]:
+        file = self.cache.topath('latest.html')
+        scrape_time = utils.file_mtime(file)
+        maindiv = self.find_main_div(bs(file))
+        extra = dict(url=self.absurl(self.index_url), scrape_time=scrape_time.isoformat())
+        for yeardiv in self.find_year_divs(maindiv):
+            h2s = yeardiv.find_all('h2')
+            year = int(h2s.pop(0).text.strip())
+            if not 2000 <= year <= utils.now().year + 1:
+                raise ValueError(f'Invalid {year=}')
+            extra.pop('reported_month', None)
+            if h2s:
+                # For 2024 & 2025, month headings are in <h2> elements,
+                # and company names are in <h3> elements.
+                for h2 in h2s:
+                    text = h2.text.strip()
+                    # raises ValueError
+                    datetime.strptime(text, '%B')
+                    extra['reported_month'] = f'{text} {year}'
+                    cur = h2.find_next('div', {'class': 'cmp-accordion__panel'})
+                    for h3 in cur.find_all('h3'):
+                        yield self.parse_record(h3) | extra
+            else:
+                # For 2023, month headings and company names are both in
+                # <h3> elements.
+                h3s = yeardiv.find_all('h3')
+                for h3 in h3s:
+                    text = h3.text.strip()
+                    try:
+                        datetime.strptime(text, '%B')
+                    except ValueError:
+                        if 'reported_month' not in extra:
+                            raise
+                    else:
+                        extra['reported_month'] = f'{text} {year}'
+                        continue
+                    yield self.parse_record(h3) | extra
+
+    def find_main_div(self, doc: Soup) -> Soup:
+        return (doc
+            .find('section', {'class': 'agencypage-content'})
+            .find('div')
+            .find('div'))
+
+    def find_year_divs(self, maindiv: Soup) -> Iterator[Soup]:
+        for child in maindiv.children:
+            if child.name == 'div' and 'panelcontainer' in child['class']:
+                yield child
+
+    def parse_record(self, h3: Soup) -> dict[str, str]:
+        row = dict(company=_u(h3.text.strip()))
+        text = h3.find_next_sibling('div').text
+        text = text.replace('\u200b', '')
+        lines = text.splitlines()
+        lines: list[str] = list(filter(None, map(str.rstrip, lines)))
+        curheader = None
+        unparsed = []
+        for i, line in enumerate(lines):
+            clean = ' '.join(line.split()).strip()
+            if i == 0:
+                row['location'] = clean
+                continue
+            parts = clean.split(':', 1)
+            if curheader and (
+                line.startswith('\xa0') or
+                self.pat_ol.match(clean) or
+                parts[0] != parts[0].upper()
+            ):
+                if row[curheader]:
+                    row[curheader] += '\n'
+                row[curheader] += clean
+                continue
+            if not clean:
+                continue
+            if ':' not in clean:
+                if not curheader:
+                    row['location'] += '\n' + clean
+                else:
+                    unparsed.append(clean)
+                continue
+            curheader = parts[0].strip()
+            row[curheader] = parts[1].strip()
+        if unparsed:
+            row['unparsed'] = '\n'.join(unparsed)
+        row['raw'] = '\n'.join(lines)
+        return row
+
+class SC(Scraper):
     base_url = 'https://scworks.org'
     index_url = f'{base_url}/employer/employer-programs/risk-closing/layoff-notification-reports'
     headers_species = {
@@ -1037,10 +1136,9 @@ class SC(Scraper, state='SC'):
     async def clean(self) -> None:
         self.cache.delete('latest.html', 'index.json')
 
-    async def stat(self):
-        files = [self.cache.topath('index.json')]
-        files += self.list_record_files()
-        return hashstat(files)
+    def statobjs(self):
+        yield self.cache.topath('index.json')
+        yield from self.list_record_files()
 
     @contextmanager
     def extract(self):
@@ -1177,7 +1275,7 @@ class SC(Scraper, state='SC'):
         'Co9u/n2t9ie/s2023': '9/29/2023',
     }
 
-class TX(Scraper, state='TX'):
+class TX(Scraper):
     base_url = 'https://www.twc.texas.gov'
     index_url = '/data-reports/warn-notice'
     href_pat = re.compile(r'^/sites/default/files/oei/docs/warn-act-listings-')
@@ -1203,8 +1301,8 @@ class TX(Scraper, state='TX'):
         for file in self.list_record_files():
             file.unlink()
 
-    async def stat(self):
-        return hashstat(self.list_record_files())
+    def statobjs(self):
+        yield from self.list_record_files()
 
     @contextmanager
     def extract(self):
@@ -1221,20 +1319,16 @@ class TX(Scraper, state='TX'):
     def list_record_files(self) -> list[Path]:
         return sorted(map(Path, self.cache.files('.', '*.xlsx')), reverse=True)
 
-    
-class UT(Scraper, state='UT'):
+class UT(Scraper):
     base_url = 'https://jobs.utah.gov'
     index_url = '/employer/business/warnnotices.html'
 
     async def scrape(self):
         await self.cache_download('latest.html', self.index_url)
 
-    async def stat(self):
+    def statobjs(self):
         if self.cache.exists('latest.html'):
-            it = bs(self.cache.read('latest.html')).find_all('table')
-        else:
-            it = ()
-        return hashstat(it)
+            yield from bs(self.cache.read('latest.html')).find_all('table')
 
     async def clean(self):
         self.cache.delete('latest.html')
@@ -1255,7 +1349,7 @@ class UT(Scraper, state='UT'):
         for values in it:
             yield dict(zip(headers, values))
 
-class VA(Scraper, state='VA'):
+class VA(Scraper):
     # TODO: detail url: https://www.vec.virginia.gov/warn-notice-detail/18595
     base_url = 'https://www.vec.virginia.gov'
     index_url = '/warn-notices'
@@ -1332,7 +1426,12 @@ class Runner(warn.Runner):
     def stat(self) -> dict[str, Any]:
         return hashstat([self.file])
 
+    def statobjs(self) -> Iterable[Any]:
+        yield self.file
+
 def bs(markup, features='html.parser', **kw):
+    if isinstance(markup, Path):
+        markup = markup.read_bytes()
     return Soup(markup, features, **kw)
 
 def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
@@ -1363,6 +1462,7 @@ def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
         pass
     DefaultScraper.state = state.upper()
+    DefaultScraper.__name__ = state
     return DefaultScraper
 
 scrapers.update({
