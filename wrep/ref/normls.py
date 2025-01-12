@@ -21,6 +21,9 @@ COMPANY_NAMES = {
     'ABM Aviation': [
         _r(r'^abm aviation.*', re.I),
     ],
+    'Advance Stores Company': [
+        _r(r'^Advance Stores Company.*', re.I),
+    ],
     'Advanced Micro Devices': [
         'Advanced Micro Devices (AMD)',
         'Advanced Micro Devices Inc',
@@ -32,8 +35,17 @@ COMPANY_NAMES = {
     'Amazon': [
         'Amazon.com',
     ],
+    'Aramark': [
+        _r(r'^Aramark (-|\(|@|at )', re.I),
+    ],
     'AT&T': [
         _r(r'^at&t.*', re.I),
+    ],
+    'Avis Budget': [
+        _r(r'^Avis Budget.*', re.I),
+    ],
+    'Bank of America': [
+        _r(r'^Bank of America.*', re.I),
     ],
     'Boeing': [
         'Boeing Co',
@@ -42,8 +54,32 @@ COMPANY_NAMES = {
         'Thte Boeing Company',
         'The Boeing Company',
     ],
+    'Carbon Health': [
+        'Carbon Health Medical Group',
+    ],
     'CVS': [
         _r(r'^cvs\s.*', re.I),
+    ],
+    'Dollar Express': [
+        _r(r'^Dollar Express.*', re.I),
+    ],
+    'Ericsson Inc': [
+        _r(r'^Ericsson,? Inc.*', re.I),
+    ],
+    'First Student': [
+        _r(r'^First Student.*', re.I),
+    ],
+    'Goodwill': [
+        _r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
+    ],
+    'Hostess Brands': [
+        _r(r'^Hostess( Brand.*)?$', re.I),
+    ],
+    'Intel Corporation': [
+        _r(r'^Intel( Corp.*)?$', re.I),
+    ],
+    'Kaiser Foundation': [
+        _r(r'^Kaiser Foundation.*', re.I),
     ],
     'Kmart': [
         'KMART CORPORATION',
@@ -70,6 +106,15 @@ COMPANY_NAMES = {
     'LTF Club Management Company': [
         _r(r'^LTF Club Management.*', re.I),
     ],
+    'Marvell Semiconductor': [
+        _r(r'^Marvell Semiconductor.*', re.I),
+    ],
+    'Meta Platforms': [
+        _r(r'^Meta Platforms.*', re.I),
+    ],
+    "P.F. Chang's": [
+        _r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
+    ],
     'Radisson Hotel': [
         _r(r'^Radisson .*', re.I),
     ],
@@ -84,6 +129,9 @@ COMPANY_NAMES = {
     ],
     'Sikorsky': [
         _r(r'^Sikorsky(,?\s.*)?$', re.I),
+    ],
+    'Silgan Containers': [
+        _r(r'^Silgan Containers.*', re.I),
     ],
     'Sodexo': [
         _r(r'^Sodexo(,?\s+Inc.*)?$', re.I),
@@ -114,6 +162,9 @@ COMPANY_NAMES = {
     ],
     'United Retail Service': [
         _r(r'^United Retail Service(, LLC)? -.*', re.I),
+    ],
+    'Visionworks': [
+        _r(r'^Visionworks.*', re.I),
     ],
     'Walmart': [
         _r(r'^walmart.*', re.I),
