@@ -9,6 +9,7 @@ import shutil
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
@@ -991,6 +992,12 @@ class OH(Scraper):
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
     index_url = '/agencies/dli/programs-services/workforce-development-home/warn-requirements/warn-notices.html'
+    pat_ol = _r(r'^[1-9][0-9]*\.\s')
+
+    def __init__(self, *args, **kw) -> None:
+        super().__init__(*args, **kw)
+        # No warn-scraper implementation
+        del self.runner
 
     async def scrape(self) -> None:
         await self.cache_download('latest.html', self.index_url)
@@ -999,11 +1006,99 @@ class PA(Scraper):
         self.cache.delete('latest.html')
 
     def statobjs(self):
-        yield self.cache.topath('latest.html')
+        if self.cache.exists('latest.html'):
+            yield self.find_main_div(bs(self.cache.read('latest.html')))
 
     @contextmanager
     def extract(self):
-        yield ()
+        yield self.read_records()
+
+    def read_records(self) -> Iterator[dict[str, str]]:
+        file = self.cache.topath('latest.html')
+        scrape_time = utils.file_mtime(file)
+        maindiv = self.find_main_div(bs(file))
+        extra = dict(url=self.absurl(self.index_url), scrape_time=scrape_time.isoformat())
+        for yeardiv in self.find_year_divs(maindiv):
+            h2s = yeardiv.find_all('h2')
+            year = int(h2s.pop(0).text.strip())
+            if not 2000 <= year <= utils.now().year + 1:
+                raise ValueError(f'Invalid {year=}')
+            extra.pop('reported_month', None)
+            if h2s:
+                # For 2024 & 2025, month headings are in <h2> elements,
+                # and company names are in <h3> elements.
+                for h2 in h2s:
+                    text = h2.text.strip()
+                    # raises ValueError
+                    datetime.strptime(text, '%B')
+                    extra['reported_month'] = f'{text} {year}'
+                    cur = h2.find_next('div', {'class': 'cmp-accordion__panel'})
+                    for h3 in cur.find_all('h3'):
+                        yield self.parse_record(h3) | extra
+            else:
+                # For 2023, month headings and company names are both in
+                # <h3> elements.
+                h3s = yeardiv.find_all('h3')
+                for h3 in h3s:
+                    text = h3.text.strip()
+                    try:
+                        datetime.strptime(text, '%B')
+                    except ValueError:
+                        if 'reported_month' not in extra:
+                            raise
+                    else:
+                        extra['reported_month'] = f'{text} {year}'
+                        continue
+                    yield self.parse_record(h3) | extra
+
+    def find_main_div(self, doc: Soup) -> Soup:
+        return (doc
+            .find('section', {'class': 'agencypage-content'})
+            .find('div')
+            .find('div'))
+
+    def find_year_divs(self, maindiv: Soup) -> Iterator[Soup]:
+        for child in maindiv.children:
+            if child.name == 'div' and 'panelcontainer' in child['class']:
+                yield child
+
+    def parse_record(self, h3: Soup) -> dict[str, str]:
+        row = dict(company=_u(h3.text.strip()))
+        text = h3.find_next_sibling('div').text
+        text = text.replace('\u200b', '')
+        lines = text.splitlines()
+        lines: list[str] = list(filter(None, map(str.rstrip, lines)))
+        curheader = None
+        unparsed = []
+        for i, line in enumerate(lines):
+            clean = ' '.join(line.split()).strip()
+            if i == 0:
+                row['location'] = clean
+                continue
+            parts = clean.split(':', 1)
+            if curheader and (
+                line.startswith('\xa0') or
+                self.pat_ol.match(clean) or
+                parts[0] != parts[0].upper()
+            ):
+                if row[curheader]:
+                    row[curheader] += '\n'
+                row[curheader] += clean
+                continue
+            if not clean:
+                continue
+            if ':' not in clean:
+                if not curheader:
+                    row['location'] += '\n' + clean
+                else:
+                    unparsed.append(clean)
+                continue
+            curheader = parts[0].strip()
+            row[curheader] = parts[1].strip()
+        if unparsed:
+            row['unparsed'] = '\n'.join(unparsed)
+        row['raw'] = '\n'.join(lines)
+        return row
 
 class SC(Scraper):
     base_url = 'https://scworks.org'
@@ -1335,6 +1430,8 @@ class Runner(warn.Runner):
         yield self.file
 
 def bs(markup, features='html.parser', **kw):
+    if isinstance(markup, Path):
+        markup = markup.read_bytes()
     return Soup(markup, features, **kw)
 
 def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
@@ -1365,6 +1462,7 @@ def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
         pass
     DefaultScraper.state = state.upper()
+    DefaultScraper.__name__ = state
     return DefaultScraper
 
 scrapers.update({

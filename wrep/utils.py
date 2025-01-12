@@ -225,12 +225,12 @@ class BaseCommand:
 
 def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
     class Base(BaseCommand):
+        func = staticmethod(f)
 
         async def run(self):
             await wait(self.func(**vars(self.opts)))
 
     class Command(*bases, Base):
         description = f.__doc__
-        func = staticmethod(f)
 
     return Command
