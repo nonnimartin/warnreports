@@ -756,6 +756,12 @@ class NY(Scraper):
     pdf_keytrans = {
         'L ayoff End Date': 'Layoff End Date',
     }
+    artifact404 = {
+        'https://dol.ny.gov/system/files/documents/2022/10/starry-inc.-2022-0043-10-20-2022.pdf'
+    }
+    artifact_map = {
+        'https://dol.ny.gov/system/files/documents/2022/10/starry-inc.-2022-0043-10-20-2022.pdf' : 'https://dol.ny.gov/system/files/documents/2024/05/warn-nyc-starry-inc.-10.20.2022.pdf'
+    }
 
     async def scrape(self) -> None:
         await self.cache_download('latest.html', self.index_url)
@@ -764,11 +770,17 @@ class NY(Scraper):
                 await self.cache_download(key, url)
         artifacts = {}
         for key in ('latest.html', *self.past_urls):
+
             if not key.endswith('.html'):
                 continue
             table = self.find_table(bs(self.cache.read(key)))
             for a in table.select('tbody > tr > td:nth-of-type(1) > a'):
                 key, url = self.parse_record_key_url(a['href'])
+                if url in self.artifact404:
+                    if url in self.artifact_map.keys():
+                        url = self.artifact_map[url]
+                    else:
+                        continue
                 if not self.cache.exists(key):
                     await self.cache_download(key, url)
                     await asyncio.sleep(1)
@@ -822,7 +834,10 @@ class NY(Scraper):
     def parse_record_key_url(self, href: str) -> tuple[str, str]:
         url = self.absurl(href)
         filename = Path(urlparse(url).path).name
-        key = f'records/{filename}.pdf'
+        if filename.endswith('.pdf'):
+            key = f'records/{filename}'
+        else:
+            key = f'records/{filename}.pdf'
         return key, url
 
     def read_record_pdf(self, file: Path) -> Iterator[tuple[str, str]]:
