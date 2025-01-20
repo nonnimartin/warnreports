@@ -1399,11 +1399,14 @@ class Artifacts:
         dest = self.dir/key
         if dest.exists():
             sta, stb = file.stat(), dest.stat()
-            if (sta.st_mtime, sta.st_size) == (stb.st_mtime, stb.st_size):
+            a = (int(sta.st_mtime), sta.st_size)
+            b = (int(stb.st_mtime), stb.st_size)
+            if a == b:
                 return
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(file, dest)
+        shutil.copystat(file, dest)
 
 class Runner(warn.Runner):
 
