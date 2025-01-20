@@ -130,6 +130,7 @@ class CompanyDetail(DataModel):
     reports_count: int = 0
     last_reported: datetime|None = None
     employees_sum: int = 0
+    states_count: int = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 # ----------------------------
@@ -202,12 +203,14 @@ class CompaniesFilter(FilterModel[CompanyDetail]):
     naics: list[int]|None = None
     reports_count_min: int|None = None
     reports_count_max: int|None = None
+    states_count_min: int|None = None
+    states_count_max: int|None = None
     employees_sum_min: int|None = None
     employees_sum_max: int|None = None
     last_reported_min: datetime|None = None
     last_reported_max: datetime|None = None
     result_model: ClassVar = CompanyDetail
-    order_fields: ClassVar = {'name', 'reports_count', 'last_reported', 'employees_sum'}
+    order_fields: ClassVar = {'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
     default_ordering: ClassVar = [('name', 1)]
 
 class NaicsFilter(FilterModel[NaicsDetail]):

@@ -86,7 +86,7 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_minmax_filters('reports_count', 'employees_sum', 'last_reported')
+        yield from self.get_minmax_filters('reports_count', 'states_count', 'employees_sum', 'last_reported')
 
 class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
 
@@ -206,6 +206,8 @@ collections: dict[str, CollectionDefn] = dict(
         {'last_reported': -1},
         {'reports_count': 1},
         {'reports_count': -1},
+        {'states_count': 1},
+        {'states_count': -1},
         {'employees_sum': -1}]),
     naics=CollectionDefn(orm.Naics, [
         {'id': 1},

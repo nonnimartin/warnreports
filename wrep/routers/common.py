@@ -107,6 +107,18 @@ def companies_count_params(
         companies_count_min=companies_count_min,
         companies_count_max=companies_count_max)
 
+def states_count_params(
+    states_count_min: Annotated[
+        int,
+        Query(description='The minimum states count')] = None,
+    states_count_max: Annotated[
+        int,
+        Query(description='The maximum states count')] = None,
+):
+    return dict(
+        states_count_min=states_count_min,
+        states_count_max=states_count_max)
+
 def report_search_params(
     text: TextSearchParam = None,
     state: StateParam = None,
@@ -141,6 +153,7 @@ def company_search_params(
     naics: NaicsParam = None,
     employees_sum: EmployeesSumParams = ...,
     reports_count: ReportsCountParams = ...,
+    states_count: StatesCountParams = ...,
     last_reported: LastReportedParams = ...,
 ):
     return dict(
@@ -150,6 +163,7 @@ def company_search_params(
         state=state,
         naics=naics,
         **reports_count,
+        **states_count,
         **last_reported,
         **employees_sum)
 
@@ -182,6 +196,7 @@ StartingParams = Annotated[dict, Depends(starting_params)]
 EmployeesParams = Annotated[dict, Depends(employees_params)]
 EmployeesSumParams = Annotated[dict, Depends(employees_sum_params)]
 ReportsCountParams = Annotated[dict, Depends(reports_count_params)]
+StatesCountParams = Annotated[dict, Depends(states_count_params)]
 LastReportedParams = Annotated[dict, Depends(last_reported_params)]
 CompaniesCountParams = Annotated[dict, Depends(companies_count_params)]
 ReportSearchParams = Annotated[dict, Depends(report_search_params)]

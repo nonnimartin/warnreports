@@ -243,6 +243,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
         inst.aliases.sort(key=lambda x: (x.lower(), x))
         inst.naics.sort(key=lambda x: (x.code, x.id))
         inst.states.sort()
+        inst.states_count = len(inst.states)
 
 class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
