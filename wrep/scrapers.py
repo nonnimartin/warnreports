@@ -92,9 +92,11 @@ class Scraper:
         self.cache.write(key, text)
         return text
 
-    async def cache_download(self, key: str, url: str, encoding: str|None = None, **kw) -> requests.Response:
+    async def cache_download(self, key: str, url: str, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
         dest = self.cache.topath(key)
+        if missing_only and dest.exists():
+            return
         logger.debug(f'Downloading {url} to {dest}')
         dest.parent.mkdir(parents=True, exist_ok=True)
         with await self.req_get(url, stream=True, **kw) as rep:
@@ -188,8 +190,7 @@ class CA(Scraper):
             href = str(link.get('href', ''))
             if self.hrefpat.search(href):
                 key = Path(urlparse(href).path).name
-                if not key.endswith('.pdf') or not self.cache.exists(key):
-                    await self.cache_download(key, href)
+                await self.cache_download(key, href, missing_only=key.endswith('.pdf'))
                 self.artifacts.add(key, self.cache.topath(key))
                 index.append((key, self.absurl(href)))
         index.sort()
@@ -273,8 +274,7 @@ class DE(Scraper):
                 href = str(tr.find('td').find('a')['href'])
                 record_num = str(int(href.rsplit('/')[-1].removesuffix('.html')))
                 key = f'records/{record_num}.html'
-                if not self.cache.exists(key):
-                    await self.cache_download(key, href)
+                await self.cache_download(key, href, missing_only=True)
                 row['URL'] = href
                 row['record_num'] = record_num
                 index.append(row)
@@ -590,16 +590,12 @@ class LA(Scraper):
             url = a.get('href', '')
             if 'WARN Notices' in a.text and url.endswith('.pdf'):
                 key = url.split('/')[-1]
-                if (
-                    not self.cache.exists(key) or
-                    any(str(y) in key for y in recent)
-                ):
-                    await self.cache_download(key, url)
+                is_recent = any(str(y) in key for y in recent)
+                await self.cache_download(key, url, missing_only=not is_recent)
                 index[key] = self.absurl(url)
         for url in self.historical_urls:
             key = url.split('/')[-1]
-            if not self.cache.exists(key):
-                await self.cache_download(key, url)
+            await self.cache_download(key, url, missing_only=True)
             if key not in index:
                 index[key] = url
         index = {key: index[key] for key in sorted(index, reverse=True)}
@@ -906,8 +902,7 @@ class OH(Scraper):
     )
 
     async def scrape(self):
-        if not self.cache.exists(key := 'oh_historical.csv'):
-            await self.cache_download(key, self.archive_url)
+        await self.cache_download('oh_historical.csv', self.archive_url, missing_only=True)
         sources: deque[tuple[str, str]] = deque()
         page = bs(await self.cache_fetch(key := 'latest.html', self.index_url))
         self.cache.write_json(f'{key}.json', self.extract_json(page), indent=2)
@@ -915,8 +910,8 @@ class OH(Scraper):
         for a in page.select('nav a'):
             if not (match := self.atext_pat.match(a.text)):
                 continue
-            if not self.cache.exists(key := f'{match.group(1)}.html'):
-                await self.cache_download(key, a['href'])
+            key = f'{match.group(1)}.html'
+            await self.cache_download(key, a['href'], missing_only=True)
             if not self.cache.exists(f'{key}.json'):
                 self.cache.write_json(
                     f'{key}.json',
@@ -926,8 +921,7 @@ class OH(Scraper):
         self.cache.write_json('sources.json', dict(sorted(sources)), indent=2)
         self.cache.write_json('index.json', index := self.build_index(), indent=2)
         for key, url in chain.from_iterable(map(dict.items, index.values())):
-            if not self.cache.exists(key):
-                await self.cache_download(key, url)
+            await self.cache_download(key, url, missing_only=True)
             self.artifacts.add(key, self.cache.topath(key))
 
     async def clean(self):
@@ -1159,8 +1153,8 @@ class SC(Scraper):
                 year = int(href.split('/')[-1][:4])
                 index.append((year, href))
                 key = f'{year}.pdf'
-                if not self.cache.exists(key) or year >= utils.now().year - 1:
-                    await self.cache_download(key, href)
+                is_recent = year >= utils.now().year - 1
+                await self.cache_download(key, href, missing_only=not is_recent)
                 self.artifacts.add(key, self.cache.topath(key))
         index.sort()
         self.cache.write_json('index.json', index, indent=2)
@@ -1244,7 +1238,6 @@ class SC(Scraper):
 
     def remove_extra_header(self, table: list[list]) -> None:
         if table and not utils.morethan(1, table[0]):
-            logger.debug(f'remove extra {table[0]}')
             del table[0]
 
     def filter_sparse_rows(self, table: list[list]) -> list[list]:
@@ -1315,12 +1308,11 @@ class TX(Scraper):
             href = a['href']
             key = Path(href).name
             year = int(self.year_pat.match(key)[1])
-            if not self.cache.exists(key) or year >= utils.now().year - 1:
-                await self.cache_download(key, href)
+            is_recent = year >= utils.now().year - 1
+            await self.cache_download(key, href, missing_only=not is_recent)
             self.artifacts.add(key, self.cache.topath(key))
         key = self.archive_url.split('/')[-1]
-        if not self.cache.exists(key):
-            await self.cache_download(key, self.archive_url)
+        await self.cache_download(key, self.archive_url, missing_only=True)
 
     async def clean(self):
         self.cache.delete('latest.html', '*.xlsx', glob=True)
