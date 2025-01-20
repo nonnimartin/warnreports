@@ -16,8 +16,6 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
-from .scrapers import scrapers
-from .translators import translators
 
 logger = utils.get_logger('pipeline')
 
@@ -536,6 +534,9 @@ class Command(utils.BaseCommand):
             else:
                 stages.append(Stage(value))
         return stages
+
+from .scrapers import scrapers
+from .translators import translators
 
 if __name__ == '__main__':
     Command.main()
