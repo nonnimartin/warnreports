@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
+from re import compile as _r
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
 from urllib.parse import unquote_plus, urlparse
 
@@ -35,7 +36,6 @@ from . import settings, utils
 
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
-_r = re.compile
 
 class Scraper:
 
@@ -133,25 +133,6 @@ class Scraper:
         if len(name := cls.__name__.upper()) == 2:
             cls.state = name
             scrapers[cls.state] = cls
-
-def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
-    worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
-    return extract_xlsx_worksheet(worksheet)
-
-def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
-    it = ([cell.value for cell in row] for row in ws.rows)
-    headers = next(it)
-    for values in filter(any, it):
-        row = {}
-        for k, v in filter(any, zip(headers, values)):
-            if v is None:
-                v = ''
-            elif isinstance(v, datetime):
-                v = v.strftime(f'%Y-%m-%d')
-            else:
-                v = str(v)
-            row[k] = v
-        yield row
 
 class AK(Scraper):
     base_url = 'https://jobs.alaska.gov'
@@ -313,9 +294,7 @@ class DE(Scraper):
             page += 1
 
     async def clean(self):
-        self.cache.delete('index.json')
-        for path in self.list_page_files():
-            path.unlink()
+        self.cache.delete('index.json', '*.html', glob=True)
 
     def statobjs(self):
         yield self.cache.topath('index.json')
@@ -356,14 +335,17 @@ class FL(Scraper):
     user_agent = (
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36')
+    key_clean_subs = (
+        (_r(r'[^a-zA-Z\d_]'), '-'),
+        (_r(r'([-_])+'), r'\1'),
+        (_r(r'[A-Z]-MYDOCUMENTS'), ''))
 
     async def scrape(self) -> None:
         self.runner.scrape()
         index = dict(self.build_artifacts_index())
         self.cache.write_json('artifacts.json', index, indent=2)
         for key, url in index.values():
-            if not self.cache.exists(key):
-                await self.cache_download(key, url)
+            await self.cache_download(key, url, missing_only=True)
             self.artifacts.add(key, self.cache.topath(key))
 
     async def clean(self):
@@ -383,16 +365,15 @@ class FL(Scraper):
         "Yield augmented records from CSV rows"
         index: dict[str, list[str]] = self.cache.read_json('artifacts.json')
         headers = next(it)
-        headers += ['download', 'artifacts_json']
         for values in it:
+            row = dict(zip(headers, values))
             row_key = self.row_key(values)
             if row_key in index:
                 key, url = index[row_key]
-                artifacts_json = json.dumps({key: url})
-            else:
-                url = artifacts_json = ''
-            values += [url, artifacts_json]
-            yield dict(zip(headers, values))
+                row.update(
+                    download=url,
+                    artifacts_json=json.dumps({key: url}))
+            yield row
 
     def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
         "Build the artifacts index from the downloaded page files"
@@ -426,9 +407,8 @@ class FL(Scraper):
         if clean.startswith('\\'):
             return
         clean = clean.removesuffix('.pdf')
-        clean = re.sub(r'[^a-zA-Z\d_]', '-', clean)
-        clean = re.sub(r'([-_])+', r'\1', clean)
-        clean = re.sub(r'[A-Z]-MYDOCUMENTS', '', clean)
+        for srch, repl in self.key_clean_subs:
+            clean = srch.sub(repl, clean)
         clean = clean.strip('_-')
         if not clean:
             return
@@ -529,8 +509,9 @@ class IL(Scraper):
     source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export?search=&layoffTypes=&trade=0&dateReportedStart=Invalid%20Date&dateReportedEnd=Invalid%20Date&statuses=4&reasons=&eventCauses=&naicsCodes=1&naicIndustries=&naics=&unionsInvolved=0&geolocation=1&cities=&counties=&lwias=&includeAdditionalLwias=false&edrs=&lat=0&lng=0&distance=.5&memberType=1&users=&accessList=&bookmarked=false'
 
     async def scrape(self):
-        await self.cache_download('export.xlsx', self.source_url)
-        self.artifacts.add('export.xlsx', self.cache.topath('export.xlsx'))
+        key = 'export.xlsx'
+        await self.cache_download(key, self.source_url)
+        self.artifacts.add(key, self.cache.topath(key))
 
     def statobjs(self):
         yield self.cache.topath('export.xlsx')
@@ -548,17 +529,17 @@ class IN(Scraper):
     # Scrape time: < 2s
     # Extract time: < 2s
     base_url = 'https://www.in.gov'
-    index_url = '/dwd/warn-notices/current-warn-notices/'
+    latest_url = '/dwd/warn-notices/current-warn-notices/'
 
     async def scrape(self) -> None:
-        await self.cache_download('latest.html', self.index_url)
+        await self.cache_download('latest.html', self.latest_url)
 
     async def clean(self) -> None:
         self.cache.delete('latest.html')
 
     def statobjs(self):
-        if self.cache.exists('latest.html'):
-            yield from bs(self.cache.read('latest.html')).find_all('table')
+        if (file := self.cache.topath('latest.html')).exists():
+            yield from bs(file).find_all('table')
 
     @contextmanager
     def extract(self):
@@ -784,8 +765,7 @@ class NJ(Scraper):
 
 class NY(Scraper):
     base_url = 'https://dol.ny.gov'
-    index_url = '/warn-notices'
-    request_delay = 1
+    latest_url = '/warn-notices'
     past_urls = {
         '2024.html': '/2024-warn-notices',
         '2023.html': '/2023-warn-notices',
@@ -796,11 +776,13 @@ class NY(Scraper):
         'L ayoff End Date': 'Layoff End Date',
     }
     artifact_map = {
-        'https://dol.ny.gov/system/files/documents/2022/10/starry-inc.-2022-0043-10-20-2022.pdf' : 'https://dol.ny.gov/system/files/documents/2024/05/warn-nyc-starry-inc.-10.20.2022.pdf'
+        'https://dol.ny.gov/system/files/documents/2022/10/starry-inc.-2022-0043-10-20-2022.pdf':
+            'https://dol.ny.gov/system/files/documents/2024/05/warn-nyc-starry-inc.-10.20.2022.pdf'
     }
+    request_delay = 1
 
     async def scrape(self) -> None:
-        await self.cache_download('latest.html', self.index_url)
+        await self.cache_download('latest.html', self.latest_url)
         for key, url in self.past_urls.items():
             if not self.cache.exists(key):
                 await self.cache_download(key, url)
@@ -822,24 +804,29 @@ class NY(Scraper):
 
     def statobjs(self):
         yield from map(self.cache.topath, self.past_urls)
-        if self.cache.exists('latest.html'):
-            yield self.find_table(bs(self.cache.read('latest.html')))
+        file = self.cache.topath('latest.html')
+        if file.exists():
+            yield self.find_table(bs(file))
 
     @contextmanager
     def extract(self):
         keys = ('latest.html', *self.past_urls)
         files = map(self.cache.topath, keys)
-        tables = map(self.read_record_file, files)
-        yield chain.from_iterable(tables)
+        it = map(self.read_record_file, files)
+        yield chain.from_iterable(it)
 
-    def read_record_file(self, file: Path) -> Iterator[dict[str, str]]:
+    def read_record_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+        "Call either read_html_file() or read_xlsx_file() depending on the file extenstion"
         return getattr(self, f'read_{file.name[-4:]}_file')(file)
 
-    read_xlsx_file = staticmethod(extract_xlsx)
+    def read_xlsx_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+        "Extract records from historical xlsx file"
+        return extract_xlsx(self.cache.topath(file))
 
-    def read_html_file(self, file: Path) -> Iterator[dict[str, str]]:
-        artifacts = self.cache.read_json('artifacts.json')
-        table = self.find_table(bs(file.read_bytes()))
+    def read_html_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+        "Extract records from HTML page"
+        file = self.cache.topath(file)
+        table = self.find_table(bs(file))
         it = iter(table.find_all('tr'))
         next(it)
         for tr in it:
@@ -848,8 +835,8 @@ class NY(Scraper):
             a = tds[0].a
             key, url = self.parse_record_key_url(a['href'])
             if self.cache.exists(key):
-                record.update(self.read_record_pdf(self.cache.topath(key)))
-                record.update(artifacts_json=json.dumps({key: artifacts[key]}))
+                record.update(self.read_record_pdf(key))
+                record.update(artifacts_json=json.dumps({key: url}))
             record.update(
                 company_name=a.text,
                 notice_url=url,
@@ -858,9 +845,11 @@ class NY(Scraper):
             yield record
 
     def find_table(self, page: Soup) -> Soup:
+         "Find main table in HTML page"
          return page.find('div', {'class': 'landing-paragraphs'}).find('table')
 
     def parse_record_key_url(self, href: str) -> tuple[str, str]:
+        "Return an artifact key and download URL from the href value"
         url = self.absurl(href)
         url = self.artifact_map.get(url, url)
         filename = Path(urlparse(url).path).name
@@ -885,7 +874,7 @@ class OH(Scraper):
     archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
     index_url = '/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures'
     request_delay = 1
-    atext_pat = re.compile(r'^\s*(\d{4}) Public Notices')
+    atext_pat = _r(r'^\s*(\d{4}) Public Notices')
     legacy_header_map = {
         'DateReceived': 'Date Received',
         'Potential NumberAffected': 'Potential Number Affected',
@@ -1214,11 +1203,7 @@ class SC(Scraper):
 
     def process_table(self, table: list[list[str|None]]) -> list[list]:
         self.remove_extra_header(table)
-        if self.table_is_sparse(table):
-            logger.debug(f'skip sparse {table=}')
-            return []
-        if self.table_is_summary(table):
-            logger.debug(f'skip summary {table=}')
+        if self.table_is_sparse(table) or self.table_is_summary(table):
             return []
         table = self.filter_sparse_rows(table)
         table = self.filter_empty_columns(table)
@@ -1470,9 +1455,6 @@ class Runner(warn.Runner):
     def scrape(self) -> None:
         super().scrape(self.state.lower())
 
-    def stat(self) -> dict[str, Any]:
-        return hashstat(self.statobjs())
-
     def statobjs(self) -> Iterable[Any]:
         yield self.file
 
@@ -1480,6 +1462,25 @@ def bs(markup: Any, features='html.parser', **kw):
     if isinstance(markup, Path):
         markup = markup.read_bytes()
     return Soup(markup, features, **kw)
+
+def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
+    worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
+    return extract_xlsx_worksheet(worksheet)
+
+def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
+    it = ([cell.value for cell in row] for row in ws.rows)
+    headers = next(it)
+    for values in filter(any, it):
+        row = {}
+        for k, v in filter(any, zip(headers, values)):
+            if v is None:
+                v = ''
+            elif isinstance(v, datetime):
+                v = v.strftime(f'%Y-%m-%d')
+            else:
+                v = str(v)
+            row[k] = v
+        yield row
 
 def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
     h = hashlib.sha1()
@@ -1508,7 +1509,8 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
         pass
-    DefaultScraper.state = state.upper()
+    state = state.upper()
+    DefaultScraper.state = state
     DefaultScraper.__name__ = state
     return DefaultScraper
 
