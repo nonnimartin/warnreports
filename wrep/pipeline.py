@@ -16,8 +16,6 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
-from .scrapers import scrapers
-from .translators import translators
 
 logger = utils.get_logger('pipeline')
 
@@ -108,6 +106,8 @@ class Pipeline:
         logger.info(f'{self.state}:{stage}:clean')
         if stage in self.backends:
             await self.backends[stage].clean()
+            if stage is stage.Extract:
+                await self.scraper.extract_clean()
         elif stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Load:
@@ -534,6 +534,9 @@ class Command(utils.BaseCommand):
             else:
                 stages.append(Stage(value))
         return stages
+
+from .scrapers import scrapers
+from .translators import translators
 
 if __name__ == '__main__':
     Command.main()
