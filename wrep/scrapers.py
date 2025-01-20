@@ -13,7 +13,7 @@ from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
-from urllib.parse import urlparse
+from urllib.parse import unquote_plus, urlparse
 
 import openpyxl
 import openpyxl.worksheet
@@ -350,9 +350,29 @@ class DE(Scraper):
         return sorted(self.cache.glob('records/*.html'), reverse=True)
 
 class FL(Scraper):
+    base_url = 'https://reactwarn.floridajobs.org'
+    artifact_url_fmt = '/WarnList/DownloadAzureFile?file={}'
+    request_delay = 1
+    user_agent = (
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36')
 
     async def scrape(self) -> None:
         self.runner.scrape()
+        index = dict(self.build_artifacts_index())
+        self.cache.write_json('artifacts.json', index, indent=2)
+        for key, url in index.values():
+            if not self.cache.exists(key):
+                await self.cache_download(key, url)
+            self.artifacts.add(key, self.cache.topath(key))
+
+    async def clean(self):
+        await super().clean()
+        self.cache.delete('artifacts.json')
+
+    def statobjs(self):
+        yield from super().statobjs()
+        yield self.cache.topath('artifacts.json')
 
     @contextmanager
     def extract(self):
@@ -360,32 +380,62 @@ class FL(Scraper):
             yield self.read_records(csv.reader(file))
 
     def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
-        lookup = dict(self.fetch_lookup())
-        headers = next(it) + ['download']
+        "Yield augmented records from CSV rows"
+        index: dict[str, list[str]] = self.cache.read_json('artifacts.json')
+        headers = next(it)
+        headers += ['download', 'artifacts_json']
         for values in it:
-            key = self.row_key(values)
-            values.append(lookup.get(key, ''))
+            row_key = self.row_key(values)
+            if row_key in index:
+                key, url = index[row_key]
+                artifacts_json = json.dumps({key: url})
+            else:
+                url = artifacts_json = ''
+            values += [url, artifacts_json]
             yield dict(zip(headers, values))
 
-    def fetch_lookup(self):
-        for file in self.cache.files('.', '*_page_*.html'):
-            doc = bs(Path(file).read_text(), 'html5lib')
+    def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
+        "Build the artifacts index from the downloaded page files"
+        for file in sorted(self.cache.glob('*_page_*.html'), reverse=True):
+            year = int(file.name[:4])
+            doc = bs(file.read_text(), 'html5lib')
             table = doc.find('table')
-            yield from self.parse_lookup_table(table)
+            yield from self.parse_downloads_table(year, table)
 
-    def parse_lookup_table(self, table: Soup) -> Iterator[tuple[str, str]]:
+    def row_key(self, values: Iterable[str]) -> str:
+        "Values hash key from CSV row for artifact index"
+        return ''.join(''.join(values).split())
+
+    def parse_downloads_table(self, year: int, table: Soup) -> Iterator[tuple[str, tuple[str, str]]]:
+        "Yields (row_key, (cache_key, url)) for an html table"
         tbody = table.find('tbody')
         for tr in tbody.find_all('tr'):
             tds = tr.find_all('td')
             last = tds.pop()
             if last.find('input', id='download'):
-                el = last.find('input', type='hidden')
-                if el:
-                    key = self.row_key(td.text for td in tds)
-                    yield key, el['value']
+                if (el := last.find('input', type='hidden')):
+                    if (info := self.artifact_info(year, el['value'])):
+                        row_key = self.row_key(td.text for td in tds)
+                        yield row_key, info
 
-    def row_key(self, values: Iterable[str]) -> str:
-        return ''.join(re.sub(r'\s', '', value) for value in values)
+    def artifact_info(self, year: int, uri: str) -> tuple[str, str]|None:
+        "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
+        if year < 2020 or not uri.endswith('.pdf'):
+            return
+        clean = unquote_plus(uri)
+        if clean.startswith('\\'):
+            return
+        clean = clean.removesuffix('.pdf')
+        clean = re.sub(r'[^a-zA-Z\d_]', '-', clean)
+        clean = re.sub(r'([-_])+', r'\1', clean)
+        clean = re.sub(r'[A-Z]-MYDOCUMENTS', '', clean)
+        clean = clean.strip('_-')
+        if not clean:
+            return
+        name = f'{year}_{clean}.pdf'
+        cache_key = f'records/{name}'
+        url = self.absurl(self.artifact_url_fmt.format(uri))
+        return cache_key, url
 
 class GA(Scraper):
     base_url = 'https://www.tcsg.edu'
@@ -1369,7 +1419,7 @@ class Cache(warn.cache.Cache):
             else:
                 paths = (self.topath(key),)
             for path in paths:
-            path.unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
     
     def topath(self, key: str):
         return Path(self.dir, key)

@@ -520,16 +520,15 @@ class FL(ReportedYearToUrl):
         'Layoff Date': 'starting',
         'download': 'url',
         'Industry': 'industry',
+        'artifacts_json': 'artifacts',
     }
     rewrites = dict(
         company=[
             (_r(r'\n.*'), ''),
             ('Sikorsky, a', 'Sikorsky'),
         ],
-        url=[
-            (_r(r'^(.+)$'), f'{base_url}/WarnList/DownloadAzureFile?file=\\1'),
-        ]
     )
+    values_hash_exclude = ['download', 'artifacts_json']
 
     def get_reported_year_url(self, year: int) -> str:
         action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
