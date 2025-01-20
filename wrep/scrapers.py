@@ -584,7 +584,7 @@ class LA(Scraper):
         yield from self.cache.glob('*.pdf')
 
     async def clean(self):
-        self.cache.delete(*self.cache.glob('*.pdf', '*.html', '*.csv', '*.json'))
+        self.cache.delete('*.pdf', '*.html', '*.csv', '*.json', glob=True)
 
     @contextmanager
     def extract(self):
@@ -620,8 +620,7 @@ class MD(Scraper):
                 await self.cache_download(key, url)
 
     async def clean(self):
-        for file in self.list_page_files():
-            file.unlink()
+        self.cache.delete('*.html', glob=True)
 
     def statobjs(self):
         yield from self.get_tables()
@@ -682,8 +681,7 @@ class MO(Scraper):
                     logger.warning(f'Current year page more than 7 days old {url=}')
 
     async def clean(self) -> None:
-        for path in self.list_page_files():
-            path.unlink()
+        self.cache.delete('pages/*.html', glob=True)
 
     def statobjs(self):
         for file in self.list_page_files():
@@ -904,8 +902,7 @@ class OH(Scraper):
             self.artifacts.add(key, self.cache.topath(key))
 
     async def clean(self):
-        for file in self.cache.glob('*.html', '*.json', '*.csv'):
-            file.unlink()
+        self.cache.delete('*.html', '*.json', '*.csv', glob=True)
 
     def statobjs(self):
         yield from sorted(self.cache.glob('*.json', 'oh_historical.csv'))
@@ -1303,9 +1300,7 @@ class TX(Scraper):
             await self.cache_download(key, self.archive_url)
 
     async def clean(self):
-        self.cache.delete('latest.html')
-        for file in self.list_record_files():
-            file.unlink()
+        self.cache.delete('latest.html', '*.xlsx', glob=True)
 
     def statobjs(self):
         yield from self.list_record_files()
@@ -1379,8 +1374,13 @@ class Cache(warn.cache.Cache):
         super().__init__(data_dir/state.lower())
         self.dir = Path(self.path)
 
-    def delete(self, *keys: str):
-        for path in map(self.topath, keys):
+    def delete(self, *keys: str, glob: bool = False) -> None:
+        for key in keys:
+            if glob and isinstance(key, str):
+                paths = self.glob(key)
+            else:
+                paths = (self.topath(key),)
+            for path in paths:
             path.unlink(missing_ok=True)
     
     def topath(self, key: str):
