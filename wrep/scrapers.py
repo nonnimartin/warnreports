@@ -188,10 +188,11 @@ class AK(Scraper):
     def parse_url(self, tr: Soup) -> str:
         td = tr.find('td')
         if td.text.strip() == 'Company':
+            # header row
             return 'url'
         a = td.find('a')
         if a:
-            return self.base_url + a['href']
+            return self.absurl(a['href'])
         return ''
 
 class CA(Scraper):
@@ -237,9 +238,7 @@ class CA(Scraper):
         return {k: str(v) for k, v in record.items()}
 
     def list_record_files(self) -> list[Path]:
-        files = self.cache.files('.', '*.pdf')
-        files += self.cache.files('.', '*.xlsx')
-        return sorted(map(Path, files))
+        return sorted(self.cache.glob('*.pdf', '*.xlsx'))
 
     def load_index(self) -> dict[str, str]:
         return self.cache.read_json('index.json')
@@ -345,14 +344,10 @@ class DE(Scraper):
         return self.cache.read_json('index.json')
 
     def list_page_files(self) -> list[Path]:
-        files = self.cache.files('pages', '*.html')
-        files.sort(reverse=True)
-        return list(map(Path, files))
+        return sorted(self.cache.glob('*.html'), reverse=True)
 
     def list_record_files(self) -> list[Path]:
-        files = self.cache.files('records', '*.html')
-        files.sort(reverse=True)
-        return list(map(Path, files))
+        return sorted(self.cache.glob('records/*.html'), reverse=True)
 
 class FL(Scraper):
 
@@ -459,9 +454,7 @@ class GA(Scraper):
             return match.group(1)
 
     def list_record_files(self) -> list[Path]:
-        files = self.cache.files('.', '*.format3')
-        files.sort(reverse=True)
-        return list(map(Path, files))
+        return sorted(self.cache.glob('*.format3'), reverse=True)
 
     payload = dict(
         columns=[
@@ -543,10 +536,11 @@ class IN(Scraper):
 
     def parse_url(self, cell: Soup) -> str:
         if cell.name == 'th':
+            # header row
             return 'url'
         a = cell.find('a')
         if a:
-            return self.base_url + a['href']
+            return self.absurl(a['href'])
         return cell.text.strip()
 
 class LA(Scraper):
@@ -593,7 +587,7 @@ class LA(Scraper):
         headers: list[str] = []
         def readfile(key: str):
             url = index[key]
-            rows = la._process_pdf(self.cache.topath(key))
+            rows: list[list[str]] = la._process_pdf(self.cache.topath(key))
             if not headers:
                 headers.extend(next(filter(la._is_clean_header, rows)))
                 headers.append('url')
@@ -632,19 +626,16 @@ class MD(Scraper):
         yield (dict(zip(headers, values)) for values in it)
 
     def read_table(self, table: Soup) -> Iterator[list[str]]:
-        for tr in table.find_all('tr'):
-            values = list(self.read_tr(tr))
-            if any(values):
-                yield values
+        it = map(self.read_tr, table.find_all('tr'))
+        return filter(any, map(list, it))
 
     def read_tr(self, tr: Soup) -> Iterator[str]:
         for td in tr.find_all('td'):
-            text = td.text.replace('\n', ' ')
-            yield re.sub(r'\s+', ' ', text).strip()
+            yield ' '.join(td.text.split())
 
     def get_tables(self) -> Iterator[Soup]:
         for file in self.list_page_files():
-            yield bs(file.read_bytes(), 'html5lib').find('table')
+            yield bs(file, 'html5lib').find('table')
 
     def list_page_files(self) -> list[Path]:
         return sorted(self.cache.glob('*.html'), reverse=True)
@@ -669,7 +660,8 @@ class MO(Scraper):
             try:
                 rep = await self.cache_download(key, url)
             except HTTPError:
-                if year == now.year:
+                if year == now.year and now.month < 2:
+                    # Don't fail for current year if it is January
                     logger.warning(f'Current year download failed, skipping {url=}')
                     continue
                 raise
@@ -685,7 +677,7 @@ class MO(Scraper):
 
     def statobjs(self):
         for file in self.list_page_files():
-            yield bs(file.read_bytes()).find('table')
+            yield bs(file).find('table')
 
     @contextmanager
     def extract(self):
@@ -712,9 +704,7 @@ class MO(Scraper):
             yield td.text.strip()
 
     def list_page_files(self) -> list[Path]:
-        files = self.cache.files('pages', '*.html')
-        files.sort(reverse=True)
-        return list(map(Path, files))
+        return sorted(self.cache.glob('pages/*.html'), reverse=True)
 
 class NJ(Scraper):
     base_url = 'https://www.nj.gov/labor'
@@ -745,6 +735,7 @@ class NJ(Scraper):
 class NY(Scraper):
     base_url = 'https://dol.ny.gov'
     index_url = '/warn-notices'
+    request_delay = 1
     past_urls = {
         '2024.html': '/2024-warn-notices',
         '2023.html': '/2023-warn-notices',
@@ -772,7 +763,6 @@ class NY(Scraper):
                 key, url = self.parse_record_key_url(a['href'])
                 if not self.cache.exists(key):
                     await self.cache_download(key, url)
-                    await asyncio.sleep(1)
                 self.artifacts.add(key, self.cache.topath(key))
                 artifacts[key] = url
         self.cache.write_json('artifacts.json', artifacts)
@@ -1209,9 +1199,7 @@ class SC(Scraper):
         return list(map(tuple, self.cache.read_json('index.json')))
 
     def list_record_files(self) -> list[Path]:
-        files = self.cache.files('.', '*.pdf')
-        files.sort(reverse=True)
-        return list(map(Path, files))
+        return sorted(self.cache.glob('*.pdf'), reverse=True)
 
     def table_is_sparse(self, table: list[list]) -> bool:
         return not any(utils.morethan(1, row) for row in table)
@@ -1281,8 +1269,8 @@ class SC(Scraper):
 class TX(Scraper):
     base_url = 'https://www.twc.texas.gov'
     index_url = '/data-reports/warn-notice'
-    href_pat = re.compile(r'^/sites/default/files/oei/docs/warn-act-listings-')
-    year_pat = re.compile(r'.*-(\d{4})-')
+    href_pat = _r(r'^/sites/default/files/oei/docs/warn-act-listings-')
+    year_pat = _r(r'.*-(\d{4})-')
     archive_url = 'https://archive.warnreports.org/s/TX/tx_historical.xlsx'
     ssl_verify = False
 
@@ -1318,7 +1306,7 @@ class TX(Scraper):
             yield row
 
     def list_record_files(self) -> list[Path]:
-        return sorted(map(Path, self.cache.files('.', '*.xlsx')), reverse=True)
+        return sorted(self.cache.glob('*.xlsx'), reverse=True)
 
 class UT(Scraper):
     base_url = 'https://jobs.utah.gov'
@@ -1430,12 +1418,12 @@ class Runner(warn.Runner):
         super().scrape(self.state.lower())
 
     def stat(self) -> dict[str, Any]:
-        return hashstat([self.file])
+        return hashstat(self.statobjs())
 
     def statobjs(self) -> Iterable[Any]:
         yield self.file
 
-def bs(markup, features='html.parser', **kw):
+def bs(markup: Any, features='html.parser', **kw):
     if isinstance(markup, Path):
         markup = markup.read_bytes()
     return Soup(markup, features, **kw)
