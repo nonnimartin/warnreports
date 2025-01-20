@@ -871,6 +871,7 @@ class NY(Scraper):
 
     def extract_pdf_text(self, file: Path|str) -> str:
         "Cache extracted text to file for performance"
+        file = self.cache.topath(file)
         textkey = f'{self.cache.tokey(file)}.txt'
         if not self.extract_cache.exists(textkey):
             with pdfplumber.open(file) as pdf:
