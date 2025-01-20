@@ -108,6 +108,8 @@ class Pipeline:
         logger.info(f'{self.state}:{stage}:clean')
         if stage in self.backends:
             await self.backends[stage].clean()
+            if stage is stage.Extract:
+                await self.scraper.extract_clean()
         elif stage is stage.Scrape:
             await self.scraper.clean()
         elif stage is stage.Load:

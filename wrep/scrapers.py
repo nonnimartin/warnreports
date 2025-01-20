@@ -80,6 +80,9 @@ class Scraper:
         with self.runner.file.open() as file:
             yield csv.DictReader(file, restkey='__')
 
+    async def extract_clean(self) -> None:
+        pass
+
     async def fetch(self, url: str, **kw) -> str:
         rep = await self.req_get(url, **kw)
         try:
@@ -780,20 +783,12 @@ class NY(Scraper):
     async def scrape(self) -> None:
         await self.cache_download('latest.html', self.latest_url)
         for key, url in self.past_urls.items():
-            if not self.cache.exists(key):
-                await self.cache_download(key, url)
-        artifacts = {}
-        for key in ('latest.html', *self.past_urls):
-            if not key.endswith('.html'):
-                continue
-            table = self.find_table(bs(self.cache.read(key)))
-            for a in table.select('tbody > tr > td:nth-of-type(1) > a'):
-                key, url = self.parse_record_key_url(a['href'])
-                if not self.cache.exists(key):
-                    await self.cache_download(key, url)
-                self.artifacts.add(key, self.cache.topath(key))
-                artifacts[key] = url
-        self.cache.write_json('artifacts.json', artifacts)
+            await self.cache_download(key, url, missing_only=True)
+        index = dict(self.build_artifacts_index())
+        self.cache.write_json('artifacts.json', index, indent=2)
+        for key, url in index.items():
+            await self.cache_download(key, url, missing_only=True)
+            self.artifacts.add(key, self.cache.topath(key))
 
     async def clean(self):
         self.cache.delete('latest.html', 'artifacts.json', *self.past_urls)
@@ -810,6 +805,9 @@ class NY(Scraper):
         files = map(self.cache.topath, keys)
         it = map(self.read_record_file, files)
         yield chain.from_iterable(it)
+
+    async def extract_clean(self):
+        self.cache.delete('records/*.txt', glob=True)
 
     def read_record_file(self, file: Path|str) -> Iterator[dict[str, str]]:
         "Call either read_html_file() or read_xlsx_file() depending on the file extenstion"
@@ -854,9 +852,25 @@ class NY(Scraper):
             key = f'{key}.pdf'
         return key, url
 
-    def read_record_pdf(self, file: Path) -> Iterator[tuple[str, str]]:
-        with pdfplumber.open(file, [1]) as pdf:
-            text = pdf.pages[0].extract_text()
+    def build_artifacts_index(self) -> Iterator[tuple[str, str]]:
+        "Build the artifacts index from the downloaded page files"
+        for key in ('latest.html', *self.past_urls):
+            if not key.endswith('.html'):
+                continue
+            file = self.cache.topath(key)
+            table = self.find_table(bs(file))
+            for a in table.select('tbody > tr > td:nth-of-type(1) > a'):
+                yield self.parse_record_key_url(a['href'])
+
+    def read_record_pdf(self, file: Path|str) -> Iterator[tuple[str, str]]:
+        "Extract extra data from an individual record PDF download"
+        file = self.cache.topath(file)
+        # Cache extracted text to file for performance
+        textfile = Path(f'{file}.txt')
+        if not textfile.exists():
+            with pdfplumber.open(file, [1]) as pdf:
+                textfile.write_text(pdf.pages[0].extract_text())
+        text = textfile.read_text()
         for line in text.splitlines():
             item = line.split(': ', 1)
             if len(item) == 1:
@@ -864,7 +878,7 @@ class NY(Scraper):
             key, value = item
             key = self.pdf_keytrans.get(key, key)
             yield key, value
-
+        
 class OH(Scraper):
     base_url = 'https://jfs.ohio.gov'
     archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
