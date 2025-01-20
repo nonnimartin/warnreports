@@ -915,6 +915,11 @@ class NJ(Translator):
         'scrape_time': 'scrape_time',
     }
     values_hash_exclude = ['scrape_time']
+    rewrites = dict(
+        company=[
+            (_r(r'^Amazon \(.*workers\s*\)$'), 'Amazon'),
+        ],
+    )
 
     def finish(self, entry: Entry, row: Row) -> None:
         month: str|None = row.get('Month Posted')

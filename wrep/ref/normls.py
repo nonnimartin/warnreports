@@ -1,29 +1,27 @@
 from __future__ import annotations
 
 import re
-from typing import Callable
+from typing import Callable, Iterable
 
 type Norms = dict[str|re.Pattern, str|Callable[[re.Match], str]]
+type SrchSpec = str|re.Pattern|Callable[[str], Iterable[str|re.Pattern]]
+type NormDefs = dict[str, SrchSpec|list[SrchSpec]|tuple[SrchSpec, ...]]
 _r = re.compile
 PAT_NONALPHA = _r(r'[^a-z\d\s]')
 PAT_SPACES = _r(r'\s+')
 
-COMPANY_NAMES = {
-    '3M': [
-        _r(r'^3M .*', re.I),
-    ],
-    '99 Cents Only': [
-        _r(r'^99 cents only.*', re.I),
-    ],
+def _sw(s: str) -> Iterable[str|re.Pattern]:
+    s = re.escape(s)
+    yield _r(r'^'f'{s}'r'.*', re.I)
+
+COMPANY_NAMES: NormDefs = {
+    '3M': _sw('3M '),
+    '99 Cents Only': _sw,
     'A. O. Smith': [
         _r(r'^a\.\s*o\.\s+smith(\s.*|$)', re.I),
     ],
-    'ABM Aviation': [
-        _r(r'^abm aviation.*', re.I),
-    ],
-    'Advance Stores Company': [
-        _r(r'^Advance Stores Company.*', re.I),
-    ],
+    'ABM Aviation': _sw,
+    'Advance Stores Company': _sw,
     'Advanced Micro Devices': [
         'Advanced Micro Devices (AMD)',
         'Advanced Micro Devices Inc',
@@ -38,17 +36,12 @@ COMPANY_NAMES = {
     'Aramark': [
         _r(r'^Aramark (-|\(|@|at )', re.I),
     ],
-    'AT&T': [
-        _r(r'^at&t.*', re.I),
-    ],
-    'Avis Budget': [
-        _r(r'^Avis Budget.*', re.I),
-    ],
-    'BAE Systems': [
-        _r(r'^BAE Systems.*', re.I),
-    ],
-    'Bank of America': [
-        _r(r'^Bank of America.*', re.I),
+    'AT&T': _sw,
+    'Avis Budget': _sw,
+    'BAE Systems': _sw,
+    'Bank of America': _sw,
+    'Big Lots': [
+        _r(r'^Big Lots(,?\s+.*)?$', re.I),
     ],
     'Boeing': [
         'Boeing Co',
@@ -63,21 +56,18 @@ COMPANY_NAMES = {
     'CVS': [
         _r(r'^cvs\s.*', re.I),
     ],
-    'Dollar Express': [
-        _r(r'^Dollar Express.*', re.I),
-    ],
-    'Enterprise Holdings': [
-        _r(r'^Enterprise Holdings.*', re.I),
-    ],
+    'Dollar Express': _sw,
+    'Enterprise Holdings': _sw,
     'Ericsson Inc': [
         _r(r'^Ericsson,? Inc.*', re.I),
     ],
-    'First Student': [
-        _r(r'^First Student.*', re.I),
-    ],
+    'First Student': _sw,
+    'G2 Secure Staff': _sw,
+    'GDI Services': _sw,
     'Goodwill': [
         _r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
     ],
+    'Hard Rock Cafe': _sw,
     'Hawker Beechcraft': [
         _r(r'^Hawker Beechcraft Corp.*', re.I),
     ],
@@ -87,16 +77,18 @@ COMPANY_NAMES = {
     'Intel Corporation': [
         _r(r'^Intel( Corp.*)?$', re.I),
     ],
+    'International Paper': [
+        _r(r'^(The )?International Paper.*', re.I),
+    ],
     'Jabil': [
         _r(r'^(Nypro .*)?Jabil( .*)$', re.I),
     ],
-    'Kaiser Foundation': [
-        _r(r'^Kaiser Foundation.*', re.I),
-    ],
+    'Kaiser Foundation': _sw,
     'Kmart': [
         'KMART CORPORATION',
         'Kmart Store',
     ],
+    "Kohl's": _sw,
     'Levi Strauss & Company': [
         _r(r'^.*Levi Strauss & Co.*$'),
     ],
@@ -106,32 +98,29 @@ COMPANY_NAMES = {
     'Levy Premium Foodservice': [
         _r(r'^Levy Premium Food\s*service.*', re.I),
     ],
-    'Lockheed Martin': [
-        _r(r'^Lockheed Martin.*$', re.I),
-    ],
+    'Lockheed Martin': _sw,
     'Lord & Taylor': [
         _r(r'^Lord\s*(&|\+|and)\s*(Taylor|Tyalor)(\s.*|$)', re.I),
     ],
-    'LSC Communications': [
-        _r(r'^LSC Communications.*', re.I),
-    ],
-    'LTF Club Management Company': [
-        _r(r'^LTF Club Management.*', re.I),
-    ],
-    'Marvell Semiconductor': [
-        _r(r'^Marvell Semiconductor.*', re.I),
-    ],
-    'Meta Platforms': [
-        _r(r'^Meta Platforms.*', re.I),
+    'LSC Communications': _sw,
+    'LTF Club Management Company': _sw('LTF Club Management'),
+    'Marvell Semiconductor': _sw,
+    'Meta Platforms': _sw,
+    'Nordstrom': [
+        _r(r'^Nordstrom.*(Anchorage|Center|Inc|Place|Plaza|Rack|Stonestown|Store|Waterside).*', re.I),
+        _r(r'^(Dadeland|Lloyd Center)?\s*Nordstrom$', re.I),
     ],
     "P.F. Chang's": [
         _r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
     ],
-    'Qualcomm': [
-        _r(r'^Qualcomm.*', re.I),
+    'Packers Sanitation Services': _sw('Packers Sanitation'),
+    'Pitney Bowes': [
+        _r(r'^(Newgistics.*)?Pitney Bowes.*', re.I),
     ],
-    'Radisson Hotel': [
-        _r(r'^Radisson .*', re.I),
+    'Qualcomm': _sw,
+    'Radisson Hotel': _sw('Radisson '),
+    'Safeway': [
+        _r(r'^Safeway(,?\s+Inc.*)?$', re.I),
     ],
     'Sears': [
         _r(r'^Sears.*Roebuck.*', re.I),
@@ -139,14 +128,13 @@ COMPANY_NAMES = {
     'Sears Holdings': [
         _r(r'^Sears .*Holdings.*', re.I),
     ],
-    'Shaw Industries': [
-        _r(r'^Shaw Industries.*', re.I),
-    ],
+    'Shaw Industries': _sw,
     'Sikorsky': [
         _r(r'^Sikorsky(,?\s.*)?$', re.I),
     ],
-    'Silgan Containers': [
-        _r(r'^Silgan Containers.*', re.I),
+    'Silgan Containers': _sw,
+    'Sky Chefs': [
+        _r(r'^(LSG.*)?Sky Chefs.*', re.I),
     ],
     'Sodexo': [
         _r(r'^Sodexo(,?\s+Inc.*)?$', re.I),
@@ -162,9 +150,7 @@ COMPANY_NAMES = {
     'State Farm Insurance': [
         _r(r'^state farm mutual.* insurance.*', re.I),
     ],
-    'Sun Microsystems': [
-        _r(r'^Sun Microsystems.*', re.I),
-    ],
+    'Sun Microsystems': _sw,
     'SunPower': [
         _r(r'^SunPower( Corp.*)?$', re.I),
     ],
@@ -174,19 +160,26 @@ COMPANY_NAMES = {
     'Tesla': [
         'Tesla Inc',
     ],
+    'The Home Depot': [
+        _r(r'^(The )?Home Depot.*', re.I),
+    ],
+    'Transdev Services': _sw,
+    'Tyson Foods': [
+        _r(r'^(Tyson|Keystone) Foods.*', re.I),
+    ],
     'United Parcel Service': [
-        _r(r'^United Parcel Service.*', re.I),
+        _sw,
         _r(r'^UPS(,?\s.*)?$'),
     ],
     'United Retail Service': [
         _r(r'^United Retail Service(, LLC)? -.*', re.I),
     ],
-    'Visionworks': [
-        _r(r'^Visionworks.*', re.I),
+    'Visionworks': _sw,
+    'Walgreens': [
+        _sw,
+        _r(r'^Walgreen (Co|Lab).*', re.I),
     ],
-    'Walmart': [
-        _r(r'^walmart.*', re.I),
-    ],
+    'Walmart': _sw,
     'Wells Fargo': [
         'Wells Fargo Company',
         'Wells Fargo Co',
@@ -232,22 +225,27 @@ COMPANY_NAME_NORMS: Norms = {
         lambda m: f'{m.group(1).title()} Insurance',
 }
 
-COMPANY_NAME_NORMS.update(
-    (value, name)
-    for name, values in COMPANY_NAMES.items()
-    for value in values)
-
 def clean(value: str) -> str:
     value_clean = PAT_NONALPHA.sub('', value.lower())
     value_clean = PAT_SPACES.sub(' ', value_clean).strip()
     return value_clean
 
-def _build(norms: Norms):
+def _build(norms: Norms, *defs: NormDefs):
+    for defn in defs:
+        for name, values in defn.items():
+            if not isinstance(values, (list, tuple)):
+                values = (values,)
+            for value in values:
+                if callable(value):
+                    for value in value(name):
+                        norms[value] = name
+                else:
+                    norms[value] = name
     for key in list(norms):
         if isinstance(key, str):
             norms[clean(key)] = norms[key]
 
-_build(COMPANY_NAME_NORMS)
+_build(COMPANY_NAME_NORMS, COMPANY_NAMES)
 
 def norm(norms: Norms, value: str) -> str:
     value_clean = clean(value)
