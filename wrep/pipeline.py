@@ -4,9 +4,8 @@ import asyncio
 import functools
 import operator
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timezone
-from itertools import batched
 from typing import Any, Iterable
 
 from sentry_sdk import capture_exception
@@ -393,6 +392,7 @@ class PipelineRunner:
         fail: bool = False,
         incremental: bool = False,
         concurrent: bool = False,
+        max_workers: int = settings.ETL_DEFAULT_WORKERS,
         lazy: bool|int = True,
     ):
         if clean_only and (clean or incremental or stat_only):
@@ -405,6 +405,7 @@ class PipelineRunner:
         self.stat_only = stat_only
         self.incremental = incremental
         self.concurrent = concurrent
+        self.max_workers = int(max(1, max_workers))
         self.fail = fail
         self.lazy = lazy
         self.stages = list(utils.unique(map(Stage, stages)))
@@ -437,28 +438,35 @@ class PipelineRunner:
 
     async def run_consecutively(self, *stages: Stage) -> None:
         for state in self.states:
-            await self.run_pipeline(state, *stages)
+            await self.run_stages(state, *stages)
 
     async def run_concurrently(self, *stages: Stage) -> None:
-        for states in batched(self.states, 4):
+        if not stages:
+            return
+        queue = deque(self.states)
+        async def start_worker():
+            while queue:
+                await self.run_stages(queue.popleft(), *stages)
+        num_workers = min(self.max_workers, len(queue))
             async with asyncio.TaskGroup() as group:
-                for state in states:
-                    group.create_task(self.run_pipeline(state, *stages))
+            logger.info(f'Starting {num_workers} workers [{', '.join(map(str, stages))}]')
+            for _ in range(num_workers):
+                group.create_task(start_worker())
 
-    async def run_pipeline(self, state: StateCode, *stages: Stage) -> None:
+    async def run_stages(self, state: StateCode, *stages: Stage) -> None:
         for stage in stages:
+            await self.run_stage(state, stage)
+
+    async def run_stage(self, state: StateCode, stage: Stage) -> None:
+        if (reason := self._skip_reason(state)):
+            logger.info(f'{state}:{stage}:skip {reason}')
+            return
             start = utils.now()
             res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
             self.jobseq += 1
             res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
             pipeline = Pipeline(state, lazy=self.lazy)
-            if self._last_failed(state):
-                logger.info(f'{state}:{stage}:skip Previous stage failed')
-                res.update(skip=True, last_failed=True)
-            elif self._should_skip(state):
-                logger.info(f'{state}:{stage}:skip')
-                res.update(skip=True, nochange=True)
-            elif self.clean_only:
+        if self.clean_only:
                 await pipeline.clean(stage)
                 res.update(clean_only=True)
             elif self.stat_only:
@@ -481,17 +489,13 @@ class PipelineRunner:
             if not self.stat_only:
                 await self.logbackend.save([res])
 
-    def _last_failed(self, state: StateCode) -> bool:
+    def _skip_reason(self, state: StateCode) -> str|None:
         if (runs := self.runs[state]):
             res = runs[-1]
-            return bool(res.get('failed') or res.get('last_failed'))
-        return False
-
-    def _should_skip(self, state: StateCode) -> bool:
-        return bool(
-            self.incremental and
-            (runs := self.runs[state]) and
-            runs[-1].get('nochange'))
+            if res.get('failed'):
+                return 'Previous stage failed'
+            if self.incremental and res.get('nochange'):
+                return 'No change'
 
 class Command(utils.BaseCommand):
     'Run pipelines'
@@ -506,10 +510,11 @@ class Command(utils.BaseCommand):
         parser.add_argument('--nofail', '-n', action='store_false', dest='fail')
         parser.add_argument('--incremental', '-i', action='store_true')
         parser.add_argument('--concurrent', '-t', action='store_true')
-        parser.add_argument('--eager', '-e', dest='lazy', action='store_false')
+        parser.add_argument('--max-workers', '-w', type=int, default=settings.ETL_DEFAULT_WORKERS)
+        parser.add_argument('--eager', '-e', action='store_false', dest='lazy')
 
     def setup(self, opts):
-        opts.states = opts.states or list(translators)
+        opts.states = opts.states or sorted(scrapers)
         self.runner = PipelineRunner(**vars(opts))
 
     async def run(self):
