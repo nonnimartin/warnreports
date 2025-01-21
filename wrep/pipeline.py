@@ -25,6 +25,9 @@ class Stage(utils.StrEnum):
     Load = 'load'
     Index = 'index'
 
+from .scrapers import scrapers
+from .translators import translators
+
 class SaveType(utils.StrEnum):
     Create = 'create'
     Update = 'update'
@@ -448,7 +451,7 @@ class PipelineRunner:
             while queue:
                 await self.run_stages(queue.popleft(), *stages)
         num_workers = min(self.max_workers, len(queue))
-            async with asyncio.TaskGroup() as group:
+        async with asyncio.TaskGroup() as group:
             logger.info(f'Starting {num_workers} workers [{', '.join(map(str, stages))}]')
             for _ in range(num_workers):
                 group.create_task(start_worker())
@@ -461,33 +464,33 @@ class PipelineRunner:
         if (reason := self._skip_reason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
             return
-            start = utils.now()
-            res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
-            self.jobseq += 1
-            res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
-            pipeline = Pipeline(state, lazy=self.lazy)
+        start = utils.now()
+        res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
+        self.jobseq += 1
+        res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
+        pipeline = Pipeline(state, lazy=self.lazy)
         if self.clean_only:
-                await pipeline.clean(stage)
-                res.update(clean_only=True)
-            elif self.stat_only:
-                stat = await pipeline.stat(stage)
-                logger.info(f'{state}:{stage}:stat {stat}')
-                res.update(stat_only=True)
-            else:
-                try:
-                    res.update(await pipeline.run(stage, clean=self.clean))
-                except Exception as err:
-                    if self.fail:
-                        raise
-                    res.update(failed=True, error=f'{type(err).__name__}: {err}')
-                    self.errors.append((state, stage, err))
-                    logger.exception(f'{state}:{stage}:fail')
-                    capture_exception()
-            end = utils.now()
-            res.update(end=end, elapsed=(end - start).total_seconds())
-            self.runs[state].append(res)
-            if not self.stat_only:
-                await self.logbackend.save([res])
+            await pipeline.clean(stage)
+            res.update(clean_only=True)
+        elif self.stat_only:
+            stat = await pipeline.stat(stage)
+            logger.info(f'{state}:{stage}:stat {stat}')
+            res.update(stat_only=True)
+        else:
+            try:
+                res.update(await pipeline.run(stage, clean=self.clean))
+            except Exception as err:
+                if self.fail:
+                    raise
+                res.update(failed=True, error=f'{type(err).__name__}: {err}')
+                self.errors.append((state, stage, err))
+                logger.exception(f'{state}:{stage}:fail')
+                capture_exception()
+        end = utils.now()
+        res.update(end=end, elapsed=(end - start).total_seconds())
+        self.runs[state].append(res)
+        if not self.stat_only:
+            await self.logbackend.save([res])
 
     def _skip_reason(self, state: StateCode) -> str|None:
         if (runs := self.runs[state]):
@@ -498,20 +501,96 @@ class PipelineRunner:
                 return 'No change'
 
 class Command(utils.BaseCommand):
-    'Run pipelines'
+    description = """
+    Run pipeline stages.
+    
+    Basic Examples
+    --------------
+
+    Run single stage for all states:
+    $ {prog} scrape
+
+    Run single stage for some states:
+    $ {prog} extract CA NY
+
+    Run all stages for some states:
+    $ {prog} all FL OH
+
+    Run all stages for all states:
+    $ {prog} all
+
+    Selecting Stages
+    -----------------
+
+    Available stages: """ + ', '.join(Stage) + """
+
+    Specify multiple stages with a comma:
+    $ {prog} scrape,extract [state ...]
+
+    Using first letter with comma:
+    $ {prog} s,e,t [state ...]
+
+    With capital first letters, separator is unnecessary:
+    $ {prog} SETL [state ...]
+
+    Use keyword "all" for all stages:
+    $ {prog} all [state ...]
+
+    Available States
+    ----------------
+    """ + ' '.join(sorted(scrapers))
+
+    usage = '{prog} [OPTIONS] <stages> [state ...]'
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('stages', metavar='stages', type=cls.stages_opt)
-        parser.add_argument('states', nargs='*', metavar='state')
-        parser.add_argument('--clean', '-c', action='store_true')
-        parser.add_argument('--clean-only', '-x', action='store_true')
-        parser.add_argument('--stat-only', '-s', action='store_true')
-        parser.add_argument('--nofail', '-n', action='store_false', dest='fail')
-        parser.add_argument('--incremental', '-i', action='store_true')
-        parser.add_argument('--concurrent', '-t', action='store_true')
-        parser.add_argument('--max-workers', '-w', type=int, default=settings.ETL_DEFAULT_WORKERS)
-        parser.add_argument('--eager', '-e', action='store_false', dest='lazy')
+        arg = parser.add_argument
+        arg('stages',
+            metavar='<stages>',
+            type=cls.stages_opt,
+            help='Stage name(s) (various formats) or "all".')
+        arg('states',
+            nargs='*',
+            metavar='state',
+            help=(
+                'Optionally specify states as additional arguments. '
+                'If not specified, include all states.'))
+        arg('--clean', '-c',
+            action='store_true',
+            help='Clean each stage before running.')
+        arg('--incremental', '-i',
+            action='store_true',
+            help=(
+                'If a stage indicates no change after running, '
+                'skip subsequent stages for the state.'))
+        arg('--concurrent', '-t',
+            action='store_true',
+            help=(
+                'Use multiple async workers when applicable. '
+                'The load stage is always synchronized with one worker.'))
+        arg('--nofail', '-n',
+            action='store_false',
+            dest='fail',
+            help=(
+                'Do not fail on error. Instead, log an exception, '
+                'and skip subsequent stages for the state.'))
+        arg('--clean-only', '-x',
+            action='store_true',
+            help='Only clean, do not run.')
+        arg('--stat-only', '-s',
+            action='store_true',
+            help='Only show stats, do not run.')
+        arg('--max-workers', '-w',
+            type=int,
+            metavar='<n>',
+            default=settings.ETL_DEFAULT_WORKERS,
+            help=(
+                'Max workers, applicable only when --concurrent is specified. '
+                f'Default {settings.ETL_DEFAULT_WORKERS}.'))
+        arg('--eager', '-e',
+            action='store_false',
+            dest='lazy',
+            help='Use eager loading of SQL result sets. Uses more memory.')
 
     def setup(self, opts):
         opts.states = opts.states or sorted(scrapers)
@@ -524,24 +603,14 @@ class Command(utils.BaseCommand):
 
     @staticmethod
     def stages_opt(value: str) -> list[Stage]:
-        value = value.lower()
         if value == 'all':
             return list(Stage)
-        stages = []
-        for value in value.split(','):
-            if len(value) == 1:
-                for stage in Stage:
-                    if stage[0] == value:
-                        stages.append(stage)
-                        break
-                else:
-                    stages.append(Stage(value))
-            else:
-                stages.append(Stage(value))
-        return stages
+        value = value.replace(',', ' ')
+        for stage in Stage:
+            value = value.replace(stage[0].upper(), f' {stage.value} ')
+        trans = {stage[0]: stage for stage in Stage}
+        return [Stage(trans.get(value, value)) for value in value.split()]
 
-from .scrapers import scrapers
-from .translators import translators
 
 if __name__ == '__main__':
     Command.main()

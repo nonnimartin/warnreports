@@ -33,6 +33,7 @@ import warn.runner
 import warn.utils
 
 from . import settings, utils
+from .pipeline import Stage
 
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
@@ -1528,8 +1529,6 @@ def create_scraper(state: str) -> type[Scraper]:
     DefaultScraper.state = state
     DefaultScraper.__name__ = state
     return DefaultScraper
-
-from .pipeline import Stage
 
 scrapers.update({
     state: create_scraper(state)

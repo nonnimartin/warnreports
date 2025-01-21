@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from html import unescape as html_unescape
 from pathlib import Path
+from re import compile as _r
 from typing import Any, ClassVar, Iterable
 
 from pydantic import HttpUrl
@@ -16,8 +17,6 @@ from . import orm, settings, utils
 from .models import ValidationError
 from .orm import ReportMod
 from .ref.tz import zoneinfos
-
-_r = re.compile
 
 NAMESPACE = uuid.uuid5(settings.NAMESPACE, 'Report')
 PAT_NONALPHANUM = _r(r'[^a-z0-9]+', re.I)

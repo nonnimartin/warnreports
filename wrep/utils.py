@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import enum
 import logging
@@ -16,7 +17,6 @@ import dateutil.parser
 
 from . import settings
 
-T = TypeVar('T')
 type EitherIterable[T] = Iterable[T]|AsyncIterable[T]
 type SubParsers = _SubParsersAction[ArgumentParser]
 
@@ -41,21 +41,21 @@ def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
             return True
     return False
 
-def unique(it: Iterable[T]) -> Iterator[T]:
+def unique[T](it: Iterable[T]) -> Iterator[T]:
     done = set()
     for value in it:
         if value not in done:
             yield value
             done.add(value)
 
-def as_aiter(it: EitherIterable[T]) -> AsyncIterable[T]:
+def as_aiter[T](it: EitherIterable[T]) -> AsyncIterable[T]:
     return it if isinstance(it, AsyncIterable) else _to_aiter(it)
 
-async def _to_aiter(it: Iterable[T]) -> AsyncIterator[T]:
+async def _to_aiter[T](it: Iterable[T]) -> AsyncIterator[T]:
     for x in it:
         yield x
 
-async def aenumerate(it: EitherIterable[T]) -> AsyncIterator[tuple[int, T]]:
+async def aenumerate[T](it: EitherIterable[T]) -> AsyncIterator[tuple[int, T]]:
     i = 0
     async for x in as_aiter(it):
         yield i, x
@@ -150,9 +150,40 @@ class StrEnum(str, enum.Enum):
     def __str__(self):
         return self.value
 
+
+class HelpFormatter(argparse.HelpFormatter):
+    """
+    From: https://gist.github.com/panzi/b4a51b3968f67b9ff4c99459fb9c5b3d
+    Author: Mathias Panzenböck
+    """
+
+    def _split_lines(self, text: str, width: int) -> list[str]:
+        lines: list[str] = []
+        for line_str in text.split('\n'):
+            line: list[str] = []
+            line_len = 0
+            for word in line_str.split():
+                word_len = len(word)
+                next_len = line_len + word_len + bool(line)
+                if next_len > width:
+                    lines.append(' '.join(line))
+                    line.clear()
+                    line_len = word_len
+                else:
+                    line_len = next_len
+                line.append(word)
+            lines.append(' '.join(line))
+        return lines
+    
+    def _fill_text(self, text: str, width: int, indent: str) -> str:
+        return '\n'.join(indent + line for line in self._split_lines(text, width - len(indent)))
+
 class BaseCommand:
     description: ClassVar[str|None] = None
     prog: ClassVar[str|None] = None
+    usage: ClassVar[str|None] = None
+    parser_class: ClassVar[type[ArgumentParser]] = ArgumentParser
+    formatter_class: ClassVar[type[argparse.HelpFormatter]] = HelpFormatter
     commands: ClassVar[dict[str, type[BaseCommand]]] = {}
     command_metavar: ClassVar[str] = 'command'
     command_name: str|None = None
@@ -160,19 +191,26 @@ class BaseCommand:
 
     @classmethod
     def parser(cls) -> ArgumentParser:
-        parser = ArgumentParser()
+        parser = cls.parser_class()
         cls.init_parser(parser)
         return parser
 
     @classmethod
     def init_parser(cls, parser: ArgumentParser) -> None:
+        parser.formatter_class = cls.formatter_class
         parser.description = (
             cls.__dict__.get('description') or
             cls.__doc__ or
             cls.description)
         parser.prog = cls.prog or parser.prog
+        parser.usage = cls.usage or parser.usage
         cls.add_arguments(parser)
         cls.add_commands(parser)
+        fmt = dict(prog=parser.prog)
+        if parser.description:
+            parser.description = parser.description.format(**fmt)
+        if parser.usage:
+            parser.usage = parser.usage.format(**fmt)
 
     @classmethod
     def add_arguments(cls, parser: ArgumentParser) -> None:
