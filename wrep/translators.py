@@ -74,7 +74,7 @@ class Translator:
         'Translate a source row to an entry'
         entry = {}
         for header, fields in self.headermap.items():
-            if header not in row:
+            if header not in row or row[header] is None:
                 continue
             if isinstance(fields, str):
                 fields = [fields]
@@ -609,14 +609,23 @@ class IA(Translator):
     headermap = {
         'Company': 'company',
         'Notice Date': 'reported',
-        'City': 'location',
         'Emp #': 'employees',
         'Notice Type': 'action',
-        'Layoff Date': 'starting'
+        'Layoff Date': 'starting',
+        'Industry': 'industry',
     }
     rewrites = dict(
         company=[
-            (_r(r'Prinicpal'), 'Principal'),
+            (_r(r'Greyhoung', re.I), 'Greyhound'),
+            (_r(r'Industiral', re.I), 'Industrial'),
+            (_r(r'Industires', re.I), 'Industries'),
+            (_r(r'Mangement', re.I), 'Management'),
+            (_r(r'Prinicpal', re.I), 'Principal'),
+            (_r(r'Reginoal', re.I), 'Regional'),
+            (_r(r'Resporces', re.I), 'Resources'),
+            (_r(r'^Transamerican Life', re.I), 'Transamerica Life'),
+            ('United Hrdirect', 'United HR Direct'),
+            ('Westec Intelligent Surveillanc', 'Westec Intelligent Surveillance'),
         ],
         reported=[
             ('9/1/8/2020', '2020-09-18'),
@@ -624,7 +633,26 @@ class IA(Translator):
         action=[
             ('Mayss Layoff', 'Mass Layoff'),
         ],
+        location=[
+            (_r(r' (N|S)\.\s*(E|W)\.'), r' \1\2'),
+        ],
+        industry=[
+            (_r(r' adn '), ' and '),
+        ],
     )
+
+    def finish(self, entry, row):
+        addrkeys = ('Address Line 1', 'City', 'St', 'ZIP')
+        addrvals = list(map(row.get, addrkeys))
+        if all(addrvals):
+            addrvals = list(map(self.sanitize, addrvals))
+            if all(addrvals):
+                location = ', '.join([addrvals[0], ' '.join(addrvals[1:])])
+                location = ' '.join(location.split())
+                location = self.rewrite('location', location)
+                if location:
+                    entry['location'] = location
+        super().finish(entry, row)
 
 class ID(Translator):
     default_url = 'https://www.labor.idaho.gov/warnnotice/'
