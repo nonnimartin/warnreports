@@ -412,8 +412,13 @@ class CT(ReportedYearToUrl):
         'layoff_location': 'location',
         'number_workers': 'employees',
         'closing': 'action',
-        'layoff_date': 'starting'
+        'layoff_date': 'starting',
+        'artifacts_json': 'artifacts'
+        
     }
+
+    values_hash_exclude = ['download', 'artifacts_json']
+
     rewrites = dict(
         company=[
             (_r(r'\*'), ''),
