@@ -163,6 +163,7 @@ COMPANY_NAMES: NormDefs = {
     'The Home Depot': [
         _r(r'^(The )?Home Depot.*', re.I),
     ],
+    'Transamerica Insurance': _sw('Transamerica Life'),
     'Transdev Services': _sw,
     'Tyson Foods': [
         _r(r'^(Tyson|Keystone) Foods.*', re.I),

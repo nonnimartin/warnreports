@@ -164,13 +164,11 @@ class HelpFormatter(argparse.HelpFormatter):
             line_len = 0
             for word in line_str.split():
                 word_len = len(word)
-                next_len = line_len + word_len + bool(line)
-                if next_len > width:
+                line_len += word_len + bool(line)
+                if line_len > width:
                     lines.append(' '.join(line))
                     line.clear()
                     line_len = word_len
-                else:
-                    line_len = next_len
                 line.append(word)
             lines.append(' '.join(line))
         return lines
