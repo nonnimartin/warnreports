@@ -258,8 +258,99 @@ class CO(Scraper):
             yield csv.DictReader(file, restkey='__')
 
 class CT(Scraper):
-    ...
-    # TODO: get record url and pdf artifacts
+    key_clean_subs = (
+        (_r(r'[^a-zA-Z\d_]'), '-'),
+        (_r(r'([-_])+'), r'\1')
+        )
+    
+    async def scrape(self) -> None:
+        self.runner.scrape()
+        index = dict(self.build_artifacts_index())
+        self.cache.write_json('artifacts.json', index, indent=2)
+        for key, url in index.values():
+            await self.cache_download(key, url, missing_only=True)
+            self.artifacts.add(key, self.cache.topath(key))
+    
+    async def clean(self):
+        await super().clean()
+        self.cache.delete('artifacts.json')
+
+    def statobjs(self):
+        yield from super().statobjs()
+        yield self.cache.topath('artifacts.json')
+
+    @contextmanager
+    def extract(self):
+        with self.runner.file.open() as file:
+            yield self.read_records(csv.reader(file))
+
+    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
+        "Yield augmented records from CSV rows"
+        index: dict[str, list[str]] = self.cache.read_json('artifacts.json')
+        headers = next(it)
+        for values in it:
+            row = dict(zip(headers, values))
+            row_key = self.row_key(values)
+            if row_key in index:
+                key, url = index[row_key]
+                row.update(
+                    download=url,
+                    artifacts_json=json.dumps({key: url}))
+            yield row
+
+    def row_key(self, values: Iterable[str]) -> str:
+        "Values hash key from CSV row for artifact index"
+        return ''.join(''.join(values).split())
+
+    def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
+        "Build the artifacts index from the downloaded page files"
+        for file in sorted(self.cache.glob('*.html'), reverse=True):
+            year = int(file.name[:4])
+            doc = bs(file.read_text(), 'html5lib')
+            tables = doc.find_all('table')
+            for table in tables:
+                yield from self.parse_downloads_table(year, table)
+
+    def parse_downloads_table(self, year: int, table: Soup) -> Iterator[tuple[str, tuple[str, str]]]:
+        "Yields (row_key, (cache_key, url)) for an html table"
+        tbody = table.find('tbody')
+        for tr in tbody.find_all('tr'):
+            tds = tr.find_all('td')
+            for td in tds:
+                if td.a is not None:
+                    base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports/'
+                    href = td.a['href']
+                    if href.startswith('http://webdev/progsupt/bussrvce/warnreports/'):
+                        href = href.replace('http://webdev/progsupt/bussrvce/warnreports/', '')
+                    if not href.startswith('http') and href.endswith('.pdf'):
+                        href = base_url + href
+                    if href.endswith('.pdf'):
+                        row_key = self.row_key(td.text for td in tds)
+                        if self.artifact_info(year, href) is None:
+                            continue
+                        yield row_key, self.artifact_info(year, href)
+    
+    def row_key(self, values: Iterable[str]) -> str:
+        "Values hash key from CSV row for artifact index"
+        return ''.join(''.join(values).split())
+
+    def artifact_info(self, year: int, uri: str) -> tuple[str, str]|None:
+        "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
+        if year < 2020 or not uri.endswith('.pdf'):
+            return
+        clean = unquote_plus(uri)
+        if clean.startswith('\\'):
+            return
+        clean = clean.removesuffix('.pdf')
+        clean = clean.removeprefix('https://webdev/progsupt/bussrvce/warnreports/')
+        for srch, repl in self.key_clean_subs:
+            clean = srch.sub(repl, clean)
+        clean = clean.strip('_-')
+        if not clean:
+            return
+        name = f'{year}_{clean}.pdf'
+        cache_key = f'records/{name}'
+        return cache_key, uri
 
 class DE(Scraper):
     base_url = 'https://joblink.delaware.gov'
