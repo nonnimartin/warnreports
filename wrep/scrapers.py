@@ -258,11 +258,16 @@ class CO(Scraper):
             yield csv.DictReader(file, restkey='__')
 
 class CT(Scraper):
-    key_clean_subs = (
+    base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
+    key_clean_subs = [
         (_r(r'[^a-zA-Z\d_]'), '-'),
-        (_r(r'([-_])+'), r'\1')
-        )
-    
+        (_r(r'([-_])+'), r'\1'),
+    ]
+    artifact_uri_subs = [
+        (_r(r'^https?://webdev/progsupt/bussrvce/warnreports/'), ''),
+    ]
+    artifacts_min_year = 2019
+
     async def scrape(self) -> None:
         self.runner.scrape()
         index = dict(self.build_artifacts_index())
@@ -306,6 +311,8 @@ class CT(Scraper):
         "Build the artifacts index from the downloaded page files"
         for file in sorted(self.cache.glob('*.html'), reverse=True):
             year = int(file.name[:4])
+            if year < self.artifacts_min_year:
+                continue
             doc = bs(file.read_text(), 'html5lib')
             tables = doc.find_all('table')
             for table in tables:
@@ -318,17 +325,11 @@ class CT(Scraper):
             tds = tr.find_all('td')
             for td in tds:
                 if td.a is not None:
-                    base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports/'
-                    href = td.a['href']
-                    if href.startswith('http://webdev/progsupt/bussrvce/warnreports/'):
-                        href = href.replace('http://webdev/progsupt/bussrvce/warnreports/', '')
-                    if not href.startswith('http') and href.endswith('.pdf'):
-                        href = base_url + href
-                    if href.endswith('.pdf'):
+                    info = self.artifact_info(year, td.a.get('href', ''))
+                    if info:
                         row_key = self.row_key(td.text for td in tds)
-                        if self.artifact_info(year, href) is None:
-                            continue
-                        yield row_key, self.artifact_info(year, href)
+                        yield row_key, info
+                        break
     
     def row_key(self, values: Iterable[str]) -> str:
         "Values hash key from CSV row for artifact index"
@@ -336,13 +337,14 @@ class CT(Scraper):
 
     def artifact_info(self, year: int, uri: str) -> tuple[str, str]|None:
         "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
-        if year < 2020 or not uri.endswith('.pdf'):
+        if year < self.artifacts_min_year or not uri.endswith('.pdf'):
             return
-        clean = unquote_plus(uri)
-        if clean.startswith('\\'):
-            return
+        for srch, repl in self.artifact_uri_subs:
+            uri = srch.sub(repl, uri)
+        url = self.absurl(uri)
+        clean = Path(urlparse(url).path).name
+        clean = unquote_plus(clean)
         clean = clean.removesuffix('.pdf')
-        clean = clean.removeprefix('https://webdev/progsupt/bussrvce/warnreports/')
         for srch, repl in self.key_clean_subs:
             clean = srch.sub(repl, clean)
         clean = clean.strip('_-')
@@ -350,7 +352,7 @@ class CT(Scraper):
             return
         name = f'{year}_{clean}.pdf'
         cache_key = f'records/{name}'
-        return cache_key, uri
+        return cache_key, url
 
 class DE(Scraper):
     base_url = 'https://joblink.delaware.gov'
