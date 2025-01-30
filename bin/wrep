@@ -3,5 +3,11 @@ if [ "$#" -eq 0 ] ; then
   echo "Usage: wrep <COMMAND> [...]" >&2
   exit 1
 fi
-cd "$(dirname "$0")/.."
-exec python -m wrep $@
+set -e
+code="$(realpath "$(dirname "$0")/..")"
+export PYTHONPATH="$code"
+if [ "$@" == 'shell' ] ; then
+  PYTHONSTARTUP="$code/scripts/startup.py" exec python
+else
+  exec python -m wrep "$@"
+fi

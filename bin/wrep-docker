@@ -1,8 +1,12 @@
 #!/bin/bash
+if [ "$#" -eq 0 ] ; then
+  echo "Usage: wrep <COMMAND> [...]" >&2
+  exit 1
+fi
 set -e
-cd /code
-if [[ "$#" -eq 0 ]] ; then
+export PYTHONPATH="$(realpath "$(dirname "$0")/..")"
+if [[ "$@" == 'shell' ]] ; then
   exec python
 else
-  exec python -m wrep $@
+  exec python -m wrep "$@"
 fi

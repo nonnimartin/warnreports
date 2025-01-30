@@ -214,6 +214,8 @@ collections: dict[str, CollectionDefn] = dict(
         {'code': 1},
         {'title': 1},
         {'root': 1},
+        {'parent': 1},
+        {'depth': 1},
         {'companies_count': 1},
         {'reports_count': 1},
         {'reports_count': -1},

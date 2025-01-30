@@ -3,12 +3,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import json
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar, Generic, Iterable, Iterator, TypeVar
 
+import yaml
 from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
 from sqlalchemy import delete as delete
@@ -164,13 +166,17 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
         if naics and naics.id not in memo['naics']:
             inst.naics.append(NaicsData.model_validate(naics))
             memo['naics'].add(naics.id)
+            for anc in naics.ancs:
+                if anc.id not in memo['naics']:
+                    inst.naics.append(NaicsData.model_validate(anc))
+                    memo['naics'].add(anc.id)
         if artifact and artifact.id not in memo['artifacts']:
             inst.artifacts.append(ArtifactData.model_validate(artifact))
             memo['artifacts'].add(artifact.id)
 
     @classmethod
     def reduce_finish(cls, inst, memo):
-        inst.naics.sort(key=lambda x: (x.code, x.id))
+        inst.naics.sort(key=lambda x: str(x.id))
 
 class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
     id: Mapped[str] = mapped_column(String(2), primary_key=True)
@@ -236,12 +242,16 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
         if naics and naics.id not in memo['naics']:
             inst.naics.append(NaicsData.model_validate(naics))
             memo['naics'].add(naics.id)
+            for anc in naics.ancs:
+                if anc.id not in memo['naics']:
+                    inst.naics.append(NaicsData.model_validate(anc))
+                    memo['naics'].add(anc.id)
 
     @classmethod
     def reduce_finish(cls, inst, memo):
         inst.name = min(map(normls.company_name_sort, memo['canon']))[-1]
         inst.aliases.sort(key=lambda x: (x.lower(), x))
-        inst.naics.sort(key=lambda x: (x.code, x.id))
+        inst.naics.sort(key=lambda x: str(x.id))
         inst.states.sort()
         inst.states_count = len(inst.states)
 
@@ -249,7 +259,20 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
     code: Mapped[str] = mapped_column(String(32), index=True)
     title: Mapped[str] = mapped_column(String(255), index=True)
+    left: Mapped[int] = mapped_column(Integer(), unique=True)
+    right: Mapped[int] = mapped_column(Integer(), unique=True)
+    depth: Mapped[int] = mapped_column(Integer())
+    parent: Mapped[int|None] = mapped_column(Integer(), nullable=True)
     reports: Mapped[list[Report]] = relationship(secondary=NaicsReport, back_populates='naics')
+    ancs: Mapped[list[Naics]] = relationship(
+        'Naics',
+        primaryjoin='and_(Naics.left > remote(foreign(Naics.left)), Naics.right < remote(foreign(Naics.right)))',
+        viewonly=True,
+        order_by=id.desc())
+
+    @property
+    def root(self) -> int:
+        return int(str(self.id)[:2])
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool = True):
@@ -264,12 +287,6 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
             .order_by(cls.id, Report.company_norm, Company.name_norm))
         stmt = lazify(stmt, lazy)
         return stmt
-
-    @classmethod
-    def reduce_init(cls, row, memo):
-        inst = super().reduce_init(row, memo)
-        inst.root = int(str(inst.id)[:2])
-        return inst
 
     @classmethod
     def reduce_row(cls, inst, row, memo):
@@ -369,7 +386,11 @@ def load_naics() -> None:
             Naics(
                 id=entry['code'],
                 code=entry['code_raw'],
-                title=entry['title'])
+                title=entry['title'],
+                left=entry['left'],
+                right=entry['right'],
+                depth=entry['depth'],
+                parent=entry['parent'])
             for entry in rep.json())
         session.commit()
 
@@ -413,9 +434,55 @@ class DumpCommand(utils.FuncCommand(dump_update)):
         parser.add_argument('table', type=lambda x: Base.metadata.tables[x.lower()])
         parser.add_argument('file', nargs='?', type=Path)
 
+class MroneCommand(utils.BaseCommand):
+    'Run map-reduce for a single object and print json'
+
+    models = dict(
+        report=Report,
+        artifact=Artifact,
+        naics=Naics,
+        company=Company,
+        state=StateStat)
+
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--model', '-m', choices=cls.models, default='report', help='Model name, default report')
+        parser.add_argument('--yaml', action='store_true', help='Output yaml')
+        parser.add_argument('id', help='The object primary key. For company, this is the name')
+
+    def setup(self, opts):
+        super().setup(opts)
+        self.model: type[MapReduceBase] = self.models[opts.model]
+        self.filterkw = {}
+        if self.model is Company:
+            field = 'name_norm'
+            value = normls.company_name_norm(opts.id)
+        else:
+            field = 'id'
+            value = opts.id
+        self.filterkw = {field: value}
+        self.filter = getattr(self.model, field) == value
+
+    def run(self):
+        with SessionLocal() as session:
+            res = list(self.model.map_reduce_exec(session, self.filter))
+        if not res:
+            raise ValueError(f'Not found: {self.filterkw}')
+        obj, = res
+        obj = json.loads(obj.model_dump_json())
+        self.printobj(obj)
+
+    def printobj(self, obj):
+        if self.opts.yaml:
+            text = yaml.safe_dump(obj, sort_keys=False)
+        else:
+            text = json.dumps(obj, indent=2)
+        print(text)
+
 class Command(utils.BaseCommand):
     'ORM/SQL commands'
-    commands = dict(dump=DumpCommand, naics=NaicsCommand)
+    commands = dict(dump=DumpCommand, naics=NaicsCommand, mrone=MroneCommand)
+
 
 if __name__ == '__main__':
     Command.main()
