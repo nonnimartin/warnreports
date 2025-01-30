@@ -107,13 +107,15 @@ class NaicsData(DataModel):
     id: int = Field(description='The 2 to 6 digit NAICS code')
     code: str = Field(description='The code string')
     title: str = Field(description='The NAICS industry title')
+    parent: int|None = Field(description='The parent NAICS code, if any')
+    depth: int = Field(description='The tree depth')
+    root: int = Field(description='The root NAICS code')
     model_config = ConfigDict(from_attributes=True)
 
 class NaicsDetail(NaicsData):
     reports_count: int = 0
     companies_count: int = 0
     employees_sum: int = 0
-    root: int = None
 
 class StateDetail(DataModel):
     id: StateCode

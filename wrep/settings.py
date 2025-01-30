@@ -12,7 +12,7 @@ ARTIFACTS_DIR = Path(getenv('ARTIFACTS_DIR', BUILD_DIR/'artifacts'))
 BOOTSTRAP_DIR = Path(getenv('BOOTSTRAP_DIR', REPODIR/'lib'/'bootstrap'))
 ASSETS_AUTO_BUILD = getenv('ASSETS_AUTO_BUILD', '').lower() == 'true'
 CSS_BUILD_DIR = Path(getenv('CSS_BUILD_DIR', BUILD_DIR/'css'))
-NAICS_DOWNLOAD = 'https://github.com/owings1/naics/raw/2022-1/build/2022.min.json'
+NAICS_DOWNLOAD = 'https://archive.warnreports.org/naics/dist/2022-2/2022.min.json'
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
 QUERY_LOGGING = getenv('QUERY_LOGGING', '').lower() == 'true'
 NAMESPACE = UUID(getenv('NAMESPACE', 'b98ba54b-c67b-4bce-b609-b2a236e33b14'))
