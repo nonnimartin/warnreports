@@ -27,7 +27,13 @@ __all__ = [
 
 type Doc = dict[str, Any]
 logger = utils.get_logger('backends.etl')
-mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
+_mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
+_mongo_database_default = _mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
+
+def get_mongo_database(dbname: str|None = None):
+    if dbname:
+        return _mongo_client.get_database(dbname)
+    return _mongo_database_default
 
 class ReaderMixin:
 
@@ -71,8 +77,7 @@ class MongoPipelineLog(PipelineLogBackend):
 
     def __init__(self, **context):
         self.context = context
-        dbname = context.get('dbname') or settings.ETL_MONGODB_DBNAME
-        self.db = mongo_client.get_database(dbname)
+        self.db = get_mongo_database(context.get('dbname'))
         self._indexes_created = False
 
     async def save(self, doc):
@@ -100,8 +105,7 @@ class MongoETBase(StageBackend):
 
     def __init__(self, state, **context):
         super().__init__(state, **context)
-        dbname = context.get('dbname') or settings.ETL_MONGODB_DBNAME
-        self.db = mongo_client.get_database(dbname)
+        self.db = get_mongo_database(context.get('dbname'))
 
     @property
     def collection(self):
@@ -179,10 +183,7 @@ class MongoSearchIndex(SearchIndexBackend):
 
     def __init__(self, state, **context):
         super().__init__(state, **context)
-        if (dbname := context.get('dbname')):
-            self.db = search.mongo_client.get_database(dbname)
-        else:
-            self.db = search.mongo
+        self.db = search.get_mongo_database(context.get('dbname'))
 
     async def clean(self) -> None:
         for name in self.collections:
@@ -231,10 +232,10 @@ async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc
         count += 1
     return count, created, updated
 
-async def docs_stat(it: AsyncIterable[Doc]) -> Doc:
+async def docs_stat(it: EitherIterable[Doc]) -> Doc:
     h = hashlib.sha1()
     size, count = 0, 0
-    async for doc in it:
+    async for doc in utils.as_aiter(it):
         buf = json.dumps(doc, default=str).encode()
         h.update(buf)
         size += len(buf)

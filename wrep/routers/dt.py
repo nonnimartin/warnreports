@@ -29,7 +29,7 @@ async def search_reports(
     qp = dict(req.query_params)
     logger.info(f'{qp=}')
     params = dict(params, order=order)
-    data, total = await search.search_with_total(ReportData, params, limit, offset)
+    data, total = await search.search_result(ReportData, params, limit, offset)
     collstats = (await search.search_stats('reports'))['reports']
     return ReportSearchResult(
         data=data,

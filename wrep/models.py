@@ -37,7 +37,7 @@ __all__ = [
     'StateDetail',
     'ValidationError']
 
-Limit = Annotated[PositiveInt, Le(1000)]
+Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]

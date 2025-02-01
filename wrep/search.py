@@ -12,7 +12,7 @@ from . import orm, settings, utils
 from .models import *
 from .utils import BaseCommand, FuncCommand
 
-__all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
+__all__ = ['filters', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
 
 type MongoDB = AsyncIOMotorDatabase
 
@@ -142,33 +142,29 @@ async def search_result(
     params: dict[str, Any]|None = None,
     limit: Limit|None = None,
     offset: Offset = 0,
-    with_total: bool = False,
-) -> tuple[list[DM], int|None]:
+    dbname: str|None = None,
+) -> tuple[list[DM], int]:
     filt = filters[model](**params or {})
-    coll = mongo.get_collection(collections_map[model])
+    db = get_mongo_database(dbname)
+    coll = db.get_collection(collections_map[model])
     filts = tuple(filt.get_filters())
     q = {'$and': filts} if filts else {}
-    cur = coll.find(q)
-    orders = list(filt.get_ordering())
-    if ('_id', 1) not in orders and ('_id', -1) not in orders:
-        orders.append(('_id', 1))
-    if orders:
-        cur = cur.sort(orders)
-    if offset:
-        cur = cur.skip(offset)
-    if limit:
-        cur = cur.limit(limit)
-    total = await coll.count_documents(q) if with_total else None
-    objs = [model.model_validate(obj) async for obj in cur]
+    total = await coll.count_documents(q)
+    if limit == 0:
+        objs = []
+    else:
+        cur = coll.find(q)
+        orders = list(filt.get_ordering())
+        if ('_id', 1) not in orders and ('_id', -1) not in orders:
+            orders.append(('_id', 1))
+        if orders:
+            cur = cur.sort(orders)
+        if offset:
+            cur = cur.skip(offset)
+        if limit:
+            cur = cur.limit(limit)
+        objs = [model.model_validate(obj) async for obj in cur]
     return objs, total
-
-async def search_with_total(
-    model: type[DM],
-    params: dict[str, Any]|None = None,
-    limit: Limit|None = None,
-    offset: Offset = 0
-) -> tuple[list[DM], int]:
-    return await search_result(model, params, limit, offset, with_total=True)
 
 async def search(
     model: type[DM],
@@ -179,8 +175,8 @@ async def search(
     return (await search_result(model, params, limit, offset))[0]
 
 async def retrieve(model: type[DM], **params) -> DM:
-    results = await search(model, params, 1)
-    if results:
+    results, total = await search_result(model, params, 1)
+    if total:
         return results[0]
     raise NotFoundError
 
@@ -190,8 +186,13 @@ async def retrieve404(model: type[DM], **params) -> DM:
     except NotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
-mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
-mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
+_mongo_client = AsyncIOMotorClient(settings.SEARCH_MONGODB_URL, uuidRepresentation='standard')
+_mongo_database_default = _mongo_client.get_database(settings.SEARCH_MONGODB_DBNAME)
+
+def get_mongo_database(dbname: str|None = None):
+    if dbname:
+        return _mongo_client.get_database(dbname)
+    return _mongo_database_default
 
 class CollectionDefn:
 
@@ -254,10 +255,7 @@ collections_map: dict[type[DataModel], str] = {
 
 async def search_stats(*names: str, dbname: str|None = None) -> dict[str, dict[str, int]]:
     'Get collection stats'
-    if dbname:
-        db = mongo_client.get_database(dbname)
-    else:
-        db = mongo
+    db = get_mongo_database(dbname)
     names = names or collections
     stats = {}
     for name in names:
@@ -267,10 +265,7 @@ async def search_stats(*names: str, dbname: str|None = None) -> dict[str, dict[s
 
 async def search_init(*names: str, dbname: str|None = None) -> None:
     'Init collections'
-    if dbname:
-        db = mongo_client.get_database(dbname)
-    else:
-        db = mongo
+    db = get_mongo_database(dbname)
     names = names or collections
     defns = {name: collections[name] for name in names}
     for name, defn in defns.items():
@@ -279,22 +274,16 @@ async def search_init(*names: str, dbname: str|None = None) -> None:
 
 async def search_clean(*names: str, dbname: str|None = None) -> None:
     'Clean collections'
-    if dbname:
-        db = mongo_client.get_database(dbname)
-    else:
-        db = mongo
+    db = get_mongo_database(dbname)
     names = names or collections
     for name in names:
         stat = (await search_stats(name, dbname=dbname))[name]
         logger.info(f'Cleaning {name} {stat=}')
         await db.get_collection(name).drop()
 
-async def search_build(*names: str, dbname: str|None = None) -> None:
+async def search_build(*names: str, dbname: str|None = None, lazy: bool = True) -> None:
     'Build collections'
-    if dbname:
-        db = mongo_client.get_database(dbname)
-    else:
-        db = mongo
+    db = get_mongo_database(dbname)
     names = names or collections
     defns = {name: collections[name] for name in names}
     with orm.SessionLocal() as session:
@@ -302,7 +291,7 @@ async def search_build(*names: str, dbname: str|None = None) -> None:
             await search_clean(name, dbname=dbname)
             await search_init(name, dbname=dbname)
             logger.info(f'Building {name}')
-            it = defn.orm_model.map_reduce_exec(session)
+            it = defn.orm_model.map_reduce_exec(session, lazy=lazy)
             it = map(defn.data_model.as_doc, it)
             await db.get_collection(name).insert_many(it)
             stat = (await search_stats(name, dbname=dbname))[name]
@@ -312,18 +301,29 @@ class SubCommand(BaseCommand):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('--dbname', '-d',
+        arg = parser.add_argument
+        arg('--dbname', '-d',
             default=None,
             help=(
                 f'Alternate mongo search db name, '
-                f'default MONGODB_DBNAME ({settings.MONGODB_DBNAME})'))
-        parser.add_argument('names', nargs='*', help='Collection names, default all')
+                f'default SEARCH_MONGODB_DBNAME ({settings.SEARCH_MONGODB_DBNAME})'))
+        if cls is Command.commands['build']:
+            arg('--eager', '-e',
+                action='store_false',
+                dest='lazy',
+                help='Use eager loading of SQL result sets. Uses more memory.')
+        arg('names',
+            nargs='*',
+            choices=collections,
+            help='Collection names, default all')
 
     def setup(self, opts):
         super().setup(opts)
         self.funckw = {}
         if opts.dbname is not None:
             self.funckw.update(dbname=opts.dbname)
+        if hasattr(opts, 'lazy'):
+            self.funckw.update(lazy=opts.lazy)
 
     async def run(self):
         res = await self.func(*self.opts.names, **self.funckw)

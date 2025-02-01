@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
