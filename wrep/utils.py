@@ -176,11 +176,12 @@ class HelpFormatter(argparse.HelpFormatter):
     def _fill_text(self, text: str, width: int, indent: str) -> str:
         return '\n'.join(indent + line for line in self._split_lines(text, width - len(indent)))
 
+type AP = ArgumentParser
 class BaseCommand:
     description: ClassVar[str|None] = None
     prog: ClassVar[str|None] = None
     usage: ClassVar[str|None] = None
-    parser_class: ClassVar[type[ArgumentParser]] = ArgumentParser
+    parser_class: ClassVar[type[AP]] = ArgumentParser
     formatter_class: ClassVar[type[argparse.HelpFormatter]] = HelpFormatter
     commands: ClassVar[dict[str, type[BaseCommand]]] = {}
     command_metavar: ClassVar[str] = 'command'
@@ -188,13 +189,13 @@ class BaseCommand:
     command: BaseCommand|None = None
 
     @classmethod
-    def parser(cls) -> ArgumentParser:
+    def create_parser(cls) -> AP:
         parser = cls.parser_class()
         cls.init_parser(parser)
         return parser
 
     @classmethod
-    def init_parser(cls, parser: ArgumentParser) -> None:
+    def init_parser(cls, parser: AP) -> None:
         parser.formatter_class = cls.formatter_class
         parser.description = (
             cls.__dict__.get('description') or
@@ -211,11 +212,11 @@ class BaseCommand:
             parser.usage = parser.usage.format(**fmt)
 
     @classmethod
-    def add_arguments(cls, parser: ArgumentParser) -> None:
+    def add_arguments(cls, parser: AP) -> None:
         pass
 
     @classmethod
-    def add_commands(cls, parser: ArgumentParser) -> None:
+    def add_commands(cls, parser: AP) -> None:
         if not cls.commands:
             return
         subparsers = cls.create_subparsers(parser)
@@ -226,7 +227,7 @@ class BaseCommand:
                 subparser.description = f'{name} command'
 
     @classmethod
-    def create_subparsers(cls, parser: ArgumentParser) -> SubParsers:
+    def create_subparsers(cls, parser: AP) -> SubParsers:
         return parser.add_subparsers(
             dest=cls.command_opt,
             metavar=cls.command_metavar,
@@ -235,18 +236,18 @@ class BaseCommand:
 
     @classmethod
     def main(cls, args=None):
-        asyncio.run(wait(cls(cls.parse(args)).run()))
+        parser = cls.create_parser()
+        opts = parser.parse_args(args)
+        cmd = cls(opts, parser)
+        asyncio.run(wait(cmd.run()))
 
-    @classmethod
-    def parse(cls, args=None):
-        return cls.parser().parse_args(args)
-
-    def __init__(self, opts):
+    def __init__(self, opts, parser: AP):
         self.opts = opts
+        self.parser = parser
         if hasattr(opts, self.command_opt):
             self.command_name = getattr(opts, self.command_opt)
             delattr(opts, self.command_opt)
-            self.command = self.commands[self.command_name](opts)
+            self.command = self.commands[self.command_name](opts, parser)
         self.setup(opts)
 
     def setup(self, opts):

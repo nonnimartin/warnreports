@@ -74,8 +74,28 @@ class AutoCommand(FuncCommand(auto)):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('--message', '-m', default='auto')
+        parser.add_argument('--message', '-m', default='auto', help='Migration message, default auto')
+
+
+class AlembicCommand(BaseCommand):
+
+    from alembic.config import CommandLine
+
+    @classmethod
+    def init_parser(cls, parser):
+        for action in cls.CommandLine().parser._actions:
+            if action.dest in ('help', 'config'):
+                continue
+            parser._add_action(action)
+
+    def setup(self, opts):
+        if not hasattr(opts, 'cmd'):
+            self.parser.error('too few arguments')
+        self.config = Config(settings.ALEMBIC_INI, ini_section=opts.name, cmd_opts=opts)
+
+    def run(self):
+        self.CommandLine().run_cmd(self.config, self.opts)
 
 class Command(BaseCommand):
     'Migration commands'
-    commands = dict(migrate=MigrateCommand, auto=AutoCommand)
+    commands = dict(migrate=MigrateCommand, auto=AutoCommand, alembic=AlembicCommand)
