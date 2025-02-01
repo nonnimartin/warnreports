@@ -5,15 +5,16 @@ from abc import abstractmethod
 from typing import Any, Iterable, Iterator
 
 from fastapi import HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
-from . import settings, utils
-from . import orm
+from . import orm, settings, utils
 from .models import *
 from .utils import BaseCommand, FuncCommand
 
 __all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
+
+type MongoDB = AsyncIOMotorDatabase
 
 logger = utils.get_logger('search')
 
@@ -251,54 +252,81 @@ collections: dict[str, CollectionDefn] = dict(
 collections_map: dict[type[DataModel], str] = {
     defn.data_model: name for name, defn in collections.items()}
 
-async def search_stats(*names: str) -> dict[str, dict[str, int]]:
+async def search_stats(*names: str, dbname: str|None = None) -> dict[str, dict[str, int]]:
     'Get collection stats'
+    if dbname:
+        db = mongo_client.get_database(dbname)
+    else:
+        db = mongo
     names = names or collections
     stats = {}
     for name in names:
-        stat = await mongo.command('collstats', name)
+        stat = await db.command('collstats', name)
         stats[name] = dict(count=stat['count'], size=stat['size'])
     return stats
 
-async def search_init(*names: str) -> None:
+async def search_init(*names: str, dbname: str|None = None) -> None:
     'Init collections'
+    if dbname:
+        db = mongo_client.get_database(dbname)
+    else:
+        db = mongo
     names = names or collections
     defns = {name: collections[name] for name in names}
     for name, defn in defns.items():
         logger.info(f'Initializing {name}')
-        await mongo.get_collection(name).create_indexes(defn.indexes)
+        await db.get_collection(name).create_indexes(defn.indexes)
 
-async def search_clean(*names: str) -> None:
+async def search_clean(*names: str, dbname: str|None = None) -> None:
     'Clean collections'
+    if dbname:
+        db = mongo_client.get_database(dbname)
+    else:
+        db = mongo
     names = names or collections
     for name in names:
-        stat = (await search_stats(name))[name]
+        stat = (await search_stats(name, dbname=dbname))[name]
         logger.info(f'Cleaning {name} {stat=}')
-        await mongo.get_collection(name).drop()
+        await db.get_collection(name).drop()
 
-async def search_build(*names: str) -> None:
+async def search_build(*names: str, dbname: str|None = None) -> None:
     'Build collections'
+    if dbname:
+        db = mongo_client.get_database(dbname)
+    else:
+        db = mongo
     names = names or collections
     defns = {name: collections[name] for name in names}
     with orm.SessionLocal() as session:
         for name, defn in defns.items():
-            await search_clean(name)
-            await search_init(name)
+            await search_clean(name, dbname=dbname)
+            await search_init(name, dbname=dbname)
             logger.info(f'Building {name}')
             it = defn.orm_model.map_reduce_exec(session)
             it = map(defn.data_model.as_doc, it)
-            await mongo.get_collection(name).insert_many(it)
-            stat = (await search_stats(name))[name]
+            await db.get_collection(name).insert_many(it)
+            stat = (await search_stats(name, dbname=dbname))[name]
             logger.info(f'Built {name} {stat=}')
 
 class SubCommand(BaseCommand):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('names', nargs='*')
+        parser.add_argument('--dbname', '-d',
+            default=None,
+            help=(
+                f'Alternate mongo search db name, '
+                f'default MONGODB_DBNAME ({settings.MONGODB_DBNAME})'))
+        parser.add_argument('names', nargs='*', help='Collection names, default all')
+
+    def setup(self, opts):
+        super().setup(opts)
+        self.funckw = {}
+        if opts.dbname is not None:
+            self.funckw.update(dbname=opts.dbname)
 
     async def run(self):
-        res = await self.func(*self.opts.names)
+        res = await self.func(*self.opts.names, **self.funckw)
         if res is not None:
             import json
             print(json.dumps(res, indent=2))

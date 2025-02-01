@@ -69,10 +69,11 @@ class Pipeline:
         self.state = state.upper()
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
+        beopts = _pfxopts(opts, 'etl', 'search')
         self.backends: dict[Stage, StageBackend] = {
-            Stage.Extract: MongoExtraction(self.state),
-            Stage.Translate: MongoTranslation(self.state),
-            Stage.Index: MongoSearchIndex(self.state)}
+            Stage.Extract: MongoExtraction(self.state, **beopts['etl']),
+            Stage.Translate: MongoTranslation(self.state, **beopts['etl']),
+            Stage.Index: MongoSearchIndex(self.state, **beopts['search'])}
         self.session: orm.Session|None = None
         self.opts = opts
 
@@ -401,7 +402,7 @@ class PipelineRunner:
         incremental: bool = False,
         concurrent: bool = False,
         max_workers: int = settings.ETL_DEFAULT_WORKERS,
-        lazy: bool|int = True,
+        **pipeline_opts,
     ):
         if clean_only and (clean or incremental or stat_only):
             raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
@@ -415,34 +416,45 @@ class PipelineRunner:
         self.concurrent = concurrent
         self.max_workers = int(max(1, max_workers))
         self.fail = fail
-        self.lazy = lazy
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
-        self.errors: list[tuple[StateCode, Stage, Exception]] = []
-        self.size = len(self.states) * len(self.stages)
+        self.errors: list[dict[str, str]] = []
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
         self.grouping: tuple[list[Stage], ...] = [], [], []
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
-        self.logbackend = MongoPipelineLog()
+        self.logbackend = MongoPipelineLog(**_pfxopts(pipeline_opts, 'etl')['etl'])
+        self.pipeline_opts = pipeline_opts
         self.info = dict(
             id=self.id,
-            incremental=self.incremental,
-            concurrent=self.concurrent,
-            clean=self.clean or self.clean_only)
+            stages=self.stages,
+            states=self.states,
+            batch_opts=dict(
+                incremental=self.incremental,
+                concurrent=self.concurrent,
+                clean=self.clean,
+                fail=self.fail,
+                clean_only=self.clean_only,
+                max_workers=self.max_workers),
+            pipeline_opts=self.pipeline_opts,
+            runs=[])
+        self.start: datetime|None = None
+        self.end: datetime|None = None
 
     async def run(self) -> None:
-        self.start = utils.now()
-        self.info.update(start=self.start)
-        self.jobseq = 0
+        self.run = None
         it = iter(self.grouping)
-        if self.concurrent:
-            run_concurrently = self.run_concurrently
-        else:
-            run_concurrently = self.run_consecutively
-        await run_concurrently(*next(it))
-        await self.run_consecutively(*next(it))
-        await run_concurrently(*next(it))
+        self.start = utils.now()
+        if await self._save_log():
+            logger.info(f'start id={self.id}')
+        try:
+            await self.run_concurrently(*next(it))
+            await self.run_consecutively(*next(it))
+            await self.run_concurrently(*next(it))
+        finally:
+            self.end = utils.now()
+            if await self._save_log():
+                logger.info(f'end id={self.id}')
 
     async def run_consecutively(self, *stages: Stage) -> None:
         for state in self.states:
@@ -451,15 +463,23 @@ class PipelineRunner:
     async def run_concurrently(self, *stages: Stage) -> None:
         if not stages:
             return
+        if not self.concurrent:
+            await self.run_consecutively(*stages)
+            return
         queue = deque(self.states)
         async def start_worker():
-            while queue:
+            while queue and not(self.errors and self.fail):
                 await self.run_stages(queue.popleft(), *stages)
         num_workers = min(self.max_workers, len(queue))
-        async with asyncio.TaskGroup() as group:
-            logger.info(f'Starting {num_workers} workers [{', '.join(map(str, stages))}]')
-            for _ in range(num_workers):
-                group.create_task(start_worker())
+        logger.info(f'concurrent {num_workers=} stages=[{', '.join(map(str, stages))}]')
+        try:
+            async with asyncio.TaskGroup() as group:
+                for _ in range(num_workers):
+                    group.create_task(start_worker())
+        except* Exception as errgrp:
+            if len(errgrp.exceptions) == 1:
+                raise errgrp.exceptions[0] from None
+            raise
 
     async def run_stages(self, state: StateCode, *stages: Stage) -> None:
         for stage in stages:
@@ -469,33 +489,51 @@ class PipelineRunner:
         if (reason := self._skip_reason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
             return
-        start = utils.now()
-        res = dict(state=state, stage=stage, jobseq=self.jobseq, start=start)
-        self.jobseq += 1
-        res['runner'] = dict(self.info, elapsed=(start - self.start).total_seconds())
-        pipeline = Pipeline(state, lazy=self.lazy)
-        if self.clean_only:
-            await pipeline.clean(stage)
-            res.update(clean_only=True)
-        elif self.stat_only:
+        pipeline = Pipeline(state, **self.pipeline_opts)
+        if self.stat_only:
             stat = await pipeline.stat(stage)
             logger.info(f'{state}:{stage}:stat {stat}')
-            res.update(stat_only=True)
-        else:
-            try:
-                res.update(await pipeline.run(stage, clean=self.clean))
-            except Exception as err:
-                if self.fail:
-                    raise
-                res.update(failed=True, error=f'{type(err).__name__}: {err}')
-                self.errors.append((state, stage, err))
-                logger.exception(f'{state}:{stage}:fail')
-                capture_exception()
-        end = utils.now()
-        res.update(end=end, elapsed=(end - start).total_seconds())
+            return
+        start = utils.now()
+        res = dict(state=state, stage=stage, seq=len(self.info['runs']), start=start, end=None)
         self.runs[state].append(res)
-        if not self.stat_only:
-            await self.logbackend.save([res])
+        self.info['runs'].append(res)
+        try:
+            if self.clean_only:
+                res.update(clean_only=True)
+                await pipeline.clean(stage)
+            else:
+                res.update(await pipeline.run(stage, clean=self.clean))
+        except Exception as err:
+            error = dict(type=type(err).__name__, msg=str(err))
+            res.update(failed=True, error=error)
+            self.errors.append(dict(state=state, stage=stage)|error)
+            logger.exception(f'{state}:{stage}:fail {error=}', exc_info=not self.fail)
+            if self.fail:
+                raise
+            capture_exception()
+        finally:
+            end = utils.now()
+            res.update(end=end, elapsed=(end - start).total_seconds())
+            await self._save_log()
+
+    def getlog(self) -> dict[str, Any]:
+        doc = dict(self.info)
+        runs = list(doc.pop('runs'))
+        until = self.end or utils.now()
+        doc.update(start=self.start, end=self.end, elapsed=(until - self.start).total_seconds())
+        if self.errors:
+            doc.update(errors=self.errors)
+            if self.fail:
+                doc.update(error=self.errors[-1])
+        doc.update(runs_count=len(runs), runs=runs)
+        return doc
+
+    async def _save_log(self) -> bool:
+        if self.stat_only:
+            return False
+        await self.logbackend.save(self.getlog())
+        return True
 
     def _skip_reason(self, state: StateCode) -> str|None:
         if (runs := self.runs[state]):
@@ -504,6 +542,13 @@ class PipelineRunner:
                 return 'Previous stage failed'
             if self.incremental and res.get('nochange'):
                 return 'No change'
+
+def _pfxopts(opts: dict[str, Any], *prefixes: str):
+    return {
+        prefix: {
+            key.removeprefix(f'{prefix}_'): opts[key]
+            for key in opts if key.startswith(f'{prefix}_')}
+        for prefix in prefixes}
 
 class Command(utils.BaseCommand):
     description = """
@@ -585,13 +630,23 @@ class Command(utils.BaseCommand):
         arg('--stat-only', '-s',
             action='store_true',
             help='Only show stats, do not run.')
+        arg('--search-dbname', '-d',
+            default=None,
+            help=(
+                f'Alternate mongo search db name, '
+                f'default MONGODB_DBNAME ({settings.MONGODB_DBNAME})'))
+        arg('--etl-dbname', '-b',
+            default=None,
+            help=(
+                f'Alternate mongo etl db name, '
+                f'default ETL_MONGODB_DBNAME ({settings.ETL_MONGODB_DBNAME})'))
         arg('--max-workers', '-w',
             type=int,
             metavar='<n>',
             default=settings.ETL_DEFAULT_WORKERS,
             help=(
-                'Max workers, applicable only when --concurrent is specified. '
-                f'Default {settings.ETL_DEFAULT_WORKERS}.'))
+                'Max workers, applicable only when --concurrent is specified, '
+                f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
         arg('--eager', '-e',
             action='store_false',
             dest='lazy',
@@ -599,12 +654,14 @@ class Command(utils.BaseCommand):
 
     def setup(self, opts):
         opts.states = opts.states or sorted(scrapers)
-        self.runner = PipelineRunner(**vars(opts))
+        runner_opts = vars(opts)
+        for be in ('etl', 'search'):
+            if runner_opts[f'{be}_dbname'] is None:
+                del runner_opts[f'{be}_dbname']
+        self.runner = PipelineRunner(**runner_opts)
 
     async def run(self):
         await self.runner.run()
-        for state, stage, err in self.runner.errors:
-            logger.warning(f'{state}:{stage} FAIL: {type(err).__name__}: {err}')
 
     @staticmethod
     def stages_opt(value: str) -> list[Stage]:
