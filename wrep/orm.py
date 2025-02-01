@@ -150,7 +150,7 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
             .join(Report2.naics, isouter=True)
             .join(cls.artifacts, isouter=True)
             .where(*filters)
-            .order_by(cls.id, Naics.code, Artifact.id))
+            .order_by(cls.id, Naics.code, Naics.id, Artifact.id))
         stmt = lazify(stmt, lazy, (Report2.naics, cls.artifacts))
         return stmt
 
@@ -212,9 +212,10 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
     @classmethod
     def reduce_init(cls, row, memo):
         inst = super().reduce_init(row, memo)
-        company, report = row[:2]
+        company = row[0]
         inst.id = company.name_norm_id
-        inst.last_reported = report.reported
+        inst.name = company.name_canon
+        memo['canon'].add(company.name_canon)
         return inst
 
     @classmethod
@@ -224,19 +225,28 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
     @classmethod
     def reduce_row(cls, inst, row, memo):
         company, report, naics = row
-        memo['canon'].add(company.name_canon)
+        if company.name_canon not in memo['canon']:
+            inst.name = next(iter(
+                sorted(
+                    (company.name_canon, inst.name),
+                    key=normls.company_name_sort)))
+            memo['canon'].add(company.name_canon)
         for alias in company.name_canon, company.name:
             if alias not in memo['aliases']:
                 inst.aliases.append(alias)
                 memo['aliases'].add(alias)
         if report.id not in memo['reports']:
             inst.reports_count += 1
+            memo['reports'].add(report.id)
             if report.employees:
                 inst.employees_sum += report.employees
-            inst.last_reported = max(inst.last_reported, report.reported)
-            memo['reports'].add(report.id)
+            if not inst.last_reported or report.reported > inst.last_reported:
+                inst.last_reported = report.reported
+                inst.last_report_state = report.state
+                inst.last_report_id = report.id
             if report.state not in memo['states']:
                 inst.states.append(report.state)
+                inst.states_count += 1
                 memo['states'].add(report.state)
         if naics and naics.id not in memo['naics']:
             inst.naics.append(NaicsData.model_validate(naics))
@@ -244,11 +254,9 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
 
     @classmethod
     def reduce_finish(cls, inst, memo):
-        inst.name = min(map(normls.company_name_sort, memo['canon']))[-1]
         inst.aliases.sort(key=lambda x: (x.lower(), x))
         inst.naics.sort(key=lambda x: str(x.id))
         inst.states.sort()
-        inst.states_count = len(inst.states)
 
 class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
     id: Mapped[int] = mapped_column(Integer(), primary_key=True)
@@ -273,6 +281,10 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
     def root(self) -> int:
         return int(str(self.id)[:2])
 
+    @property
+    def is_leaf(self) -> bool:
+        return abs(self.left - self.right) == 1
+
     @classmethod
     def reduce_select(cls, *filters, lazy: bool = True):
         Report2 = aliased(Report)
@@ -293,12 +305,24 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
         report = row[1]
         if report and report.id not in memo['reports']:
             inst.reports_count += 1
+            memo['reports'].add(report.id)
             if report.employees:
                 inst.employees_sum += report.employees
-            memo['reports'].add(report.id)
+            if not inst.last_reported or report.reported > inst.last_reported:
+                inst.last_reported = report.reported
+                inst.last_report_state = report.state
+                inst.last_report_id = report.id
             if report.company_norm_id not in memo['companies']:
                 inst.companies_count += 1
                 memo['companies'].add(report.company_norm_id)
+            if report.state not in memo['states']:
+                inst.states.append(report.state)
+                inst.states_count += 1
+                memo['states'].add(report.state)
+
+    @classmethod
+    def reduce_finish(cls, inst, memo):
+        inst.states.sort()
 
 class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)

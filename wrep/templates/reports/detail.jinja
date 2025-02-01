@@ -71,7 +71,7 @@
                 {%- for naics in report.naics %}
                 <tr>
                     <td>{{ naics.id }}</td>
-                    <td>{{ naics.title }}</td>
+                    <td class="naics-depth-{{ naics.depth }}">{{ naics.title }}</td>
                 </tr>
                 {%- endfor %}
             </tbody>

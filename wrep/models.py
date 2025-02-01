@@ -110,12 +110,18 @@ class NaicsData(DataModel):
     parent: int|None = Field(description='The parent NAICS code, if any')
     depth: int = Field(description='The tree depth')
     root: int = Field(description='The root NAICS code')
+    is_leaf: bool = Field(description='Whether this is a leaf node', default=False)
     model_config = ConfigDict(from_attributes=True)
 
 class NaicsDetail(NaicsData):
+    states: list[StateCode] = Field(default_factory=list)
     reports_count: int = 0
     companies_count: int = 0
     employees_sum: int = 0
+    states_count: int = 0
+    last_reported: datetime|None = None
+    last_report_state: StateCode|None = None
+    last_report_id: UUID|None = None
 
 class StateDetail(DataModel):
     id: StateCode
@@ -131,6 +137,8 @@ class CompanyDetail(DataModel):
     naics: list[NaicsData] = Field(default_factory=list)
     reports_count: int = 0
     last_reported: datetime|None = None
+    last_report_state: StateCode|None = None
+    last_report_id: UUID|None = None
     employees_sum: int = 0
     states_count: int = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -187,48 +195,50 @@ class ReportsFilter(FilterModel[ReportData]):
     order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
 
-class StatesFilter(FilterModel[StateDetail]):
-    id: StateCode|None = None
+class NaicsStatesFilterMixin:
     reports_count_min: int|None = None
     reports_count_max: int|None = None
     last_reported_min: datetime|None = None
     last_reported_max: datetime|None = None
+
+class StatesFilter(FilterModel[StateDetail], NaicsStatesFilterMixin):
+    id: StateCode|None = None
     result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('id', 1)]
 
-class CompaniesFilter(FilterModel[CompanyDetail]):
-    id: list[UUID]|None = None
-    text: str|None = None
-    name: list[CompanyName]|None = None
+class NaicsCompaniesFilterMixin(NaicsStatesFilterMixin):
     state: list[StateCode]|None = None
-    naics: list[int]|None = None
-    reports_count_min: int|None = None
-    reports_count_max: int|None = None
     states_count_min: int|None = None
     states_count_max: int|None = None
     employees_sum_min: int|None = None
     employees_sum_max: int|None = None
-    last_reported_min: datetime|None = None
-    last_reported_max: datetime|None = None
+
+class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
+    id: list[UUID]|None = None
+    text: str|None = None
+    name: list[CompanyName]|None = None
+    naics: list[int]|None = None
     result_model: ClassVar = CompanyDetail
     order_fields: ClassVar = {'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
     default_ordering: ClassVar = [('name', 1)]
 
-class NaicsFilter(FilterModel[NaicsDetail]):
-    id: int|None = None
-    code: int|None = None
+class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
+    id: list[int]|None = None
     prefix: list[int]|None = None
     title: str|None = None
     root: list[int]|None = None
-    reports_count_min: int|None = None
-    reports_count_max: int|None = None
+    parent: list[int]|None = None
+    is_leaf: bool|None = None
+    includes: list[int]|None = None
+    depth_min: int|None = None
+    depth_max: int|None = None
     companies_count_min: int|None = None
     companies_count_max: int|None = None
-    employees_sum_min: int|None = None
-    employees_sum_max: int|None = None
     result_model: ClassVar = NaicsDetail
-    order_fields: ClassVar = {'id', 'code', 'title', 'root', 'reports_count', 'companies_count', 'employees_sum'}
+    order_fields: ClassVar = (
+        {'id', 'code', 'title', 'root', 'depth', 'companies_count'} |
+        {'reports_count', 'states_count', 'last_reported', 'employees_sum'})
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):

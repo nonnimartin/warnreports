@@ -81,7 +81,7 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
         if self.name is not None:
             yield {'$or': [{'aliases': name} for name in self.name]}
         if self.state is not None:
-            yield {'state': {'$in': self.state}}
+            yield {'states': {'$in': self.state}}
         if self.naics is not None:
             yield self.get_naics_filter(self.naics)
         if self.text:
@@ -92,14 +92,29 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
 
     def get_filters(self):
         if self.id:
-            yield {'id': self.id}
-        if self.code is not None:
-            yield {'code': self.code}
+            yield {'id': {'$in': self.id}}
         if self.prefix is not None:
             yield self.get_naics_filter(self.prefix, prefix='')
         if self.title:
             yield {'title': {'$regex': self.wc_contains(self.title)}}
-        yield from self.get_minmax_filters('reports_count', 'employees_sum', 'companies_count')
+        if self.parent is not None:
+            yield {'parent': {'$in': self.parent}}
+        if self.root:
+            yield {'root': {'$in': self.root}}
+        if self.state is not None:
+            yield {'states': {'$in': self.state}}
+        if self.is_leaf is not None:
+            yield {'is_leaf': self.is_leaf}
+        if self.includes:
+            incs = set()
+            for code in self.includes:
+                s = str(code)
+                for i in range(2, min(6, len(s))):
+                    incs.add(int(s[:i]))
+                incs.add(code)
+            yield {'id': {'$in': sorted(incs)}}
+        yield from self.get_minmax_filters('reports_count', 'states_count', 'employees_sum', 'last_reported')
+        yield from self.get_minmax_filters('depth', 'companies_count')
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
 
@@ -216,9 +231,15 @@ collections: dict[str, CollectionDefn] = dict(
         {'root': 1},
         {'parent': 1},
         {'depth': 1},
+        {'states': 1},
+        {'is_leaf': 1},
         {'companies_count': 1},
+        {'last_reported': 1},
+        {'last_reported': -1},
         {'reports_count': 1},
         {'reports_count': -1},
+        {'states_count': 1},
+        {'states_count': -1},
         {'employees_sum': -1}]),
     artifacts=CollectionDefn(orm.Artifact, [
         {'name': 1}]),

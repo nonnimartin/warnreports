@@ -2,7 +2,6 @@
     <thead>
         <tr>
             <th>ID</th>
-            <th>Code</th>
             <th>Title</th>
             <th>Reports</th>
         </tr>
@@ -11,7 +10,6 @@
         {%- for naic in naics %}
         <tr>
             <td>{{ naic.id }}</td>
-            <td>{{ naic.code }}</td>
             <td>{{ naic.title }}</td>
             <td>{{ naic.reports_count|nf }}</td>
         </tr>

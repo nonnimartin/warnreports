@@ -53,23 +53,11 @@ async def api_docs(req: Request) -> HTMLResponse:
 
 @router.get('/about')
 async def about(req: Request) -> HTMLResponse:
-    stats = await search.search_stats()
-    states = await search.search(StateDetail)
-    naics = await search.search(NaicsDetail, dict(reports_count_min=1))
-    naics = rollup_naics(naics)
-    context = dict(stats=stats, states=states, naics=naics)
+    stats = search.search_stats()
+    states = search.search(StateDetail)
+    naics = search.search(NaicsDetail, dict(reports_count_min=1, depth_max=0))
+    context = dict(stats=await stats, states=await states, naics=await naics)
     return templates.TemplateResponse(req, 'about.jinja', context)
-
-def rollup_naics(naics: list[NaicsDetail]) -> list[NaicsDetail]:
-    counts = defaultdict(int)
-    roots: dict[int, NaicsDetail] = {}
-    for naic in naics:
-        counts[naic.root] += naic.reports_count
-        if naic.root == naic.id:
-            roots[naic.id] = naic
-    for root, naic in roots.items():
-        naic.reports_count = counts[root]
-    return list(roots.values())
 
 @router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:

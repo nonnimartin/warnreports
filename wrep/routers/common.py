@@ -168,20 +168,36 @@ def company_search_params(
         **employees_sum)
 
 def naics_search_params(
-    code: NaicsParam = None,
+    id: NaicsParam = None,
     prefix: NaicsParam = None,
-    title: NaicsTitleParam = None,
+    parent: Annotated[NaicsParam, Query(description='Restrict to direct children')] = None,
+    includes: Annotated[NaicsParam, Query(description='Also include ancestors')] = None,
     root: NaicsRootParam = None,
+    is_leaf: bool|None = None,
+    title: NaicsTitleParam = None,
+    state: StateParam = None,
+    depth_min: Annotated[int, Query(description='The minimum tree depth')] = None,
+    depth_max: Annotated[int, Query(description='The maximum tree depth')] = None,
     reports_count: ReportsCountParams = ...,
     employees_sum: EmployeesSumParams = ...,
     companies_count: CompaniesCountParams = ...,
+    states_count: StatesCountParams = ...,
+    last_reported: LastReportedParams = ...,
 ):
     return dict(
-        code=code,
+        id=id,
         prefix=prefix,
+        parent=parent,
+        includes=includes,
         title=title,
         root=root,
+        is_leaf=is_leaf,
+        state=state,
+        depth_min=depth_min,
+        depth_max=depth_max,
         **reports_count,
+        **states_count,
+        **last_reported,
         **employees_sum,
         **companies_count)
 
