@@ -6,6 +6,7 @@ import operator
 import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from itertools import chain
 from typing import Any, Iterable
 
 from sentry_sdk import capture_exception
@@ -27,6 +28,7 @@ class Stage(utils.StrEnum):
 
 from .scrapers import scrapers
 from .translators import translators
+
 
 class SaveType(utils.StrEnum):
     Create = 'create'
@@ -57,7 +59,7 @@ class Pipeline:
         'employees',
         'action',
         'url',
-        'company_norm']
+        'company_norm_id']
     json_types = {
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
@@ -243,7 +245,7 @@ class Pipeline:
         artifacts = record.pop('artifacts', {})
         self.truncate_fields(record)
         company, company_save = self.save_company(record['company'])
-        record['company_norm'] = company.name_norm
+        record.update(company_norm_id=company.name_norm_id)
         dirty = save is save.Create
         for field in self.write_fields:
             value = record.get(field)
@@ -283,6 +285,7 @@ class Pipeline:
             name=name,
             name_norm=normls.company_name_norm(name),
             name_canon=normls.company_name_canon(name))
+        record['name_norm_id'] = uuid.uuid5(Company.NS, record['name_norm'])
         dirty = save is save.Create
         for field, value in record.items():
             if dirty or getattr(company, field) != value:
@@ -304,11 +307,13 @@ class Pipeline:
                 Naics.title.like(industry),
                 Naics.code.like(industry)]
         stmt = orm.select(Naics).where(functools.reduce(operator.or_, ors))
-        current = list(self.session.execute(stmt).scalars())
+        stmt = orm.lazify(stmt, lazy=False, joins=[Naics.ancs])
+        current = set(self.session.execute(stmt).unique().scalars())
+        current.update(chain.from_iterable(x.ancs for x in tuple(current)))
         for naics in set(report.naics).difference(current):
             report.naics.remove(naics)
             save = save.Update
-        for naics in set(current).difference(report.naics):
+        for naics in current.difference(report.naics):
             report.naics.append(naics)
             save = save.Update
         return save

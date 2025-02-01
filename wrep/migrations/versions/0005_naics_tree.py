@@ -20,22 +20,27 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     from sqlalchemy.orm import Session
     from wrep import settings
+    from wrep.orm import Naics
     import requests
-    rep = requests.get(settings.NAICS_DOWNLOAD)
-    rep.raise_for_status()
-    entrymap = {entry['code']: entry for entry in rep.json()}
+    conn = op.get_bind()
+    if type(conn).__name__ != 'MockConnection':
+        rep = requests.get(settings.NAICS_DOWNLOAD)
+        rep.raise_for_status()
+        entrymap = {entry['code']: entry for entry in rep.json()}
+    else:
+        entrymap = {}
     op.add_column('naics', sa.Column('left', sa.Integer(), nullable=True))
     op.add_column('naics', sa.Column('right', sa.Integer(), nullable=True))
     op.add_column('naics', sa.Column('depth', sa.Integer(), nullable=True))
     op.add_column('naics', sa.Column('parent', sa.Integer(), nullable=True))
-    from wrep.orm import Naics
-    with Session(op.get_bind()) as session:
-        for naics in session.scalars(sa.select(Naics)):
-            entry = entrymap[naics.id]
-            for name in ('left', 'right', 'depth', 'parent'):
-                setattr(naics, name, entry[name])
-            session.add(naics)
-        session.commit()
+    if type(conn).__name__ != 'MockConnection':
+        with Session(conn) as session:
+            for naics in session.scalars(sa.select(Naics)):
+                entry = entrymap[naics.id]
+                for name in ('left', 'right', 'depth', 'parent'):
+                    setattr(naics, name, entry[name])
+                session.add(naics)
+            session.commit()
     op.alter_column('naics', 'left', nullable=False)
     op.alter_column('naics', 'right', nullable=False)
     op.alter_column('naics', 'depth', nullable=False)

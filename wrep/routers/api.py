@@ -74,7 +74,7 @@ async def naics_list(params: NaicsSearchParams, opts: SearchOpts) -> list[NaicsD
 
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:
-    return await retrieve404(NaicsDetail, id=id)
+    return await retrieve404(NaicsDetail, id=[id])
 
 @router.get('/states')
 async def states_list(params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
