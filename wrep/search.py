@@ -82,7 +82,7 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
         if self.id is not None:
             yield {'_id': {'$in': self.id}}
         if self.name is not None:
-            yield {'$or': [{'aliases': name} for name in self.name]}
+            yield {'aliases': {'$in': self.name}}
         if self.state is not None:
             yield {'states': {'$in': self.state}}
         if self.naics is not None:
@@ -124,6 +124,11 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
     def get_filters(self):
         if self.id:
             yield {'id': {'$in': self.id}}
+        if self.state:
+            it = (re.escape(x.lower()[:2]) for x in self.state)
+            pat = '|'.join(filter(None, dict.fromkeys(it))) or '_'
+            pat = f'^({pat})/.*'
+            yield {'path': {'$regex': re.compile(pat)}}
         for field in ('name', 'sha1'):
             value = getattr(self, field)
             if value:
@@ -247,7 +252,8 @@ collections: dict[str, CollectionDefn] = dict(
         {'states_count': -1},
         {'employees_sum': -1}]),
     artifacts=CollectionDefn(orm.Artifact, [
-        {'name': 1}]),
+        {'name': 1},
+        {'path': 1}]),
     states=CollectionDefn(orm.StateStat, [
         {'id': 1},
         {'last_reported': -1},

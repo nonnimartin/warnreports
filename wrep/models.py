@@ -165,7 +165,8 @@ class FilterModel(DataModel, Generic[DM]):
         else:
             yield from self.default_ordering
 
-    def parse_ordering(self, order: str, allowed: set[str]|None = None):
+    @classmethod
+    def parse_ordering(cls, order: str, allowed: set[str]|None = None):
         for field in filter(None, re.split(r',\s*', order)):
             if field.startswith('-'):
                 field = field[1:]
@@ -243,6 +244,7 @@ class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
     id: list[UUID]|None = None
+    state: list[StateCode]|None = None
     sha1: str|None = None
     name: str|None = None
     result_model: ClassVar = ArtifactDetail
