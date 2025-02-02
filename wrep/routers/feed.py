@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from feedgen.feed import FeedGenerator
 from pydantic import ValidationError
+from starlette.datastructures import URL
 
 from .. import settings, utils
 from ..models import *
@@ -83,7 +84,7 @@ async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
 async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     title = f'WARN Reports {query_description(params)}'.strip()
     id = id_encode(params)
-    url = id_permalink(id, fmt)
+    url = str(id_permalink(id, fmt))
     feed = FeedGenerator()
     feed.id(url)
     feed.link(href=url, rel='self')
@@ -96,7 +97,7 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
         entry.title(report.company)
-        entry.link(href=report_link(report))
+        entry.link(href=str(report_link(report)))
         entry.published(report.tzreplace(report.reported))
         entry.updated(entry.published())
         entry.description(template.render(report=report))
@@ -137,14 +138,17 @@ def id_decode(id: str) -> dict[str, Any]:
         k: v if k in ('naics', 'state') else v[0]
         for k, v in params.items()}
 
-def id_permalink(id: str, fmt: str) -> str:
+def id_permalink(id: str, fmt: str) -> URL:
     from ..main import app
     if id:
-        href = app.url_path_for(f'{fmt}_permalink', id=id)
+        path = app.url_path_for(f'{fmt}_permalink', id=id)
     else:
-        href = app.url_path_for(f'{fmt}_query')
-    return settings.SITE_URL + href
+        path = app.url_path_for(f'{fmt}_query')
+    url = settings.SITE_URL
+    return url.replace(path=url.path.rstrip('/') + path)
 
-def report_link(report: ReportData) -> str:
+def report_link(report: ReportData) -> URL:
     from ..main import app
-    return settings.SITE_URL + app.url_path_for('report_view', id=report.id)
+    url = settings.SITE_URL
+    path = app.url_path_for('report_view', id=report.id)
+    return url.replace(path=url.path.rstrip('/') + path)

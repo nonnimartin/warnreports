@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
@@ -13,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import search, settings, utils
 from .models import *
-from .routers import api, dt, feed
+from .routers import api, feed
 
 logger = utils.get_logger('main')
 templates = Jinja2Templates(env=utils.jinja_env())
@@ -61,7 +60,7 @@ async def about(req: Request) -> HTMLResponse:
 
 @router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
-    report = await search.retrieve404(ReportData, id=id)
+    report = await search.retrieve404(ReportData, id=[id])
     context = dict(report=report)
     return templates.TemplateResponse(req, 'report.jinja', context)
 
@@ -76,7 +75,7 @@ async def artifact_view(id: UUID) -> FileResponse:
     return await artifact(id, 'inline')
 
 async def artifact(id: UUID, disposition: str) -> FileResponse:
-    artifact = await search.retrieve404(ArtifactDetail, id=id)
+    artifact = await search.retrieve404(ArtifactDetail, id=[id])
     return FileResponse(
         Path(settings.ARTIFACTS_DIR, artifact.path),
         media_type=artifact.media_type,
@@ -92,7 +91,6 @@ app = FastAPI(
 app.include_router(router, include_in_schema=False)
 app.include_router(api.router, prefix='/api/v0')
 app.include_router(feed.router, prefix='/feed', include_in_schema=False)
-app.include_router(dt.router, prefix='/dt', include_in_schema=False)
 
 
 if __name__ == '__main__':

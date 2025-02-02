@@ -1,28 +1,28 @@
 from __future__ import annotations
 
 import re
-from abc import abstractmethod
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Sequence
 
 from fastapi import HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
-from . import settings, utils
-from . import orm
+from . import orm, settings, utils
 from .models import *
 from .utils import BaseCommand, FuncCommand
 
-__all__ = ['filters', 'mongo', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
+__all__ = ['filters', 'retrieve', 'retrieve404', 'search', 'search_result', 'NotFoundError']
+
+type MongoDB = AsyncIOMotorDatabase
 
 logger = utils.get_logger('search')
 
-
 class MongoSearch(FilterModel[DM]):
+    minmax_fields: ClassVar[Sequence[str]] = ()
+    MINMAX_OPERS: ClassVar[dict[str, str]] = dict(min='$gte', max='$lte')
 
-    @abstractmethod
-    def get_filters(self) -> Iterable[Any]:
-        yield from ()
+    def get_filters(self) -> Iterable[dict[str, Any]]:
+        yield from self.get_minmax_filters(*self.minmax_fields)
 
     @staticmethod
     def wc_contains(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
@@ -42,16 +42,17 @@ class MongoSearch(FilterModel[DM]):
         return {'$or': [*rxs, {f'{prefix}id': {'$in': naics}}]}
 
     def get_minmax_filters(self, *fields: str) -> Iterator[dict[str, dict[str, int]]]:
-        for oper, suffix in zip(('$gte', '$lte'), ('min', 'max')):
-            for field in fields:
+        for field in fields:
+            for suffix, oper in self.MINMAX_OPERS.items():
                 if (value := getattr(self, f'{field}_{suffix}')) is not None:
                     yield {field: {oper: value}}
 
 class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
+    minmax_fields: ClassVar = ('reported', 'starting', 'employees')
 
     def get_filters(self):
-        if self.id:
-            yield {'_id': self.id}
+        if self.id is not None:
+            yield {'_id': {'$in': self.id}}
         if self.id_not:
             yield {'_id': {'$nin': self.id_not}}
         for field in ('state', 'company', 'company_id'):
@@ -64,31 +65,34 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_minmax_filters('reported', 'starting', 'employees')
+        yield from super().get_filters()
 
 class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
+    minmax_fields: ClassVar = ('reports_count', 'last_reported')
 
     def get_filters(self):
         if self.id:
-            yield {'id': self.id.upper()}
-        yield from self.get_minmax_filters('reports_count', 'last_reported')
+            yield {'id': {'$in': sorted(set(map(str.upper, self.id)))}}
+        yield from super().get_filters()
 
 class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
+    minmax_fields: ClassVar = MongoStatesFilter.minmax_fields + ('states_count', 'employees_sum')
 
     def get_filters(self):
         if self.id is not None:
             yield {'_id': {'$in': self.id}}
         if self.name is not None:
-            yield {'$or': [{'aliases': name} for name in self.name]}
+            yield {'aliases': {'$in': self.name}}
         if self.state is not None:
             yield {'states': {'$in': self.state}}
         if self.naics is not None:
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_minmax_filters('reports_count', 'states_count', 'employees_sum', 'last_reported')
+        yield from super().get_filters()
 
 class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
+    minmax_fields: ClassVar = MongoCompaniesFilter.minmax_fields + ('depth', 'companies_count')
 
     def get_filters(self):
         if self.id:
@@ -113,18 +117,23 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
                     incs.add(int(s[:i]))
                 incs.add(code)
             yield {'id': {'$in': sorted(incs)}}
-        yield from self.get_minmax_filters('reports_count', 'states_count', 'employees_sum', 'last_reported')
-        yield from self.get_minmax_filters('depth', 'companies_count')
+        yield from super().get_filters()
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
 
     def get_filters(self):
         if self.id:
-            yield {'_id': self.id}
+            yield {'id': {'$in': self.id}}
+        if self.state:
+            it = (re.escape(x.lower()[:2]) for x in self.state)
+            pat = '|'.join(filter(None, dict.fromkeys(it))) or '_'
+            pat = f'^({pat})/.*'
+            yield {'path': {'$regex': re.compile(pat)}}
         for field in ('name', 'sha1'):
             value = getattr(self, field)
             if value:
                 yield {field: value}
+        yield from super().get_filters()
 
 class NotFoundError(Exception):
     pass
@@ -141,33 +150,29 @@ async def search_result(
     params: dict[str, Any]|None = None,
     limit: Limit|None = None,
     offset: Offset = 0,
-    with_total: bool = False,
-) -> tuple[list[DM], int|None]:
+    dbname: str|None = None,
+) -> tuple[list[DM], int]:
     filt = filters[model](**params or {})
-    coll = mongo.get_collection(collections_map[model])
+    db = get_mongo_database(dbname)
+    coll = db.get_collection(collections_map[model])
     filts = tuple(filt.get_filters())
     q = {'$and': filts} if filts else {}
-    cur = coll.find(q)
-    orders = list(filt.get_ordering())
-    if ('_id', 1) not in orders and ('_id', -1) not in orders:
-        orders.append(('_id', 1))
-    if orders:
-        cur = cur.sort(orders)
-    if offset:
-        cur = cur.skip(offset)
-    if limit:
-        cur = cur.limit(limit)
-    total = await coll.count_documents(q) if with_total else None
-    objs = [model.model_validate(obj) async for obj in cur]
+    total = await coll.count_documents(q)
+    if limit == 0:
+        objs = []
+    else:
+        cur = coll.find(q)
+        orders = list(filt.get_ordering())
+        if ('_id', 1) not in orders and ('_id', -1) not in orders:
+            orders.append(('_id', 1))
+        if orders:
+            cur = cur.sort(orders)
+        if offset:
+            cur = cur.skip(offset)
+        if limit:
+            cur = cur.limit(limit)
+        objs = [model.model_validate(obj) async for obj in cur]
     return objs, total
-
-async def search_with_total(
-    model: type[DM],
-    params: dict[str, Any]|None = None,
-    limit: Limit|None = None,
-    offset: Offset = 0
-) -> tuple[list[DM], int]:
-    return await search_result(model, params, limit, offset, with_total=True)
 
 async def search(
     model: type[DM],
@@ -178,8 +183,8 @@ async def search(
     return (await search_result(model, params, limit, offset))[0]
 
 async def retrieve(model: type[DM], **params) -> DM:
-    results = await search(model, params, 1)
-    if results:
+    results, total = await search_result(model, params, 1)
+    if total:
         return results[0]
     raise NotFoundError
 
@@ -189,8 +194,13 @@ async def retrieve404(model: type[DM], **params) -> DM:
     except NotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
-mongo_client = AsyncIOMotorClient(settings.MONGODB_URL, uuidRepresentation='standard')
-mongo = mongo_client.get_database(settings.MONGODB_DBNAME)
+_mongo_client = AsyncIOMotorClient(settings.SEARCH_MONGODB_URL, uuidRepresentation='standard')
+_mongo_database_default = _mongo_client.get_database(settings.SEARCH_MONGODB_DBNAME)
+
+def get_mongo_database(dbname: str|None = None) -> MongoDB:
+    if dbname:
+        return _mongo_client.get_database(dbname)
+    return _mongo_database_default
 
 class CollectionDefn:
 
@@ -242,7 +252,8 @@ collections: dict[str, CollectionDefn] = dict(
         {'states_count': -1},
         {'employees_sum': -1}]),
     artifacts=CollectionDefn(orm.Artifact, [
-        {'name': 1}]),
+        {'name': 1},
+        {'path': 1}]),
     states=CollectionDefn(orm.StateStat, [
         {'id': 1},
         {'last_reported': -1},
@@ -251,54 +262,80 @@ collections: dict[str, CollectionDefn] = dict(
 collections_map: dict[type[DataModel], str] = {
     defn.data_model: name for name, defn in collections.items()}
 
-async def search_stats(*names: str) -> dict[str, dict[str, int]]:
+async def search_stats(*names: str, dbname: str|None = None) -> dict[str, dict[str, int]]:
     'Get collection stats'
+    db = get_mongo_database(dbname)
     names = names or collections
     stats = {}
     for name in names:
-        stat = await mongo.command('collstats', name)
+        stat = await db.command('collstats', name)
         stats[name] = dict(count=stat['count'], size=stat['size'])
     return stats
 
-async def search_init(*names: str) -> None:
+async def search_init(*names: str, dbname: str|None = None) -> None:
     'Init collections'
+    db = get_mongo_database(dbname)
     names = names or collections
     defns = {name: collections[name] for name in names}
     for name, defn in defns.items():
         logger.info(f'Initializing {name}')
-        await mongo.get_collection(name).create_indexes(defn.indexes)
+        await db.get_collection(name).create_indexes(defn.indexes)
 
-async def search_clean(*names: str) -> None:
+async def search_clean(*names: str, dbname: str|None = None) -> None:
     'Clean collections'
+    db = get_mongo_database(dbname)
     names = names or collections
     for name in names:
-        stat = (await search_stats(name))[name]
+        stat = (await search_stats(name, dbname=dbname))[name]
         logger.info(f'Cleaning {name} {stat=}')
-        await mongo.get_collection(name).drop()
+        await db.get_collection(name).drop()
 
-async def search_build(*names: str) -> None:
+async def search_build(*names: str, dbname: str|None = None, lazy: bool = True) -> None:
     'Build collections'
+    db = get_mongo_database(dbname)
     names = names or collections
     defns = {name: collections[name] for name in names}
     with orm.SessionLocal() as session:
         for name, defn in defns.items():
-            await search_clean(name)
-            await search_init(name)
+            await search_clean(name, dbname=dbname)
+            await search_init(name, dbname=dbname)
             logger.info(f'Building {name}')
-            it = defn.orm_model.map_reduce_exec(session)
+            it = defn.orm_model.map_reduce_exec(session, lazy=lazy)
             it = map(defn.data_model.as_doc, it)
-            await mongo.get_collection(name).insert_many(it)
-            stat = (await search_stats(name))[name]
+            await db.get_collection(name).insert_many(it)
+            stat = (await search_stats(name, dbname=dbname))[name]
             logger.info(f'Built {name} {stat=}')
 
 class SubCommand(BaseCommand):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('names', nargs='*')
+        arg = parser.add_argument
+        arg('--dbname', '-d',
+            default=None,
+            help=(
+                f'Alternate mongo search db name, '
+                f'default SEARCH_MONGODB_DBNAME ({settings.SEARCH_MONGODB_DBNAME})'))
+        if cls is Command.commands['build']:
+            arg('--eager', '-e',
+                action='store_false',
+                dest='lazy',
+                help='Use eager loading of SQL result sets. Uses more memory.')
+        arg('names',
+            nargs='*',
+            choices=collections,
+            help='Collection names, default all')
+
+    def setup(self, opts):
+        super().setup(opts)
+        self.funckw = {}
+        if opts.dbname is not None:
+            self.funckw.update(dbname=opts.dbname)
+        if hasattr(opts, 'lazy'):
+            self.funckw.update(lazy=opts.lazy)
 
     async def run(self):
-        res = await self.func(*self.opts.names)
+        res = await self.func(*self.opts.names, **self.funckw)
         if res is not None:
             import json
             print(json.dumps(res, indent=2))

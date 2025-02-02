@@ -37,7 +37,7 @@ __all__ = [
     'StateDetail',
     'ValidationError']
 
-Limit = Annotated[PositiveInt, Le(1000)]
+Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
 PageNumber: TypeAlias = PositiveInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
@@ -165,7 +165,8 @@ class FilterModel(DataModel, Generic[DM]):
         else:
             yield from self.default_ordering
 
-    def parse_ordering(self, order: str, allowed: set[str]|None = None):
+    @classmethod
+    def parse_ordering(cls, order: str, allowed: set[str]|None = None):
         for field in filter(None, re.split(r',\s*', order)):
             if field.startswith('-'):
                 field = field[1:]
@@ -176,7 +177,7 @@ class FilterModel(DataModel, Generic[DM]):
                 yield field, dir_
 
 class ReportsFilter(FilterModel[ReportData]):
-    id: UUID|None = None
+    id: list[UUID]|None = None
     id_not: list[UUID]|None = None
     text: str|None = None
     company: list[CompanyName]|None = None
@@ -202,7 +203,7 @@ class NaicsStatesFilterMixin:
     last_reported_max: datetime|None = None
 
 class StatesFilter(FilterModel[StateDetail], NaicsStatesFilterMixin):
-    id: StateCode|None = None
+    id: list[StateCode]|None = None
     result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('id', 1)]
@@ -242,7 +243,8 @@ class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
-    id: UUID|None = None
+    id: list[UUID]|None = None
+    state: list[StateCode]|None = None
     sha1: str|None = None
     name: str|None = None
     result_model: ClassVar = ArtifactDetail

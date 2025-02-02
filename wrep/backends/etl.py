@@ -4,7 +4,7 @@ import hashlib
 import json
 from abc import abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, AsyncIterable, Callable, Iterable
+from typing import Any, AsyncGenerator, AsyncIterable, Callable
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 from pymongo.operations import IndexModel
@@ -27,7 +27,13 @@ __all__ = [
 
 type Doc = dict[str, Any]
 logger = utils.get_logger('backends.etl')
-mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
+_mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
+_mongo_database_default = _mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
+
+def get_mongo_database(dbname: str|None = None):
+    if dbname:
+        return _mongo_client.get_database(dbname)
+    return _mongo_database_default
 
 class ReaderMixin:
 
@@ -38,7 +44,7 @@ class ReaderMixin:
 class PipelineLogBackend:
 
     @abstractmethod
-    async def save(self, runs: Iterable[dict]) -> None: ...
+    async def save(self, doc: Doc) -> None: ...
 
 class StageBackend:
 
@@ -68,33 +74,42 @@ class SearchIndexBackend(StageBackend):
     async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
 
 class MongoPipelineLog(PipelineLogBackend):
-    mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
 
-    async def save(self, runs):
-        coll = self.mongo.pipelines
-        await coll.create_indexes(self.indexes)
-        await coll.insert_many(runs)
+    def __init__(self, **context):
+        self.context = context
+        self.db = get_mongo_database(context.get('dbname'))
+        self._indexes_created = False
+
+    async def save(self, doc):
+        coll = self.db.pipelinelogs
+        if not self._indexes_created:
+            await coll.create_indexes(self.indexes)
+            self._indexes_created = True
+        doc['_id'] = doc.pop('id')
+        res = await coll.replace_one({'_id': doc['_id']}, doc, True)
 
     indexes = [
-        IndexModel({'runner.id': 1}),
-        IndexModel({'jobseq': 1}),
-        IndexModel({'stage': 1}),
-        IndexModel({'state': 1}),
+        IndexModel({'stages': 1}),
+        IndexModel({'states': 1}),
         IndexModel({'start': -1}),
+        IndexModel({'end': -1}),
         IndexModel({'elapsed': -1}),
     ]
 
 class MongoETBase(StageBackend):
     'Common base class for MongoExraction & MongoTranslation'
-    mongo = mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
     collection_name: str
     ordering = []
     clean_keys = []
     stat_clean_keys = []
 
+    def __init__(self, state, **context):
+        super().__init__(state, **context)
+        self.db = get_mongo_database(context.get('dbname'))
+
     @property
     def collection(self):
-        return self.mongo.get_collection(self.collection_name)
+        return self.db.get_collection(self.collection_name)
 
     async def clean(self) -> None:
         filt = self.get_filter()
@@ -164,12 +179,15 @@ class MongoTranslation(MongoETBase, TranslationBackend):
     ]
 
 class MongoSearchIndex(SearchIndexBackend):
-    mongo = search.mongo
     collections = search.collections
+
+    def __init__(self, state, **context):
+        super().__init__(state, **context)
+        self.db = search.get_mongo_database(context.get('dbname'))
 
     async def clean(self) -> None:
         for name in self.collections:
-            coll = self.mongo.get_collection(name)
+            coll = self.db.get_collection(name)
             if name == 'naics':
                 coro = coll.drop()
             elif name == 'artifacts':
@@ -186,11 +204,11 @@ class MongoSearchIndex(SearchIndexBackend):
             await coro
 
     async def stat(self):
-        it = self.mongo.reports.find(dict(state=self.state)).sort('id')
+        it = self.db.reports.find(dict(state=self.state)).sort('id')
         return await docs_stat(it)
 
     async def update(self, name, source):
-        coll = self.mongo.get_collection(name)
+        coll = self.db.get_collection(name)
         await coll.create_indexes(self.collections[name].indexes)
         it = (inst.as_doc() async for inst in utils.as_aiter(source))
         key = 'id' if name in ('states', 'naics') else '_id'
@@ -214,10 +232,10 @@ async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc
         count += 1
     return count, created, updated
 
-async def docs_stat(it: AsyncIterable[Doc]) -> Doc:
+async def docs_stat(it: EitherIterable[Doc]) -> Doc:
     h = hashlib.sha1()
     size, count = 0, 0
-    async for doc in it:
+    async for doc in utils.as_aiter(it):
         buf = json.dumps(doc, default=str).encode()
         h.update(buf)
         size += len(buf)

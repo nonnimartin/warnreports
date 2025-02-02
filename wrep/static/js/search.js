@@ -1,5 +1,5 @@
 import {getFormParams} from './main.js'
-import {defaults as _defaults, serverSide} from './table.js'
+import {defaults as _defaults, dtAjax} from './table.js'
 
 export const defaults = $.extend(true, {}, _defaults, {
     layout: {
@@ -49,13 +49,16 @@ function loadStateSaveParams(data, form) {
 }
 
 function getServerSideOpts(form) {
-    const data = data => {
-        serverSide.ajax.data(data)
-        if (form && form.length) {
-            setSearchPayload(data, form)
+    return {
+        processing: true,
+        serverSide: true,
+        ajax: async (data, callback, settings) => {
+            if (form && form.length) {
+                setSearchPayload(data, form)
+            }
+            callback(await dtAjax('reports', data))
         }
     }
-    return $.extend(true, {}, serverSide, {ajax: {data}})
 }
 
 function getStateSaveOpts(form) {
