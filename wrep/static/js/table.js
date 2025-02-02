@@ -43,7 +43,7 @@ export async function dtAjax(coll, params) {
     const xhr = res[2]
     return {
         data: res[0],
-        recordsFiltered: +xhr.getResponseHeader(coll),
+        recordsFiltered: +xhr.getResponseHeader('count'),
         recordsTotal,
         draw
     }
