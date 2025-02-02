@@ -176,7 +176,7 @@ class FilterModel(DataModel, Generic[DM]):
                 yield field, dir_
 
 class ReportsFilter(FilterModel[ReportData]):
-    id: UUID|None = None
+    id: list[UUID]|None = None
     id_not: list[UUID]|None = None
     text: str|None = None
     company: list[CompanyName]|None = None
@@ -202,7 +202,7 @@ class NaicsStatesFilterMixin:
     last_reported_max: datetime|None = None
 
 class StatesFilter(FilterModel[StateDetail], NaicsStatesFilterMixin):
-    id: StateCode|None = None
+    id: list[StateCode]|None = None
     result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('id', 1)]
@@ -242,7 +242,7 @@ class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
-    id: UUID|None = None
+    id: list[UUID]|None = None
     sha1: str|None = None
     name: str|None = None
     result_model: ClassVar = ArtifactDetail

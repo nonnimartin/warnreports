@@ -119,6 +119,18 @@ def states_count_params(
         states_count_min=states_count_min,
         states_count_max=states_count_max)
 
+def depth_params(
+    depth_min: Annotated[
+        int,
+        Query(description='The minimum tree depth')] = None,
+    depth_max: Annotated[
+        int,
+        Query(description='The maximum tree depth')] = None,
+):
+    return dict(
+        depth_min=depth_min,
+        depth_max=depth_max)
+
 def report_search_params(
     text: TextSearchParam = None,
     state: StateParam = None,
@@ -130,6 +142,7 @@ def report_search_params(
     naics: NaicsParam = None,
     action: Annotated[str, Query(description='The action (layoff, closure, etc.)')] = None,
     location: Annotated[str, Query(description='Location details')] = None,
+    id: IdsParam = None,
     id_not: Annotated[IdsParam, Query(include_in_schema=False)] = None,
 ):
     return dict(
@@ -140,6 +153,7 @@ def report_search_params(
         action=action,
         location=location,
         naics=naics,
+        id=id,
         id_not=id_not,
         **reported,
         **starting,
@@ -176,8 +190,7 @@ def naics_search_params(
     is_leaf: bool|None = None,
     title: NaicsTitleParam = None,
     state: StateParam = None,
-    depth_min: Annotated[int, Query(description='The minimum tree depth')] = None,
-    depth_max: Annotated[int, Query(description='The maximum tree depth')] = None,
+    depth: DepthParams = ...,
     reports_count: ReportsCountParams = ...,
     employees_sum: EmployeesSumParams = ...,
     companies_count: CompaniesCountParams = ...,
@@ -193,8 +206,7 @@ def naics_search_params(
         root=root,
         is_leaf=is_leaf,
         state=state,
-        depth_min=depth_min,
-        depth_max=depth_max,
+        **depth,
         **reports_count,
         **states_count,
         **last_reported,
@@ -202,10 +214,11 @@ def naics_search_params(
         **companies_count)
 
 def state_search_params(
-    reports_count: ReportsCountParams,
-    last_reported: LastReportedParams,
+    id: StateParam = None,
+    reports_count: ReportsCountParams = ...,
+    last_reported: LastReportedParams = ...,
 ):
-    return reports_count | last_reported
+    return dict(id=id, **reports_count, **last_reported)
 
 ReportedParams = Annotated[dict, Depends(reported_params)]
 StartingParams = Annotated[dict, Depends(starting_params)]
@@ -215,6 +228,7 @@ ReportsCountParams = Annotated[dict, Depends(reports_count_params)]
 StatesCountParams = Annotated[dict, Depends(states_count_params)]
 LastReportedParams = Annotated[dict, Depends(last_reported_params)]
 CompaniesCountParams = Annotated[dict, Depends(companies_count_params)]
+DepthParams = Annotated[dict, Depends(depth_params)]
 ReportSearchParams = Annotated[dict, Depends(report_search_params)]
 CompanySearchParams = Annotated[dict, Depends(company_search_params)]
 NaicsSearchParams = Annotated[dict, Depends(naics_search_params)]

@@ -2,6 +2,8 @@ from os import getenv
 from pathlib import Path
 from uuid import UUID
 
+from starlette.datastructures import URL
+
 BASEDIR = Path(__file__).parent
 REPODIR = BASEDIR.parent
 STATIC_DIR = BASEDIR/'static'
@@ -25,7 +27,7 @@ SEARCH_MONGODB_DBNAME = getenv('SEARCH_MONGODB_DBNAME', MONGODB_DBNAME)
 ETL_MONGODB_URL = getenv('ETL_MONGODB_URL', MONGODB_URL)
 ETL_MONGODB_DBNAME = getenv('ETL_MONGODB_DBNAME', MONGODB_DBNAME)
 ETL_DEFAULT_WORKERS = max(1, int(getenv('ETL_DEFAULT_WORKERS', 4)))
-SITE_URL = getenv('SITE_URL', 'http://localhost:8000')
+SITE_URL = URL(getenv('SITE_URL', 'http://localhost:8000'))
 EMAIL_BACKEND = getenv('EMAIL_BACKEND', 'ses')
 EMAIL_FROM_ADDRESS = getenv('EMAIL_FROM_ADDRESS', 'you@somewhere.example')
 FEED_ENTRY_LIMIT = int(getenv('FEED_ENTRY_LIMIT', 100))

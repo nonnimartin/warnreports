@@ -12,16 +12,7 @@ export const defaults = {
     autoWidth: false,
 }
 
-export const serverSide = {
-    processing: true,
-    serverSide: true,
-    ajax: {
-        url: '/dt/reports',
-        data: data => cleanDtParams(data)
-    },
-}
-
-export const slim = {
+const slim = {
     pageLength: 10,
     ordering: false,
     lengthChange: false,
@@ -31,33 +22,88 @@ export const slim = {
     },
 }
 
-export function getServerSideOpts(params) {
-    const parts = [serverSide.ajax.url]
-    if (params) {
-        parts.push(new URLSearchParams(params).toString())
+function getServerSideOpts(coll, params) {
+    params = params || {}
+    return {
+        processing: true,
+        serverSide: true,
+        ajax: async (data, callback, settings) => {
+            callback(await dtAjax(coll, {...data, ...params}))
+        },
     }
-    const url = parts.join('?')
-    return $.extend(true, {}, serverSide, {ajax: {url}})
+}
+
+export async function dtAjax(coll, params) {
+    params = {...params}
+    cleanDtParams(params)
+    const {draw} = params
+    delete params.draw
+    const recordsTotal = await getRecordsTotal(coll)
+    const res = await aajax({url: `/api/v0/${coll}`, method: 'GET', data: params})
+    const xhr = res[2]
+    return {
+        data: res[0],
+        recordsFiltered: +xhr.getResponseHeader(coll),
+        recordsTotal,
+        draw
+    }
 }
 
 function cleanDtParams(data) {
-    data.limit = data.length
-    data.offset = data.start
+    if (!Object.hasOwn(data, 'limit')) {
+        data.limit = data.length
+    }
+    if (!Object.hasOwn(data, 'offset')) {
+        data.offset = data.start
+    }
     delete data.length
     delete data.start
     delete data.columns
     delete data.search
-    const orders = []
-    for (let {name, dir} of data.order) {
-        if (dir === 'desc') {
-            name = `-${name}`
+    if (Array.isArray(data.order)) {
+        const orders = []
+        for (let {name, dir} of data.order) {
+            if (dir === 'desc') {
+                name = `-${name}`
+            }
+            orders.push(name)
         }
-        orders.push(name)
+        delete data.order
+        if (orders.length) {
+            data.order = orders.join(',')
+        }
     }
-    delete data.order
-    if (orders.length) {
-        data.order = orders.join(',')
+}
+
+const RecordsTotalExpiry = 30 * 1000
+const RecordsTotalCache = new Map
+
+export async function getRecordsTotal(coll) {
+    let cache = RecordsTotalCache.get(coll)
+    if (!cache) {
+        cache = {value: null, at: null}
+        RecordsTotalCache.set(coll, cache)
     }
+    if (cache.value === null || cache.at < +new Date - RecordsTotalExpiry) {
+        const res = await aajax({url: `/api/v0/${coll}`, method: 'HEAD'})
+        let value = +res[2].getResponseHeader('count')
+        let at = null
+        if (isNaN(value)) {
+            value = null
+        } else {
+            at = +new Date
+        }
+        Object.assign(cache, {value, at})
+    }
+    return cache.value
+}
+
+function aajax(...args) {
+    return new Promise((resolve, reject) => {
+        $.ajax(...args)
+            .done((...args) => resolve(args))
+            .fail((xhr, textStatus, errorThrown) => reject(errorThrown))
+    })
 }
 
 function renderDate(value) {
@@ -90,8 +136,8 @@ function renderAction(value) {
         .outerHTML
 }
 
-export function initTable(table, params, ...args) {
-    const optsets = [defaults, getServerSideOpts(params)]
+function initTable(table, params, ...args) {
+    const optsets = [defaults, getServerSideOpts('reports', params)]
     const opts = $.extend(true, {}, ...optsets, ...args)
     return table.DataTable(opts)
 }

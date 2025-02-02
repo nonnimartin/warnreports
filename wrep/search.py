@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import re
-from abc import abstractmethod
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Sequence
 
 from fastapi import HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -12,18 +11,18 @@ from . import orm, settings, utils
 from .models import *
 from .utils import BaseCommand, FuncCommand
 
-__all__ = ['filters', 'retrieve', 'retrieve404', 'search', 'NotFoundError']
+__all__ = ['filters', 'retrieve', 'retrieve404', 'search', 'search_result', 'NotFoundError']
 
 type MongoDB = AsyncIOMotorDatabase
 
 logger = utils.get_logger('search')
 
-
 class MongoSearch(FilterModel[DM]):
+    minmax_fields: ClassVar[Sequence[str]] = ()
+    MINMAX_OPERS: ClassVar[dict[str, str]] = dict(min='$gte', max='$lte')
 
-    @abstractmethod
-    def get_filters(self) -> Iterable[Any]:
-        yield from ()
+    def get_filters(self) -> Iterable[dict[str, Any]]:
+        yield from self.get_minmax_filters(*self.minmax_fields)
 
     @staticmethod
     def wc_contains(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
@@ -43,16 +42,17 @@ class MongoSearch(FilterModel[DM]):
         return {'$or': [*rxs, {f'{prefix}id': {'$in': naics}}]}
 
     def get_minmax_filters(self, *fields: str) -> Iterator[dict[str, dict[str, int]]]:
-        for oper, suffix in zip(('$gte', '$lte'), ('min', 'max')):
-            for field in fields:
+        for field in fields:
+            for suffix, oper in self.MINMAX_OPERS.items():
                 if (value := getattr(self, f'{field}_{suffix}')) is not None:
                     yield {field: {oper: value}}
 
 class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
+    minmax_fields: ClassVar = ('reported', 'starting', 'employees')
 
     def get_filters(self):
-        if self.id:
-            yield {'_id': self.id}
+        if self.id is not None:
+            yield {'_id': {'$in': self.id}}
         if self.id_not:
             yield {'_id': {'$nin': self.id_not}}
         for field in ('state', 'company', 'company_id'):
@@ -65,16 +65,18 @@ class MongoReportsFilter(ReportsFilter, MongoSearch[ReportData]):
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_minmax_filters('reported', 'starting', 'employees')
+        yield from super().get_filters()
 
 class MongoStatesFilter(StatesFilter, MongoSearch[StateDetail]):
+    minmax_fields: ClassVar = ('reports_count', 'last_reported')
 
     def get_filters(self):
         if self.id:
-            yield {'id': self.id.upper()}
-        yield from self.get_minmax_filters('reports_count', 'last_reported')
+            yield {'id': {'$in': sorted(set(map(str.upper, self.id)))}}
+        yield from super().get_filters()
 
 class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
+    minmax_fields: ClassVar = MongoStatesFilter.minmax_fields + ('states_count', 'employees_sum')
 
     def get_filters(self):
         if self.id is not None:
@@ -87,9 +89,10 @@ class MongoCompaniesFilter(CompaniesFilter, MongoSearch[CompanyDetail]):
             yield self.get_naics_filter(self.naics)
         if self.text:
             yield {'$text': {'$search': self.text}}
-        yield from self.get_minmax_filters('reports_count', 'states_count', 'employees_sum', 'last_reported')
+        yield from super().get_filters()
 
 class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
+    minmax_fields: ClassVar = MongoCompaniesFilter.minmax_fields + ('depth', 'companies_count')
 
     def get_filters(self):
         if self.id:
@@ -114,18 +117,18 @@ class MongoNaicsFilter(NaicsFilter, MongoSearch[NaicsDetail]):
                     incs.add(int(s[:i]))
                 incs.add(code)
             yield {'id': {'$in': sorted(incs)}}
-        yield from self.get_minmax_filters('reports_count', 'states_count', 'employees_sum', 'last_reported')
-        yield from self.get_minmax_filters('depth', 'companies_count')
+        yield from super().get_filters()
 
 class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
 
     def get_filters(self):
         if self.id:
-            yield {'_id': self.id}
+            yield {'id': {'$in': self.id}}
         for field in ('name', 'sha1'):
             value = getattr(self, field)
             if value:
                 yield {field: value}
+        yield from super().get_filters()
 
 class NotFoundError(Exception):
     pass
@@ -189,7 +192,7 @@ async def retrieve404(model: type[DM], **params) -> DM:
 _mongo_client = AsyncIOMotorClient(settings.SEARCH_MONGODB_URL, uuidRepresentation='standard')
 _mongo_database_default = _mongo_client.get_database(settings.SEARCH_MONGODB_DBNAME)
 
-def get_mongo_database(dbname: str|None = None):
+def get_mongo_database(dbname: str|None = None) -> MongoDB:
     if dbname:
         return _mongo_client.get_database(dbname)
     return _mongo_database_default
