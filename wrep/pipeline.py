@@ -11,33 +11,17 @@ from typing import Any, Iterable
 
 from sentry_sdk import capture_exception
 
-from . import orm, settings, utils
+from . import SaveType, Stage, orm, settings, utils
 from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
-
-logger = utils.get_logger('pipeline')
-
-class Stage(utils.StrEnum):
-    Scrape = 'scrape'
-    Extract = 'extract'
-    Translate = 'translate'
-    Load = 'load'
-    Index = 'index'
-
 from .scrapers import scrapers
 from .translators import translators
 
-
-class SaveType(utils.StrEnum):
-    Create = 'create'
-    Update = 'update'
-    Nochange = 'nochange'
-    Skip = 'skip'
+logger = utils.get_logger('pipeline')
 
 class Pipeline:
-
     fields = [
         'id',
         'company',
@@ -64,18 +48,32 @@ class Pipeline:
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
         'starting': datetime.fromisoformat}
+    BACKENDS = {
+        Stage.Extract: MongoExtraction,
+        Stage.Translate: MongoTranslation,
+        Stage.Index: MongoSearchIndex}
 
     def __init__(self, state: str, **opts) -> None:
         self.state = state.upper()
         self.scraper = scrapers[self.state]()
         self.translator = translators[self.state]()
         beopts = _pfxopts(opts, 'etl', 'search')
-        self.backends: dict[Stage, StageBackend] = {
-            Stage.Extract: MongoExtraction(self.state, **beopts['etl']),
-            Stage.Translate: MongoTranslation(self.state, **beopts['etl']),
-            Stage.Index: MongoSearchIndex(self.state, **beopts['search'])}
-        self.session: orm.Session|None = None
+        self.backend_opts = {
+            Stage.Extract: beopts['etl'],
+            Stage.Translate: beopts['etl'],
+            Stage.Index: beopts['search']}
+        self.backends: dict[Stage, StageBackend] = {}
         self.opts = opts
+        self.session: orm.Session|None = None
+
+    def backend(self, stage: Stage) -> StageBackend:
+        try:
+            backend = self.backends[stage]
+        except KeyError:
+            opts = self.backend_opts[stage]
+            backend = self.BACKENDS[stage](self.state, **opts)
+            self.backends[stage] = backend
+        return backend
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -86,13 +84,13 @@ class Pipeline:
 
     async def stat(self, stage: Stage) -> dict:
         stage = Stage(stage)
-        if stage in self.backends:
-            return await self.backends[stage].stat()
+        if stage in self.BACKENDS:
+            return await self.backend(stage).stat()
         if stage is stage.Scrape:
             return await self.scraper.stat()
         if stage is stage.Load:
             stat: dict[str, int] = {}
-            backend: MongoSearchIndex = self.backends[stage.Index]
+            backend: MongoSearchIndex = self.backend(stage.Index)
             filters = self.get_orm_select_filters()
             with SessionLocal() as session:
                 for name, defn in backend.collections.items():
@@ -109,8 +107,8 @@ class Pipeline:
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'{self.state}:{stage}:clean')
-        if stage in self.backends:
-            await self.backends[stage].clean()
+        if stage in self.BACKENDS:
+            await self.backend(stage).clean()
             if stage is stage.Extract:
                 await self.scraper.extract_clean()
         elif stage is stage.Scrape:
@@ -136,28 +134,36 @@ class Pipeline:
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
+        self.scraper.metrics.clear()
+        self.scraper.artifacts.metrics.clear()
         await self.scraper.scrape()
+        metrics = dict(self.scraper.metrics)
+        if self.scraper.artifacts.metrics:
+            metrics.update(artifacts=dict(self.scraper.artifacts.metrics))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        return dict(prev=prev, cur=cur, nochange=nochange)
+        res = dict(nochange=nochange, prev=prev, cur=cur)
+        if metrics:
+            res.update(metrics=metrics)
+        return res
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
-        backend: ExtractionBackend = self.backends[stage]
+        backend: ExtractionBackend = self.backend(stage)
         prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
             await self.clean(stage)
-        with self.scraper.extract() as source:
-            count, _, _ = await backend.update(source)
+        async with utils.awith(self.scraper.extract()) as source:
+            count = (await backend.update(source))[0]
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        return dict(count=count, prev=prev, cur=cur, nochange=nochange)
+        return dict(nochange=nochange, count=count, prev=prev, cur=cur)
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
-        backend: TranslationBackend = self.backends[stage]
-        source: ExtractionBackend = self.backends[Stage.Extract]
+        backend: TranslationBackend = self.backend(stage)
+        source: ExtractionBackend = self.backend(stage.Extract)
         prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
@@ -171,12 +177,12 @@ class Pipeline:
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         counts = dict(count=count, created=created, updated=updated)
-        return counts | dict(prev=prev, cur=cur, nochange=nochange)
+        return dict(nochange=nochange) | counts | dict(prev=prev, cur=cur)
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
-        source: TranslationBackend = self.backends[Stage.Translate]
+        source: TranslationBackend = self.backend(Stage.Translate)
         async with source.reader() as reader:
             with SessionLocal() as session:
                 self.session = session
@@ -193,13 +199,13 @@ class Pipeline:
         del self.artifact_cache
         count = sum(counts.values())
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
-        return dict(count=count, counts=counts, nochange=nochange)
+        return dict(nochange=nochange, count=count, counts=counts)
 
     async def index(self, clean: bool = False) -> dict:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: MongoSearchIndex = self.backends[stage]
+        backend: MongoSearchIndex = self.backend(stage)
         filters = self.get_orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:

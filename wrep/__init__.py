@@ -21,3 +21,15 @@ if settings.SENTRY_ENABLED and settings.SENTRY_DSN:
         # We recommend adjusting this value in production.
         profiles_sample_rate=1.0)
 
+class Stage(utils.StrEnum):
+    Scrape = 'scrape'
+    Extract = 'extract'
+    Translate = 'translate'
+    Load = 'load'
+    Index = 'index'
+
+class SaveType(utils.StrEnum):
+    Create = 'create'
+    Update = 'update'
+    Nochange = 'nochange'
+    Skip = 'skip'
