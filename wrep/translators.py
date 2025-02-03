@@ -554,6 +554,7 @@ class GA(Translator):
         'County': 'location',
         'NAICS': 'naics',
         'entry_url': 'url',
+        'artifacts_json': 'artifacts',
     }
     rewrites = dict(
         reported=[
@@ -566,6 +567,7 @@ class GA(Translator):
     )
     # One observed case of duplicate GA WARN ID for unrelated reports.
     report_id_extra = ['company']
+    values_hash_exclude = ['artifacts_json']
 
     def finish(self, entry: Entry, row: Row) -> None:
         """

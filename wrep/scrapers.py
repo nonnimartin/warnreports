@@ -14,7 +14,7 @@ from itertools import chain, filterfalse
 from pathlib import Path
 from re import compile as _r
 from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import openpyxl
 import openpyxl.worksheet
@@ -259,10 +259,6 @@ class CO(Scraper):
 
 class CT(Scraper):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
-    key_clean_subs = [
-        (_r(r'[^a-zA-Z\d_]'), '-'),
-        (_r(r'([-_])+'), r'\1'),
-    ]
     artifact_uri_subs = [
         (_r(r'^https?://webdev/progsupt/bussrvce/warnreports/'), ''),
     ]
@@ -330,10 +326,6 @@ class CT(Scraper):
                         row_key = self.row_key(td.text for td in tds)
                         yield row_key, info
                         break
-    
-    def row_key(self, values: Iterable[str]) -> str:
-        "Values hash key from CSV row for artifact index"
-        return ''.join(''.join(values).split())
 
     def artifact_info(self, year: int, uri: str) -> tuple[str, str]|None:
         "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
@@ -344,14 +336,10 @@ class CT(Scraper):
         url = self.absurl(uri)
         clean = Path(urlparse(url).path).name
         clean = unquote_plus(clean)
-        clean = clean.removesuffix('.pdf')
-        for srch, repl in self.key_clean_subs:
-            clean = srch.sub(repl, clean)
-        clean = clean.strip('_-')
+        clean = clean_filename(clean)
         if not clean:
             return
-        name = f'{year}_{clean}.pdf'
-        cache_key = f'records/{name}'
+        cache_key = f'records/{year}_{clean}'
         return cache_key, url
 
 class DE(Scraper):
@@ -518,17 +506,18 @@ class FL(Scraper):
 class GA(Scraper):
     base_url = 'https://www.tcsg.edu'
     latest_url = '/warn-public-view/'
-    api_url = f'{base_url}/wp-admin/admin-ajax.php'
+    request_delay = 1
+    api_url = f'/wp-admin/admin-ajax.php'
     user_agent = (
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36')
-    extra_headers = ['entry_url', 'submitted_date']
+    extra_headers = ['entry_url', 'submitted_date', 'artifacts_json']
 
     async def scrape(self):
         text = await self.cache_fetch('latest.html', self.latest_url)
         doc = bs(text, 'html5lib')
         payload = dict(self.payload, nonce=self.extract_nonce(doc))
-        rep = self.session.post(self.api_url, data=payload)
+        rep = self.session.post(self.absurl(self.api_url), data=payload)
         rep.raise_for_status()
         index = {}
         for listing in rep.json()['data']:
@@ -538,13 +527,23 @@ class GA(Scraper):
         if self.needs_scrape():
             await asyncio.sleep(0)
             self.runner.scrape()
+        artifacts = {}
+        for idkey in index:
+            infos = dict(self.extract_artifact_infos(idkey))
+            if infos:
+                artifacts[idkey] = infos
+        self.cache.write_json('artifacts.json', artifacts, indent=2)
+        it = chain.from_iterable(map(dict.items, artifacts.values()))
+        for cachekey, url in it:
+            await self.cache_download(cachekey, url, missing_only=True)
+            self.artifacts.add(cachekey, self.cache.topath(cachekey))
 
     async def clean(self):
         await super().clean()
-        self.cache.delete('latest.html', 'index.json')
+        self.cache.delete('latest.html', '*.json', glob=True)
 
     def statobjs(self):
-        yield self.cache.topath('index.json')
+        yield from self.cache.glob('*.json')
         yield from self.list_record_files()
 
     @contextmanager
@@ -553,20 +552,32 @@ class GA(Scraper):
             yield self.read_records(csv.reader(file))
 
     def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
-        index = self.load_index()
-        fillrow = [''] * len(self.extra_headers)
+        index: dict = self.cache.read_json('index.json')
+        artifacts = self.cache.read_json('artifacts.json')
         headers = next(it) + self.extra_headers
+        fillrow = [''] * len(self.extra_headers)
         for values in it:
-            values += index.get(values[0]) or fillrow
+            idkey = values[0]
+            fill = list(fillrow)
+            if idkey in index:
+                fill[:2] = index[idkey]
+            if idkey in artifacts:
+                fill[2] = json.dumps(artifacts[idkey])
+            values.extend(fill)
             yield dict(zip(headers, values))
 
-    def load_index(self) -> dict[str, tuple[str, str]]:
-        index: dict = self.cache.read_json('index.json')
-        return {key: tuple(item) for key, item in index.items()}
+    def extract_artifact_infos(self, idkey: str) -> Iterator[tuple[str, str]]:
+        doc = bs(self.cache.topath(f'{idkey}.format3'))
+        for a in doc.find_all('a', {'data-type': 'pdf'}):
+            filename = self.artifact_filename(a['href'])
+            if filename:
+                cachekey = f'records/{idkey}-{filename}'
+                yield cachekey, self.absurl(a['href'])
 
     def needs_scrape(self):
+        index = self.cache.read_json('index.json')
         source = self.runner.file
-        keys = (f'{key}.format3' for key in self.load_index())
+        keys = (f'{key}.format3' for key in index)
         return not (
             source.exists() and
             source.stat().st_size and
@@ -583,6 +594,11 @@ class GA(Scraper):
 
     def list_record_files(self) -> list[Path]:
         return sorted(self.cache.glob('*.format3'), reverse=True)
+
+    def artifact_filename(self, href: str) -> str|None:
+        vals = parse_qs(urlparse(href).query).get('gf-download')
+        if vals and vals[0].endswith('.pdf'):
+            return clean_filename(vals[0])
 
     payload = dict(
         columns=[
@@ -1614,6 +1630,28 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
             size += len(buf)
     hash = h.hexdigest() if size else None
     return dict(hash=hash, size=size)
+
+clean_filename_subs = [
+    (_r(r'[^a-z\d_]', re.I), '-'),
+    (_r(r'([-_])+'), r'\1'),
+]
+
+def clean_filename(value: str) -> str|None:
+    parts = value.rsplit('.', 1)
+    if len(parts) == 2:
+        ext = parts.pop()
+        for srch, _ in clean_filename_subs:
+            ext = srch.sub('', ext)
+    else:
+        ext = None
+    clean, = parts
+    for srch, repl in clean_filename_subs:
+        clean = srch.sub(repl, clean)
+    clean = clean.strip('_-')
+    if clean:
+        if ext:
+            clean = f'{clean}.{ext}'
+        return clean
 
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):
