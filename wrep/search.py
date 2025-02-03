@@ -123,7 +123,7 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
 
     def get_filters(self):
         if self.id:
-            yield {'id': {'$in': self.id}}
+            yield {'_id': {'$in': self.id}}
         if self.state:
             it = (re.escape(x.lower()[:2]) for x in self.state)
             pat = '|'.join(filter(None, dict.fromkeys(it))) or '_'

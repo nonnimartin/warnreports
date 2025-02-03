@@ -1,11 +1,6 @@
 <table class="table table-striped reports-table">
     <thead>
-        <tr>
-            {%- set fields = ['state', 'company', 'reported', 'starting', 'employees', 'action'] %}
-            {%- for field in fields %}
-            <th class="field-{{ field }}" data-data="{{ field }}" data-name="{{ field }}" data-class-name="field-{{ field }}">{{ field.title() }}</th>
-            {%- endfor %}
-        </tr>
+
     </thead>
     <tbody></tbody>
 </table>

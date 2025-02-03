@@ -1,7 +1,7 @@
 import {getFormParams} from './main.js'
-import {defaults as _defaults, dtAjax} from './table.js'
+import {defaults as _defaults, dtAjax, getAllStateIds} from './table.js'
 
-export const defaults = $.extend(true, {}, _defaults, {
+const defaults = $.extend(true, {}, _defaults, {
     layout: {
         topEnd: null,
         bottomStart: 'pageLength',
@@ -10,18 +10,6 @@ export const defaults = $.extend(true, {}, _defaults, {
     },
 })
 
-export function initSearchTable(table, form, ...args) {
-    const optsets = [
-        defaults,
-        {layout: {topStart: form}},
-        getServerSideOpts(form),
-        getStateSaveOpts(form),
-    ]
-    const opts = $.extend(true, {}, ...optsets, ...args)
-    const dt = table.DataTable(opts)
-    initSearchForm(form, table)
-    return dt
-}
 
 const REDRAW_DELAY = 100
 
@@ -69,7 +57,16 @@ function getStateSaveOpts(form) {
     }
 }
 
-function initSearchForm(form, table) {
+async function initSearchForm(form, table) {
+    const stateSelects = $('select[name="state"]', form).toArray()
+    if (stateSelects.length) {
+        const stateIds = await getAllStateIds()
+        for (const select of stateSelects) {
+            for (const id of stateIds) {
+                $('<option/>').attr({value: id}).text(`${id}`).appendTo(select)
+            }
+        }
+    }
     const clearForm = $('.clear-form', form)
     const dt = table.DataTable()
     const doDraw = dt.draw.bind(dt)
@@ -92,9 +89,65 @@ function initSearchForm(form, table) {
         doDraw()
     })
 }
+const formHtml = `
+<div class="hidden">
+    <form class="row g-3 search-form">
+        <div class="col-3">
+            <label for="search_text">Search</label>
+            <input class="form-control" name="text" id="search_text">
+        </div>
+        <div class="col-2">
+            <label for="search_state">State</label>
+            <select class="form-select" name="state" id="search_state">
+                <option value="">-</option>
+            </select>
+        </div>
+        <div class="col-2">
+            <label for="search_reported_min">Reported min.</label>
+            <input class="form-control" name="reported_min" type="date" id="search_reported_min">
+        </div>
+        <div class="col-2">
+            <label for="search_reported_max">Reported max.</label>
+            <input class="form-control" name="reported_max" type="date" id="search_reported_max">
+        </div>
+        <div class="col-2">
+            <label for="search_employees_min">Employees min.</label>
+            <input class="form-control" name="employees_min" type="number" id="search_employees_min">
+        </div>
+        <div class="col-1">
+            <label for="search_clear"></label>
+            <input type="submit" class="hidden">
+            <button class="form-control clear-form btn btn-secondary" id="search_clear">Clear</button>
+        </div>
+    </form>
+</div>`
 
-$(() => {
-    $('.reports-auto-search').each(function() {
-        initSearchTable($('table', this), $('form.search-form', this))
-    })
+async function initSearchTable(table, form, ...args) {
+    const optsets = [
+        defaults,
+        {layout: {topStart: form}},
+        getServerSideOpts(form),
+        getStateSaveOpts(form),
+    ]
+    const opts = $.extend(true, {}, ...optsets, ...args)
+    const dt = table.DataTable(opts)
+    await initSearchForm(form, table)
+    return dt
+}
+
+$(async () => {
+    const main = $('#id_maincontent')
+    const wrapper = $('<div/>')
+    const table = $('<table/>')
+        .addClass(['table', 'table-striped', 'responsive', 'reports-table'])
+        appendTo(wrapper)
+    const form = $(formHtml).appendTo(wrapper).find('form')
+    await initSearchTable(table, form)
+    main.append(wrapper)
+    // const wrappers = $('.reports-auto-search').toArray()
+    // for (const wrapper of wrappers) {
+    //     const table = $('table', wrapper)
+    //     const form = $(formHtml).appendTo(wrapper)
+    //     await initSearchTable(table, form)
+    // }
 })

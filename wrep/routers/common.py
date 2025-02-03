@@ -13,6 +13,7 @@ __all__ = [
     'NaicsSearchParams',
     'ReportSearchParams',
     'StateSearchParams',
+    'FeedSearchParams',
 ]
 
 TextSearchParam = Annotated[str, Query(description='General text search')]
@@ -220,6 +221,19 @@ def state_search_params(
 ):
     return dict(id=id, **reports_count, **last_reported)
 
+
+def feed_search_params(
+    text: TextSearchParam = None,
+    state: StateParam = None,
+    naics: NaicsParam = None,
+    employees_min: int = None,
+):
+    return dict(
+        text=text,
+        state=state,
+        naics=naics,
+        employees_min=employees_min)
+
 ReportedParams = Annotated[dict, Depends(reported_params)]
 StartingParams = Annotated[dict, Depends(starting_params)]
 EmployeesParams = Annotated[dict, Depends(employees_params)]
@@ -233,3 +247,4 @@ ReportSearchParams = Annotated[dict, Depends(report_search_params)]
 CompanySearchParams = Annotated[dict, Depends(company_search_params)]
 NaicsSearchParams = Annotated[dict, Depends(naics_search_params)]
 StateSearchParams = Annotated[dict, Depends(state_search_params)]
+FeedSearchParams = Annotated[dict, Depends(feed_search_params)]

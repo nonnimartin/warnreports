@@ -9,6 +9,17 @@ export function getFormParams(form) {
     return params
 }
 
+export function aajax(opts) {
+    return new Promise((resolve, reject) => {
+        $.ajax(opts)
+            .done((body, textStatus, xhr) => resolve({body, textStatus, xhr}))
+            .fail((xhr, textStatus, errorThrown) => reject(errorThrown))
+    })
+}
+
+const nformatter = new Intl.NumberFormat()
+export const nf = number => nformatter.format(number)
+
 $(() => {
     $('nav.main-nav a.nav-link').each(function() {
         if ($(this).attr('href') === window.location.pathname) {
