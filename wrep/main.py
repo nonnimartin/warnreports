@@ -12,10 +12,10 @@ from fastapi.templating import Jinja2Templates
 from . import settings, utils
 from .models import *
 from .routers import api, feed
+from .routers.common import FeedSearchParams
 
 logger = utils.get_logger('main')
 templates = Jinja2Templates(env=utils.jinja_env())
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,28 +33,31 @@ router = APIRouter()
 
 @router.get('/')
 async def index(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'frontend.jinja', dict(path='/index'))
+    return await frontend_response(req, '/index')
 
 @router.get('/search')
 async def report_search(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'frontend.jinja', dict(path=req.url.path))
+    return await frontend_response(req)
 
 @router.get('/api')
 async def api_home(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'frontend.jinja', dict(path=req.url.path))
+    return await frontend_response(req)
 
 @router.get('/api/docs')
 async def api_docs(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'docs/rapidoc.jinja')
+    return await frontend_response(req)
 
 @router.get('/about')
 async def about(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'frontend.jinja', dict(path=req.url.path))
+    return await frontend_response(req)
 
 @router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
-    context = dict(report=await api.report_get(id))
-    return templates.TemplateResponse(req, 'report.jinja', context)
+    return await frontend_response(req, '/report')
+
+@router.get('/feed')
+async def feed_builder(req: Request, params: FeedSearchParams) -> HTMLResponse:
+    return await frontend_response(req)
 
 @router.get('/d/{id}')
 @router.head('/d/{id}')
@@ -66,6 +69,11 @@ async def artifact_download(id: UUID) -> FileResponse:
 async def artifact_view(id: UUID) -> FileResponse:
     return await api.artifact_data(id, disposition='inline')
 
+
+async def frontend_response(req: Request, path: str|None = None) -> HTMLResponse:
+    if path is None:
+        path = req.url.path
+    return templates.TemplateResponse(req, 'frontend.jinja', dict(path=path))
 
 app = FastAPI(
     lifespan=lifespan,

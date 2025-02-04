@@ -14,7 +14,7 @@ function renderState(value, type, row) {
         .outerHTML
 }
 
-const defaultOpts = {
+const opts = {
     paging: false,
     filter: false,
     layout: {
@@ -25,7 +25,8 @@ const Columns = {
     reports_count: {title: 'Reports', name: 'reports_count', render: nf, type: 'num'},
 }
 
-const tableDefs = [
+const reports_count = {title: 'Reports', name: 'reports_count', render: nf, type: 'num'}
+const defns = [
     {
         id: 'collection_stats',
         title: 'Collection Stats',
@@ -50,7 +51,7 @@ const tableDefs = [
         url: '/api/v0/states',
         columns: [
             {title: 'State', name: 'id', render: renderState},
-            {...Columns.reports_count},
+            reports_count,
             {title: 'Last Reported', name: 'last_reported', render: renderDate, type: 'date'},
         ],
     },
@@ -62,14 +63,14 @@ const tableDefs = [
         columns: [
             {title: 'ID', name: 'id'},
             {title: 'Title', name: 'title'},
-            {...Columns.reports_count},
+            reports_count,
         ],
     }
 ]
 
-$(() => {
-    const main = $('#id_maincontent')
-    for (const defn of tableDefs) {
-        main.append(createTableComponent(defn, defaultOpts))
+export async function renderPage(target) {
+    target = $(target).empty()
+    for (const defn of defns) {
+        target.append(createTableComponent(defn, opts))
     }
-})
+}

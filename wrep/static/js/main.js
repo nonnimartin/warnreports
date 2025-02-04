@@ -20,11 +20,6 @@ export function aajax(opts) {
 const nformatter = new Intl.NumberFormat()
 export const nf = number => nformatter.format(number)
 
-$(() => {
-    $('nav.main-nav a.nav-link').each(function() {
-        if ($(this).attr('href') === window.location.pathname) {
-            $(this).addClass('active')
-            return false
-        }
-    })
-})
+export function escapeHtml(value) {
+    return $('<p/>').text(value).html()
+}

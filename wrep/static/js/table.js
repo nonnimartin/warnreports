@@ -1,54 +1,69 @@
 import {aajax, nf} from './main.js'
 
-export const defaults = {
-    columns: [
-        {title: 'State', name: 'state'},
-        {title: 'Company', name: 'company', render: renderCompany},
-        {title: 'Reported', name: 'reported', render: renderDate, type: 'date'},
-        {title: 'Starting', name: 'starting', render: renderDate, type: 'date'},
-        {title: 'Employees', name: 'employees', type: 'num'},
-        {title: 'Action', name: 'action', render: renderAction, orderable: false},
-    ],
-    order: [{name: 'reported', dir: 'desc'}],
-    pageLength: 25,
-    autoWidth: false,
+export function createTableComponent(defn, opts) {
+    opts = opts || {}
+    opts = {...opts, ...getDefnTableOpts(defn)}
+    const table = $('<table/>')
+        .addClass(['table', 'table-striped', 'responsive'])
+    const wrapper = $('<div/>')
+    if (defn.id) {
+        wrapper.attr({id: defn.id})
+    }
+    if (defn.title) {
+        wrapper.append($('<h2/>').text(defn.title))
+    }
+    wrapper.append(table)
+    const dt = table.DataTable(opts)
+    dt.on('init', (e, settings, json) => {
+        if (wrapper.hasClass('hide-empty')) {
+            let length
+            if (Array.isArray(json)) {
+                length = json.length
+            } else if (typeof json.recordsTotal === 'number') {
+                length = json.recordsFiltered
+            }
+            wrapper.toggle(Boolean(length))
+            if (length) {
+                dt.draw()
+            }
+        }
+    })
+    return wrapper
 }
+
+export const ReportFieldRender = {
+    company: renderCompany,
+    reported: renderDate,
+    starting: renderDate,
+    employees: nf,
+    action: renderAction,
+    url: renderUrl,
+}
+
+const column = (name, opts) => ({name, render: ReportFieldRender[name], ...(opts || {})})
 
 export const ReportColumns = [
-    {title: 'State', name: 'state'},
-    {title: 'Company', name: 'company', render: renderCompany},
-    {title: 'Reported', name: 'reported', render: renderDate, type: 'date'},
-    {title: 'Starting', name: 'starting', render: renderDate, type: 'date'},
-    {title: 'Employees', name: 'employees', render: nf, type: 'num'},
-    {title: 'Action', name: 'action', render: renderAction, orderable: false},
+    column('state', {title: 'State'}),
+    column('company', {title: 'Company'}),
+    column('reported', {title: 'Reported', type: 'date'}),
+    column('starting', {title: 'Starting', type: 'date'}),
+    column('employees', {title: 'Employees', type: 'num'}),
+    column('action', {title: 'Action', orderable: false}),
 ]
 
-for (const c of defaults.columns) {
-    c.data = c.data || c.name
-
-}
-const slim = {
-    pageLength: 10,
-    ordering: false,
-    lengthChange: false,
-    filter: false,
-    layout: {
-        bottomStart: null
-    },
-}
-
-function getServerSideOpts(collection, params) {
-    params = params || {}
-    return {
-        processing: true,
-        serverSide: true,
-        ajax: async (data, callback, settings) => {
-            callback(await dtAjax(collection, {...data, ...params}))
-        },
+export async function populateStateSelects(form) {
+    const stateSelects = $('select[name="state"]', form).toArray()
+    if (stateSelects.length) {
+        const stateIds = await getAllStateIds()
+        for (const select of stateSelects) {
+            for (const id of stateIds) {
+                $('<option/>').attr({value: id}).text(`${id}`).appendTo(select)
+            }
+        }
     }
 }
 
-export async function dtAjax(collection, params) {
+async function dtAjax(collection, params) {
     params = cleanDtParams(params)
     const {draw} = params
     delete params.draw
@@ -73,11 +88,15 @@ function cleanDtParams(params) {
     delete params.columns
     delete params.search
     const orders = []
-    for (let {name, dir} of params.order) {
-        if (dir === 'desc') {
-            name = `-${name}`
+    if (typeof params.order === 'string') {
+        orders.push(params.order)
+    } else {
+        for (let {name, dir} of params.order) {
+            if (dir === 'desc') {
+                name = `-${name}`
+            }
+            orders.push(name)
         }
-        orders.push(name)
     }
     delete params.order
     if (orders.length) {
@@ -105,7 +124,7 @@ async function getCollectionStats() {
 
 const StateIds = []
 
-export async function getAllStateIds() {
+async function getAllStateIds() {
     if (!StateIds.length) {
         const {body} = await aajax({url: '/api/v0/states'})
         for (const state of body) {
@@ -145,64 +164,45 @@ function renderAction(value) {
         .outerHTML
 }
 
-async function initTable(table, params, ...args) {
-    const optsets = [defaults, getServerSideOpts('reports', params)]
-    const opts = $.extend(true, {}, ...optsets, ...args)
-    return table.DataTable(opts)
+function renderUrl(value) {
+    if (!value) {
+        return ''
+    }
+    return $('<a/>')
+        .attr({href: value, target: '_blank'})
+        .text(value)
+        .get(0)
+        .outerHTML
+
 }
 
 function getDefnTableOpts(defn) {
-    const {columns} = defn
+    const {columns, collection, params} = defn
     for (const c of columns) {
         c.data = c.data || c.name
     }
-    const ajax = {dataSrc: defn.data || '', url: defn.url}
-    if (defn.params) {
-        ajax.url += '?' + new URLSearchParams(defn.params).toString()
+    const opts = {columns}
+    if (collection) {
+        opts.ajax = async (data, callback, settings) => {
+            if (params) {
+                if (typeof params === 'function') {
+                    const ret = await params(data)
+                    if (ret) {
+                        data = ret
+                    }
+                } else {
+                    data = {...data, ...params}
+                }
+            }
+            callback(await dtAjax(collection, data))
+        }
+        opts.processing = true
+        opts.serverSide = true
+    } else {
+        opts.ajax = {dataSrc: defn.data || '', url: defn.url}
+        if (params) {
+            opts.ajax.url += '?' + new URLSearchParams(params).toString()
+        }
     }
-    const opts = {columns, ajax}
     return opts
 }
-
-export function createTableComponent(defn, opts) {
-    opts = opts || {}
-    opts = {...opts, ...getDefnTableOpts(defn)}
-    const table = $('<table/>')
-        .addClass(['table', 'table-striped', 'responsive'])
-    const wrapper = $('<div/>')
-        .attr({id: defn.id})
-        .append([
-            $('<h2/>').text(defn.title),
-            table,
-        ])
-    table.DataTable(opts)
-    return wrapper
-}
-
-$(async () => {
-    
-    for (const el of $('.reports-auto-table').toArray()) {
-        const wrapper = $(el)
-        const table = $('table', wrapper)
-        if (!table.length) {
-            continue
-        }
-        const {queryId} = wrapper.data()
-        const params = queryId
-            ? JSON.parse($(`script#${queryId}`).html())
-            : null
-        const optsets = []
-        if (wrapper.hasClass('slim')) {
-            optsets.push(slim)
-        }
-        const dt = await initTable(table, params, ...optsets)
-        if (wrapper.hasClass('hide-empty')) {
-            const cb = () => {
-                const {data} = dt.ajax.json()
-                wrapper.toggle(Boolean(data.length))
-                dt.off('xhr', cb)
-            }
-            dt.on('xhr', cb)
-        }
-    }
-})

@@ -54,7 +54,7 @@ def repopts(model: type) -> dict:
 
 @router.get('/reports', **repopts(list[ReportDataView]))
 async def reports_list(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> list[ReportData]:
-    feed_url_headers(rep, params)
+    feed_id_header(rep, params)
     return await search_response(req, rep, ReportData, params, opts)
 
 @router.head('/reports', include_in_schema=False)
@@ -134,10 +134,10 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
         return rep
     return res
 
-def feed_url_headers(rep: Response, params: FeedSearchParams) -> Response:
+def feed_id_header(rep: Response, params: FeedSearchParams) -> Response:
     id = feed.id_encode(params)
-    for fmt in ('rss', 'atom'):
-        rep.headers[fmt] = str(feed.id_permalink(id, fmt))
+    if id:
+        rep.headers['feed-id'] = id
     return rep
 
 def get_next_url(url: URL, total: int, offset: int, limit: int) -> URL|None:

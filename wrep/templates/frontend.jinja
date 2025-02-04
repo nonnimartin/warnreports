@@ -1,7 +1,8 @@
 {%- extends 'base.jinja' %}
-{%- block content %}
-<div id="id_maincontent"></div>
-{%- endblock content %}
-{%- block scripts %}
-<script src="/static/js/{{ path.lstrip('/') }}.js" type="module"></script>
-{%- endblock scripts %}
+{%- block main_scripts %}
+{{ super() }}
+<script type="module">
+import {renderPage} from "/static/js/{{ path.strip('/') }}.js"
+$(async () => await renderPage('#id_maincontent'))
+</script>
+{%- endblock main_scripts %}

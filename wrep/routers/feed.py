@@ -21,24 +21,7 @@ logger = utils.get_logger('feed')
 router = APIRouter()
 templates = Jinja2Templates(env=utils.jinja_env())
 
-default_feed_params = feed_search_params()
-
-@router.get('/')
-async def feed_index(req: Request, params: FeedSearchParams) -> HTMLResponse:
-    id = id_encode(params)
-    is_custom = any(params.values())
-    custom_desc = query_description(params)
-    permalinks = {fmt: id_permalink(id, fmt) for fmt in ('rss', 'atom')}
-    context = dict(
-        params=params,
-        is_custom=is_custom,
-        custom_desc=custom_desc,
-        permalinks=permalinks)
-    params = dict(params, order='-reported')
-    reports = await search(ReportData, params, min(50, settings.FEED_ENTRY_LIMIT))
-    states = await search(StateDetail)
-    context.update(reports=reports, states=states)
-    return templates.TemplateResponse(req, 'feed.jinja', context)
+valid_feed_params = tuple(sorted(feed_search_params()))
 
 @router.get('/rss')
 async def rss_query(params: FeedSearchParams) -> HTMLResponse:
@@ -69,6 +52,7 @@ async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
     return await feed_query(fmt, params)
 
 async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
+    params = clean_params(params)
     title = f'WARN Reports {query_description(params)}'.strip()
     id = id_encode(params)
     url = str(id_permalink(id, fmt))
@@ -79,7 +63,6 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     feed.title(title)
     feed.description(title)
     params = dict(params, order='-reported')
-    template = utils.get_template('reports/feed.jinja')
     for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
@@ -87,8 +70,20 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
         entry.link(href=str(report_link(report)))
         entry.published(report.tzreplace(report.reported))
         entry.updated(entry.published())
-        entry.description(template.render(report=report))
+        entry.description(entry_description(report))
     return getattr(feed, f'{fmt}_str')(pretty=True)
+
+def entry_description(report: ReportData) -> str:
+    descs = [report.state]
+    if report.employees:
+        descs.append(f'{report.employees} employees')
+    if report.starting:
+        descs.append(f'starting {report.starting.date()}')
+    if report.action:
+        descs.append(report.action)
+    if report.location:
+        descs.append(report.location)
+    return ' | '.join(descs)
 
 def query_description(params: FeedSearchParams) -> str:
     params = clean_params(params)
@@ -107,7 +102,7 @@ def query_description(params: FeedSearchParams) -> str:
 def id_encode(params: FeedSearchParams) -> str:
     params = clean_params(params)
     items = []
-    for k in sorted(params):
+    for k in params:
         if not isinstance(v := params[k], list):
             v = [v]
         for value in v:
@@ -130,7 +125,7 @@ def id_decode(id: str) -> dict[str, Any]:
     return clean_params(params)
 
 def clean_params(params: dict) -> FeedSearchParams:
-    return {key: params[key] for key in default_feed_params if key in params and params[key] is not None}
+    return {key: params[key] for key in valid_feed_params if params.get(key) is not None}
 
 def id_permalink(id: str, fmt: str) -> URL:
     path = f'/feed/{fmt}'
@@ -140,7 +135,6 @@ def id_permalink(id: str, fmt: str) -> URL:
     return url.replace(path=url.path.rstrip('/') + path)
 
 def report_link(report: ReportData) -> URL:
-    from ..main import app
+    path = f'/r/{report.id}'
     url = settings.SITE_URL
-    path = app.url_path_for('report_view', id=report.id)
     return url.replace(path=url.path.rstrip('/') + path)

@@ -15,12 +15,12 @@ hr.rounded {
 
 h2,
 h3,
-.report-detail {
+.report-view {
     margin-bottom: 20px;
 }
 
-.report-detail td,
-.report-detail th {
+.report-view td,
+.report-view th {
     padding: 5px;
 }
 
@@ -69,4 +69,9 @@ td.field-starting {
 nav.main-nav {
     padding-top: 10px;
     padding-bottom: 10px;
+}
+
+rapi-doc {
+    --bg: var(--bs-body-bg);
+    --header-bg: var(--bs-body-bg);
 }

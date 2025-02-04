@@ -1,11 +1,6 @@
-{%- extends 'base.jinja' %}
-{%- block content %}
-<rapi-doc spec-url="/openapi.json" theme="dark" render-style="view" class="hidden"></rapi-doc>
-{%- endblock %}
-{%- block scripts %}
-<script type="module" src="https://unpkg.com/rapidoc/dist/rapidoc-min.js"></script>
-<script>
-;$(() => {
+import 'https://unpkg.com/rapidoc/dist/rapidoc-min.js'
+
+function initRapi() {
     const rapi = $('rapi-doc')
     const checkStart = +new Date
     const iflag = setInterval(
@@ -39,14 +34,12 @@
         $('summary.endpoint-head', ctx).css({padding: '6px 0'})
         rapi.show()
     }
-});
-</script>
-{%- endblock %}
-{%- block styles %}
-<style>
-rapi-doc {
-    --bg: var(--bs-body-bg);
-    --header-bg: var(--bs-body-bg);
 }
-</style>
-{%- endblock %}
+
+const rapiHtml =
+`<rapi-doc spec-url="/openapi.json" theme="dark" render-style="view" class="hidden"></rapi-doc>`
+
+export async function renderPage(target) {
+    $(target).html(rapiHtml)
+    initRapi()
+}

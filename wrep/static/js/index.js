@@ -3,18 +3,21 @@ import {createTableComponent, ReportColumns} from './table.js'
 const defn = {
     id: 'reports_recent',
     title: 'Recent 50+ employees',
-    url: '/api/v0/reports',
+    collection: 'reports',
     params: {employees_min: 50, order: '-reported'},
     columns: ReportColumns,
 }
 
 const opts = {
-    order: [{name: 'reported', dir: 'desc'}],
-    pageLength: 25,
-    autoWidth: false,
+    pageLength: 10,
+    ordering: false,
+    lengthChange: false,
+    filter: false,
+    layout: {
+        bottomStart: null
+    },
 }
 
-$(() => {
-    const main = $('#id_maincontent')
-    main.append(createTableComponent(defn, opts))
-})
+export async function renderPage(target) {
+    $(target).html(createTableComponent(defn, opts))
+}
