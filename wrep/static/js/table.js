@@ -40,7 +40,20 @@ export const ReportFieldRender = {
     url: renderUrl,
 }
 
-const column = (name, opts) => ({name, render: ReportFieldRender[name], ...(opts || {})})
+const columnRenderer = name => {
+    const renderer = ReportFieldRender[name]
+    if (!renderer) {
+        return
+    }
+    return (...args) => {
+        const value = renderer(...args)
+        return typeof value === 'object'
+            ? value.get(0).outerHTML
+            : value
+    }
+}
+
+const column = (name, opts) => ({name, render: columnRenderer(name), ...(opts || {})})
 
 export const ReportColumns = [
     column('state', {title: 'State'}),

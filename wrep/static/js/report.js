@@ -1,4 +1,4 @@
-import { aajax, escapeHtml } from './main.js'
+import { aajax, escapeHtml, renderError } from './main.js'
 import { createTableComponent, ReportColumns, ReportFieldRender } from './table.js'
 
 class ReportDetail {
@@ -135,6 +135,11 @@ class ReportDetail {
 export async function renderPage(target) {
     const reportId = window.location.pathname.split('/').pop()
     const detail = new ReportDetail(reportId)
-    await detail.fetch()
+    try {
+        await detail.fetch()
+    } catch(e) {
+        $(target).html(await renderError(e))
+        return
+    }
     $(target).html(await detail.render())
 }

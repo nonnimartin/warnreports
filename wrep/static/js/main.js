@@ -13,7 +13,7 @@ export function aajax(opts) {
     return new Promise((resolve, reject) => {
         $.ajax(opts)
             .done((body, textStatus, xhr) => resolve({body, textStatus, xhr}))
-            .fail((xhr, textStatus, errorThrown) => reject(errorThrown))
+            .fail((xhr, textStatus, errorThrown) => reject({xhr, textStatus, errorThrown}))
     })
 }
 
@@ -22,4 +22,17 @@ export const nf = number => nformatter.format(number)
 
 export function escapeHtml(value) {
     return $('<p/>').text(value).html()
+}
+
+export async function renderError(err) {
+    const lines = []
+    if (err) {
+        if (err.xhr) {
+            lines.push(`Status: ${err.xhr.status}`)
+        }
+        if (err.errorThrown) {
+            lines.push(`Error: ${err.errorThrown}`)
+        }
+    }
+    return $('<pre/>').text(lines.join('\n'))
 }

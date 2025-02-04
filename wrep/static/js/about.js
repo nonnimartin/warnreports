@@ -21,9 +21,6 @@ const opts = {
         bottomStart: null,
     },
 }
-const Columns = {
-    reports_count: {title: 'Reports', name: 'reports_count', render: nf, type: 'num'},
-}
 
 const reports_count = {title: 'Reports', name: 'reports_count', render: nf, type: 'num'}
 const defns = [

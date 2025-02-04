@@ -52,36 +52,37 @@ function initSearchForm(form, table) {
         doDraw()
     })
 }
+
 const formHtml = `
-    <form class="row g-3 search-form">
-        <div class="col-3">
-            <label for="search_text">Search</label>
-            <input class="form-control" name="text" id="search_text">
-        </div>
-        <div class="col-2">
-            <label for="search_state">State</label>
-            <select class="form-select" name="state" id="search_state">
-                <option value="">-</option>
-            </select>
-        </div>
-        <div class="col-2">
-            <label for="search_reported_min">Reported min.</label>
-            <input class="form-control" name="reported_min" type="date" id="search_reported_min">
-        </div>
-        <div class="col-2">
-            <label for="search_reported_max">Reported max.</label>
-            <input class="form-control" name="reported_max" type="date" id="search_reported_max">
-        </div>
-        <div class="col-2">
-            <label for="search_employees_min">Employees min.</label>
-            <input class="form-control" name="employees_min" type="number" id="search_employees_min">
-        </div>
-        <div class="col-1">
-            <label for="search_clear"></label>
-            <input type="submit" class="hidden">
-            <button class="form-control clear-form btn btn-secondary" id="search_clear">Clear</button>
-        </div>
-    </form>`
+<form class="row g-3 search-form">
+    <div class="col-3">
+        <label for="search_text">Search</label>
+        <input class="form-control" name="text" id="search_text">
+    </div>
+    <div class="col-2">
+        <label for="search_state">State</label>
+        <select class="form-select" name="state" id="search_state">
+            <option value="">-</option>
+        </select>
+    </div>
+    <div class="col-2">
+        <label for="search_reported_min">Reported min.</label>
+        <input class="form-control" name="reported_min" type="date" id="search_reported_min">
+    </div>
+    <div class="col-2">
+        <label for="search_reported_max">Reported max.</label>
+        <input class="form-control" name="reported_max" type="date" id="search_reported_max">
+    </div>
+    <div class="col-2">
+        <label for="search_employees_min">Employees min.</label>
+        <input class="form-control" name="employees_min" type="number" id="search_employees_min">
+    </div>
+    <div class="col-1">
+        <label for="search_clear"></label>
+        <input type="submit" class="hidden">
+        <button class="form-control clear-form btn btn-secondary" id="search_clear">Clear</button>
+    </div>
+</form>`
 
 export async function renderPage(target) {
     const form = $(formHtml)
