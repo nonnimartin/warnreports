@@ -5,20 +5,26 @@ import asyncio
 import enum
 import logging
 import mimetypes
+import re
 from argparse import ArgumentParser, _SubParsersAction
+from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
+                        asynccontextmanager)
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
-                    Iterable, Iterator, TypeVar)
+                    Iterable, Iterator)
 from uuid import UUID
 
 import dateutil.parser
 
 from . import settings
 
+type AP = ArgumentParser
 type EitherIterable[T] = Iterable[T]|AsyncIterable[T]
+type EitherContext[T] = AbstractContextManager[T]|AbstractAsyncContextManager[T]
 type SubParsers = _SubParsersAction[ArgumentParser]
+type SrchRepl = tuple[str|re.Pattern, str|Callable[[re.Match], str]]
 
 def get_logger(name: str|None = None) -> logging.Logger:
     if name:
@@ -77,6 +83,14 @@ def parse_int(value: str) -> int|None:
     except ValueError:
         pass
 
+def rewrite_all(value: str, rewrites: Iterable[SrchRepl]) -> str:
+    for srch, repl in rewrites:
+        if srch == value:
+            value = repl
+        elif isinstance(srch, re.Pattern):
+            value = srch.sub(repl, value)
+    return value
+
 def get_mimetype(value: Any) -> str:
     return mimetypes.guess_type(value)[0] or 'application/octet-stream'
 
@@ -106,6 +120,15 @@ async def wait(ret):
 async def amap(func, it):
     async for x in as_aiter(it):
         yield await wait(func(x))
+
+@asynccontextmanager
+async def awith[T](ctx: EitherContext[T]):
+    if isinstance(ctx, AbstractAsyncContextManager):
+        async with ctx as it:
+            yield it
+    else:
+        with ctx as it:
+            yield it
 
 from .backends.email import instances as email_backends
 
@@ -176,7 +199,6 @@ class HelpFormatter(argparse.HelpFormatter):
     def _fill_text(self, text: str, width: int, indent: str) -> str:
         return '\n'.join(indent + line for line in self._split_lines(text, width - len(indent)))
 
-type AP = ArgumentParser
 class BaseCommand:
     description: ClassVar[str|None] = None
     prog: ClassVar[str|None] = None

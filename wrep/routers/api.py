@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from pydantic import Field
 from starlette.datastructures import URL
 
-from .. import settings, utils
+from .. import search, settings, utils
 from ..models import *
-from ..search import *
+from . import feed
 from .common import *
 
 logger = utils.get_logger('api')
@@ -53,16 +54,17 @@ def repopts(model: type) -> dict:
 
 @router.get('/reports', **repopts(list[ReportDataView]))
 async def reports_list(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> list[ReportData]:
+    feed_id_header(rep, params)
     return await search_response(req, rep, ReportData, params, opts)
 
 @router.head('/reports', include_in_schema=False)
 async def reports_list_head(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> Response:
-    return await search_response(req, rep, ReportData, params, opts)
+    return await reports_list(req, rep, params, opts)
 
 @router.head('/reports/{id}', include_in_schema=False)
 @router.get('/reports/{id}', **repopts(ReportDataView))
 async def report_get(id: UUID) -> ReportData:
-    return await retrieve404(ReportData, id=[id])
+    return await search.retrieve404(ReportData, id=[id])
 
 @router.get('/companies', **repopts(list[CompanyDetailView]))
 async def companies_list(req: Request, rep: Response, params: CompanySearchParams, opts: SearchOpts) -> list[CompanyDetail]:
@@ -70,12 +72,12 @@ async def companies_list(req: Request, rep: Response, params: CompanySearchParam
 
 @router.head('/companies', include_in_schema=False)
 async def companies_list_head(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> Response:
-    return await search_response(req, rep, CompanyDetail, params, opts)
+    return await companies_list(req, rep, params, opts)
 
 @router.head('/companies/{id}', include_in_schema=False)
 @router.get('/companies/{id}', **repopts(CompanyDetailView))
 async def company_get(id: UUID) -> CompanyDetail:
-    return await retrieve404(CompanyDetail, id=[id])
+    return await search.retrieve404(CompanyDetail, id=[id])
 
 @router.get('/naics')
 async def naics_list(req: Request, rep: Response, params: NaicsSearchParams, opts: SearchOpts) -> list[NaicsDetail]:
@@ -83,12 +85,12 @@ async def naics_list(req: Request, rep: Response, params: NaicsSearchParams, opt
 
 @router.head('/naics', include_in_schema=False)
 async def naics_list_head(req: Request, rep: Response, params: NaicsSearchParams, opts: SearchOpts) -> Response:
-    return await search_response(req, rep, NaicsDetail, params, opts)
+    return await naics_list(req, rep, params, opts)
 
 @router.head('/naics/{id}', include_in_schema=False)
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:
-    return await retrieve404(NaicsDetail, id=[id])
+    return await search.retrieve404(NaicsDetail, id=[id])
 
 @router.get('/states')
 async def states_list(req: Request, rep: Response, params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
@@ -96,12 +98,25 @@ async def states_list(req: Request, rep: Response, params: StateSearchParams, op
 
 @router.head('/states', include_in_schema=False)
 async def states_list_head(req: Request, rep: Response, params: StateSearchParams, opts: SearchOpts) -> Response:
-    return await search_response(req, rep, StateDetail, params, opts)
+    return await states_list(req, rep, params, opts)
 
 @router.head('/states/{id}', include_in_schema=False)
 @router.get('/states/{id}')
 async def state_get(id: StateCode) -> StateDetail:
-    return await retrieve404(StateDetail, id=[id])
+    return await search.retrieve404(StateDetail, id=[id])
+
+@router.get('/artifacts/{id}/data', include_in_schema=False)
+async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
+    artifact = await search.retrieve404(ArtifactDetail, id=[id])
+    return FileResponse(
+        settings.ARTIFACTS_DIR/artifact.path,
+        media_type=artifact.media_type,
+        filename=artifact.name,
+        content_disposition_type=disposition)
+
+@router.get('/_db', include_in_schema=False)
+async def dbstats() -> dict:
+    return dict(collections=await search.search_stats())
 
 async def search_response[DM: DataModel](req: Request, rep: Response, model: type[DM], params: dict, opts: SearchOpts) -> list[DM]|Response:
     params = dict(params)
@@ -111,13 +126,19 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     if req.method == 'HEAD':
         opts['limit'] = 0
         rep.status_code = status.HTTP_204_NO_CONTENT
-    res, total = await search_result(model, params, **opts)
+    res, total = await search.search_result(model, params, **opts)
     rep.headers['count'] = str(total)
     if (nexturl := get_next_url(req.url, total, opts['offset'], limit)):
         rep.headers['next'] = str(nexturl)
     if req.method == 'HEAD':
         return rep
     return res
+
+def feed_id_header(rep: Response, params: FeedSearchParams) -> Response:
+    id = feed.id_encode(params)
+    if id:
+        rep.headers['feed-id'] = id
+    return rep
 
 def get_next_url(url: URL, total: int, offset: int, limit: int) -> URL|None:
     if not has_next_url(total, offset, limit):

@@ -168,11 +168,7 @@ class Translator:
 
     def rewrite(self, field: str, value: str) -> str:
         if field in self.rewrites:
-            for srch, repl in self.rewrites[field]:
-                if srch == value:
-                    value = repl
-                elif isinstance(srch, re.Pattern):
-                    value = srch.sub(repl, value)
+            value = utils.rewrite_all(value, self.rewrites[field])
         return value
 
     def finish(self, entry: Entry, row: Row) -> None:

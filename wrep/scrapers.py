@@ -24,46 +24,37 @@ import requests
 from bs4 import BeautifulSoup as Soup
 from bs4.element import PageElement, ResultSet, Tag
 from openpyxl.worksheet.worksheet import Worksheet
+from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
-from retry import retry
 from typing_extensions import Buffer
 
 import warn.cache
 import warn.runner
 import warn.utils
 
-from . import settings, utils
-from .pipeline import Stage
+from . import SaveType, Stage, settings, utils
 
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
 
 class Scraper:
-
     state: str
     base_url: str|None = None
     user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
     request_delay = 0
     ssl_verify = True
-    retry_tries = 3
-    retry_delay = 10
-    retry_backoff = 2
+    retry = dict(total=3, backoff_factor=2)
 
     def __init__(self):
         self.runner = Runner(self.state)
         self.session = requests.session()
+        retry = Retry(**self.retry)
+        self.session.mount('https://', HTTPAdapter(max_retries=retry))
         self.session.headers['User-Agent'] = self.user_agent
         self.cache = Cache(self.state, Stage.Scrape)
         self.extract_cache = Cache(self.state, Stage.Extract)
         self.artifacts = Artifacts(self.state)
-        self.request_count = 0
-        @retry(tries=self.retry_tries, delay=self.request_delay, backoff=self.retry_backoff)
-        def req_get_retry(url: str, check: bool = True, **kw) -> requests.Response:
-            rep = self.session.get(url, **kw)
-            if check:
-                rep.raise_for_status()
-            return rep
-        self._req_get_retry = req_get_retry
+        self.metrics = defaultdict(int)
 
     async def clean(self) -> None:
         self.runner.file.unlink(missing_ok=True)
@@ -85,40 +76,41 @@ class Scraper:
     async def extract_clean(self) -> None:
         self.extract_cache.nuke()
 
-    async def fetch(self, url: str, **kw) -> str:
-        rep = await self.req_get(url, **kw)
+    async def fetch(self, key: str, url: str, **kw) -> str:
+        rep = await self.request('GET', url, **kw)
         try:
-            return rep.content.decode()
+            text = rep.content.decode()
         except UnicodeDecodeError:
-            return rep.text
-
-    async def cache_fetch(self, key: str, url: str, **kw) -> str:
-        text = await self.fetch(url, **kw)
+            text = rep.text
         self.cache.write(key, text)
         return text
 
-    async def cache_download(self, key: str, url: str, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
+    async def download(self, key: str, url: str, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
         dest = self.cache.topath(key)
         if missing_only and dest.exists():
             return
         logger.debug(f'Downloading {url} to {dest}')
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with await self.req_get(url, stream=True, **kw) as rep:
+        with await self.request('GET', url, stream=True, **kw) as rep:
             rep.encoding = encoding or rep.encoding or 'utf-8'
             with dest.open('wb') as f:
                 for chunk in rep.iter_content(chunk_size=8192):
                     f.write(chunk)
+                    self.metrics['request_bytes'] += len(chunk)
         await asyncio.sleep(0)
         return rep
 
-    async def req_get(self, url: str, **kw) -> requests.Response:
-        if self.request_delay and self.request_count:
+    async def request(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
+        if self.request_delay and self.metrics['request_count']:
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
         kw.setdefault('verify', self.ssl_verify)
+        self.metrics['request_count'] += 1
         try:
-            rep = self._req_get_retry(url, **kw)
+            rep = self.session.request(method, url, **kw)
+            if check:
+                rep.raise_for_status()
         except Exception as err:
             if isinstance(err, HTTPError) and err.response is not None:
                 status = err.response.status_code
@@ -126,17 +118,17 @@ class Scraper:
                 status = None
             logger.error(f'Failed to get {url=} {status=}')
             raise
-        self.request_count += 1
+        self.metrics['request_count'] += 1
         if not kw.get('stream'):
+            self.metrics['request_bytes'] += len(rep.content)
             await asyncio.sleep(0)
         return rep
 
     def absurl(self, url: str) -> str:
-        if self.base_url and not any(map(url.startswith, ('http://', 'https://'))):
-            url = self.base_url.rstrip('/') + '/' + url.lstrip('/')
-        return url
+        return absurl(self.base_url, url)
 
     def __init_subclass__(cls) -> None:
+        cls.retry = Scraper.retry | cls.retry
         if len(name := cls.__name__.upper()) == 2:
             cls.state = name
             scrapers[cls.state] = cls
@@ -144,10 +136,9 @@ class Scraper:
 class AK(Scraper):
     base_url = 'https://jobs.alaska.gov'
     latest_url = '/RR/WARN_notices.htm'
-    space_pat = _r(r'[\s\n]+')
 
     async def scrape(self) -> None:
-        await self.cache_download('latest.html', self.latest_url)
+        await self.download('latest.html', self.latest_url)
 
     async def clean(self):
         self.cache.delete('latest.html')
@@ -171,7 +162,7 @@ class AK(Scraper):
 
     def read_tr(self, tr: Soup) -> Iterator[str]:
         for td in tr.find_all('td'):
-            yield self.space_pat.sub(' ', td.text).strip()
+            yield ' '.join(td.text.split())
 
     def parse_url(self, tr: Soup) -> str:
         td = tr.find('td')
@@ -189,14 +180,14 @@ class CA(Scraper):
     hrefpat = _r(r'warn[-_]?report', re.I)
 
     async def scrape(self) -> None:
-        page = bs(await self.cache_fetch('latest.html', self.latest_url))
+        page = bs(await self.fetch('latest.html', self.latest_url))
         index = []
         for link in page.find_all('a'):
             href = str(link.get('href', ''))
             if self.hrefpat.search(href):
                 key = Path(urlparse(href).path).name
-                await self.cache_download(key, href, missing_only=key.endswith('.pdf'))
-                self.artifacts.add(key, self.cache.topath(key))
+                await self.download(key, href, missing_only=key.endswith('.pdf'))
+                self.artifacts.add(key)
                 index.append((key, self.absurl(href)))
         index.sort()
         self.cache.write_json('index.json', dict(index), indent=2)
@@ -269,9 +260,9 @@ class CT(Scraper):
         index = dict(self.build_artifacts_index())
         self.cache.write_json('artifacts.json', index, indent=2)
         for key, url in index.values():
-            await self.cache_download(key, url, missing_only=True)
-            self.artifacts.add(key, self.cache.topath(key))
-    
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
+
     async def clean(self):
         await super().clean()
         self.cache.delete('artifacts.json')
@@ -331,8 +322,7 @@ class CT(Scraper):
         "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
         if year < self.artifacts_min_year or not uri.endswith('.pdf'):
             return
-        for srch, repl in self.artifact_uri_subs:
-            uri = srch.sub(repl, uri)
+        uri = utils.rewrite_all(uri, self.artifact_uri_subs)
         url = self.absurl(uri)
         clean = Path(urlparse(url).path).name
         clean = unquote_plus(clean)
@@ -360,7 +350,7 @@ class DE(Scraper):
                 href = str(tr.find('td').find('a')['href'])
                 record_num = str(int(href.rsplit('/')[-1].removesuffix('.html')))
                 key = f'records/{record_num}.html'
-                await self.cache_download(key, href, missing_only=True)
+                await self.download(key, href, missing_only=True)
                 row['URL'] = href
                 row['record_num'] = record_num
                 index.append(row)
@@ -371,7 +361,7 @@ class DE(Scraper):
         url = self.latest_url
         while url:
             key = f'pages/{page}.html'
-            doc = bs(await self.cache_fetch(key, url))
+            doc = bs(await self.fetch(key, url))
             table = doc.find('table')
             if table:
                 yield table
@@ -431,8 +421,8 @@ class FL(Scraper):
         index = dict(self.build_artifacts_index())
         self.cache.write_json('artifacts.json', index, indent=2)
         for key, url in index.values():
-            await self.cache_download(key, url, missing_only=True)
-            self.artifacts.add(key, self.cache.topath(key))
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
 
     async def clean(self):
         await super().clean()
@@ -493,8 +483,7 @@ class FL(Scraper):
         if clean.startswith('\\'):
             return
         clean = clean.removesuffix('.pdf')
-        for srch, repl in self.key_clean_subs:
-            clean = srch.sub(repl, clean)
+        clean = utils.rewrite_all(clean, self.key_clean_subs)
         clean = clean.strip('_-')
         if not clean:
             return
@@ -514,11 +503,10 @@ class GA(Scraper):
     extra_headers = ['entry_url', 'submitted_date', 'artifacts_json']
 
     async def scrape(self):
-        text = await self.cache_fetch('latest.html', self.latest_url)
+        text = await self.fetch('latest.html', self.latest_url)
         doc = bs(text, 'html5lib')
         payload = dict(self.payload, nonce=self.extract_nonce(doc))
-        rep = self.session.post(self.absurl(self.api_url), data=payload)
-        rep.raise_for_status()
+        rep = await self.request('POST', self.api_url, data=payload)
         index = {}
         for listing in rep.json()['data']:
             a = bs(listing[0], 'html5lib').find('a')
@@ -535,8 +523,8 @@ class GA(Scraper):
         self.cache.write_json('artifacts.json', artifacts, indent=2)
         it = chain.from_iterable(map(dict.items, artifacts.values()))
         for cachekey, url in it:
-            await self.cache_download(cachekey, url, missing_only=True)
-            self.artifacts.add(cachekey, self.cache.topath(cachekey))
+            await self.download(cachekey, url, missing_only=True)
+            self.artifacts.add(cachekey)
 
     async def clean(self):
         await super().clean()
@@ -624,8 +612,8 @@ class IL(Scraper):
 
     async def scrape(self):
         key = 'export.xlsx'
-        await self.cache_download(key, self.source_url)
-        self.artifacts.add(key, self.cache.topath(key))
+        await self.download(key, self.source_url)
+        self.artifacts.add(key)
 
     def statobjs(self):
         yield self.cache.topath('export.xlsx')
@@ -647,7 +635,7 @@ class IN(Scraper):
     latest_url = '/dwd/warn-notices/current-warn-notices/'
 
     async def scrape(self) -> None:
-        await self.cache_download('latest.html', self.latest_url)
+        await self.download('latest.html', self.latest_url)
 
     async def clean(self) -> None:
         self.cache.delete('latest.html')
@@ -699,18 +687,18 @@ class LA(Scraper):
 
     async def scrape(self):
         index = {}
-        page = bs(await self.cache_fetch('latest.html', self.latest_url))
+        page = bs(await self.fetch('latest.html', self.latest_url))
         recent = (utils.now().year, utils.now().year - 1)
         for a in page.find_all('a'):
             url = a.get('href', '')
             if 'WARN Notices' in a.text and url.endswith('.pdf'):
                 key = url.split('/')[-1]
                 is_recent = any(str(y) in key for y in recent)
-                await self.cache_download(key, url, missing_only=not is_recent)
+                await self.download(key, url, missing_only=not is_recent)
                 index[key] = self.absurl(url)
         for url in self.historical_urls:
             key = url.split('/')[-1]
-            await self.cache_download(key, url, missing_only=True)
+            await self.download(key, url, missing_only=True)
             if key not in index:
                 index[key] = url
         index = {key: index[key] for key in sorted(index, reverse=True)}
@@ -743,17 +731,17 @@ class MD(Scraper):
     # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
     latest_url = '/warn.shtml'
-    retry_tries = 5
+    retry = dict(total=5)
 
     async def scrape(self):
-        page = bs(await self.cache_fetch('latest.html', self.latest_url))
+        page = bs(await self.fetch('latest.html', self.latest_url))
         for a in page.find_all('a', {'class': 'sub'}):
             href = a['href'].lstrip('/')
             key = f'{href}.html'
             url = f'/{href}'
             year = int(href[4:8])
-            if not self.cache.exists(key) or year >= utils.now().year - 1:
-                await self.cache_download(key, url)
+            is_recent = year >= utils.now().year - 1
+            await self.download(key, url, missing_only=not is_recent)
 
     async def clean(self):
         self.cache.delete('*.html', glob=True)
@@ -799,7 +787,7 @@ class MO(Scraper):
             url = f'{self.archive_url}/{key}'
             is_recent = year >= now.year - 1
             try:
-                rep = await self.cache_download(key, url, missing_only=not is_recent)
+                rep = await self.download(key, url, missing_only=not is_recent)
             except HTTPError:
                 if year == now.year and now.month < 2:
                     # Don't fail for current year if it is January
@@ -825,14 +813,13 @@ class MO(Scraper):
         yield self.read_records()
 
     def read_records(self) -> Iterable[dict[str, str]]:
-        for path in self.list_page_files():
-            year = int(path.name.removesuffix('.html'))
-            url = f'{self.base_url}/{year}'
-            page = bs(path.read_text())
-            table = page.find('table')
-            head, *trs = table.find_all('tr')
-            headers = self.get_header_species(head)
-            for tr in trs:
+        for file in self.list_page_files():
+            table = bs(file).find('table')
+            year = int(file.name.removesuffix('.html'))
+            url = self.absurl(str(year))
+            it = iter(table.find_all('tr'))
+            headers = self.get_header_species(next(it))
+            for tr in it:
                 values = [*self.read_tr(tr), url]
                 if utils.morethan(2, values):
                     yield dict(zip(headers, values))
@@ -852,7 +839,7 @@ class NJ(Scraper):
     latest_url = '/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
 
     async def scrape(self):
-        await self.cache_download('latest.xlsx', self.latest_url)
+        await self.download('latest.xlsx', self.latest_url)
 
     def statobjs(self):
         yield self.cache.topath('latest.xlsx')
@@ -892,14 +879,14 @@ class NY(Scraper):
     request_delay = 1
 
     async def scrape(self) -> None:
-        await self.cache_download('latest.html', self.latest_url)
+        await self.download('latest.html', self.latest_url)
         for key, url in self.past_urls.items():
-            await self.cache_download(key, url, missing_only=True)
+            await self.download(key, url, missing_only=True)
         index = dict(self.build_artifacts_index())
         self.cache.write_json('artifacts.json', index, indent=2)
         for key, url in index.items():
-            await self.cache_download(key, url, missing_only=True)
-            self.artifacts.add(key, self.cache.topath(key))
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
 
     async def clean(self):
         self.cache.delete('latest.html', 'artifacts.json', *self.past_urls)
@@ -1026,16 +1013,16 @@ class OH(Scraper):
     )
 
     async def scrape(self):
-        await self.cache_download('oh_historical.csv', self.archive_url, missing_only=True)
+        await self.download('oh_historical.csv', self.archive_url, missing_only=True)
         sources: deque[tuple[str, str]] = deque()
-        page = bs(await self.cache_fetch(key := 'latest.html', self.latest_url))
+        page = bs(await self.fetch(key := 'latest.html', self.latest_url))
         self.cache.write_json(f'{key}.json', self.extract_json(page), indent=2)
         sources.append((f'{key}.json', self.absurl(self.latest_url)))
         for a in page.select('nav a'):
             if not (match := self.atext_pat.match(a.text)):
                 continue
             key = f'{match.group(1)}.html'
-            await self.cache_download(key, a['href'], missing_only=True)
+            await self.download(key, a['href'], missing_only=True)
             if not self.cache.exists(f'{key}.json'):
                 self.cache.write_json(
                     f'{key}.json',
@@ -1045,8 +1032,8 @@ class OH(Scraper):
         self.cache.write_json('sources.json', dict(sorted(sources)), indent=2)
         self.cache.write_json('index.json', index := self.build_index(), indent=2)
         for key, url in chain.from_iterable(map(dict.items, index.values())):
-            await self.cache_download(key, url, missing_only=True)
-            self.artifacts.add(key, self.cache.topath(key))
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
 
     async def clean(self):
         self.cache.delete('*.html', '*.json', '*.csv', glob=True)
@@ -1095,10 +1082,7 @@ class OH(Scraper):
         return json.loads(div.decode_contents().strip())
 
     def normalize_notice_id(self, value: str) -> str:
-        for srch, repl in self.rewrites['notice_id']:
-            value = srch.sub(repl, value)
-        value = value.strip()
-        return value
+        return utils.rewrite_all(value, self.rewrites['notice_id']).strip()
 
     def build_index(self) -> dict[str, list[str]]:
         items: deque[tuple[str, str]] = deque()
@@ -1112,8 +1096,7 @@ class OH(Scraper):
             k_url = headers.index('URL')
             for values in filter(any, it):
                 url = self.absurl(values[k_url])
-                for srch, repl in self.rewrites['artifact']:
-                    url = srch.sub(repl, url)
+                url = utils.rewrite_all(url, self.rewrites['artifact'])
                 if not url.endswith('.pdf'):
                     continue
                 if url in self.artifact404:
@@ -1150,7 +1133,7 @@ class PA(Scraper):
         del self.runner
 
     async def scrape(self) -> None:
-        await self.cache_download('latest.html', self.latest_url)
+        await self.download('latest.html', self.latest_url)
 
     async def clean(self) -> None:
         self.cache.delete('latest.html')
@@ -1266,7 +1249,7 @@ class SC(Scraper):
 
     async def scrape(self) -> None:
         index: list[tuple[int, str]] = []
-        text = await self.cache_fetch('latest.html', self.latest_url)
+        text = await self.fetch('latest.html', self.latest_url)
         page = bs(text)
         for a in page.find_all('a'):
             href = a.get('href', '')
@@ -1278,8 +1261,8 @@ class SC(Scraper):
                 index.append((year, href))
                 key = f'{year}.pdf'
                 is_recent = year >= utils.now().year - 1
-                await self.cache_download(key, href, missing_only=not is_recent)
-                self.artifacts.add(key, self.cache.topath(key))
+                await self.download(key, href, missing_only=not is_recent)
+                self.artifacts.add(key)
         index.sort()
         self.cache.write_json('index.json', index, indent=2)
 
@@ -1427,16 +1410,16 @@ class TX(Scraper):
     ssl_verify = False
 
     async def scrape(self):
-        page = bs(await self.cache_fetch('latest.html', self.latest_url))
+        page = bs(await self.fetch('latest.html', self.latest_url))
         for a in page.find_all('a', href=self.href_pat):
             href = a['href']
             key = Path(href).name
             year = int(self.year_pat.match(key)[1])
             is_recent = year >= utils.now().year - 1
-            await self.cache_download(key, href, missing_only=not is_recent)
-            self.artifacts.add(key, self.cache.topath(key))
+            await self.download(key, href, missing_only=not is_recent)
+            self.artifacts.add(key)
         key = self.archive_url.split('/')[-1]
-        await self.cache_download(key, self.archive_url, missing_only=True)
+        await self.download(key, self.archive_url, missing_only=True)
 
     async def clean(self):
         self.cache.delete('latest.html', '*.xlsx', glob=True)
@@ -1464,7 +1447,7 @@ class UT(Scraper):
     latest_url = '/employer/business/warnnotices.html'
 
     async def scrape(self):
-        await self.cache_download('latest.html', self.latest_url)
+        await self.download('latest.html', self.latest_url)
 
     def statobjs(self):
         if (file := self.cache.topath('latest.html')).exists():
@@ -1504,7 +1487,7 @@ class VA(Scraper):
     csv_url = 'https://www.virginiaworks.gov/warn_notices.csv'
 
     async def scrape(self):
-        await self.cache_download(self.runner.file, self.csv_url)
+        await self.download(self.runner.file, self.csv_url)
 
 class Cache(warn.cache.Cache):
 
@@ -1553,26 +1536,40 @@ class Cache(warn.cache.Cache):
 class Artifacts:
 
     def __init__(self, state: str):
+        self.state = state.upper()
         self.dir = settings.ARTIFACTS_DIR/state.lower()
+        self.src = settings.BUILD_DIR/Stage.Scrape/state.lower()
+        self.metrics = defaultdict(int)
 
-    def add(self, key: str, file: Path):
+    def add(self, key: str, file: Path|None = None) -> tuple[SaveType, int]:
+        file = file or self.src/key
         dest = self.dir/key
+        sta = file.stat()
         if dest.exists():
-            sta, stb = file.stat(), dest.stat()
+            stb = dest.stat()
             a = (int(sta.st_mtime), sta.st_size)
             b = (int(stb.st_mtime), stb.st_size)
             if a == b:
-                return
+                save = SaveType.Nochange
+            else:
+                save = SaveType.Update
         else:
+            save = SaveType.Create
             dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(file, dest)
-        shutil.copystat(file, dest)
+        if save is not save.Nochange:
+            shutil.copyfile(file, dest)
+            shutil.copystat(file, dest)
+            self.metrics['bytes_written'] += sta.st_size
+        self.metrics[str(save)] += 1
+        self.metrics['total'] += 1
+        self.metrics['bytes_total'] += sta.st_size
+        return save, sta.st_size
 
 class Runner(warn.Runner):
 
     def __init__(self, state: str):
         self.state = state.upper()
-        cache_dir = settings.BUILD_DIR/'scrape'
+        cache_dir = settings.BUILD_DIR/Stage.Scrape
         data_dir = cache_dir/self.state.lower()
         self.file = data_dir/f'{self.state.lower()}.csv'
         super().__init__(data_dir, cache_dir)
@@ -1582,6 +1579,11 @@ class Runner(warn.Runner):
 
     def statobjs(self) -> Iterable[Any]:
         yield self.file
+
+def absurl(base_url: str|None, url: str) -> None:
+    if base_url and not any(map(url.startswith, ('http://', 'https://'))):
+        url = base_url.rstrip('/') + '/' + url.lstrip('/')
+    return url
 
 def bs(markup: Any, features='html.parser', **kw):
     if isinstance(markup, Path):
@@ -1635,23 +1637,18 @@ clean_filename_subs = [
     (_r(r'[^a-z\d_]', re.I), '-'),
     (_r(r'([-_])+'), r'\1'),
 ]
+clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
 
-def clean_filename(value: str) -> str|None:
+def clean_filename[T](value: str, default: T = None) -> str|T:
     parts = value.rsplit('.', 1)
-    if len(parts) == 2:
-        ext = parts.pop()
-        for srch, _ in clean_filename_subs:
-            ext = srch.sub('', ext)
-    else:
-        ext = None
-    clean, = parts
-    for srch, repl in clean_filename_subs:
-        clean = srch.sub(repl, clean)
+    clean = utils.rewrite_all(parts[0], clean_filename_subs)
     clean = clean.strip('_-')
     if clean:
-        if ext:
+        if len(parts) == 2:
+            ext = utils.rewrite_all(parts[1], clean_extension_subs)
             clean = f'{clean}.{ext}'
         return clean
+    return default
 
 def create_scraper(state: str) -> type[Scraper]:
     class DefaultScraper(Scraper):

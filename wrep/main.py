@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 from uuid import UUID
 
 import click
@@ -10,13 +9,13 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import search, settings, utils
+from . import settings, utils
 from .models import *
 from .routers import api, feed
+from .routers.common import FeedSearchParams
 
 logger = utils.get_logger('main')
 templates = Jinja2Templates(env=utils.jinja_env())
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,54 +33,47 @@ router = APIRouter()
 
 @router.get('/')
 async def index(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'index.jinja')
+    return await frontend_response(req, '/index')
 
 @router.get('/search')
 async def report_search(req: Request) -> HTMLResponse:
-    states = await search.search(StateDetail)
-    context = dict(states=states)
-    return templates.TemplateResponse(req, 'search.jinja', context)
+    return await frontend_response(req)
 
 @router.get('/api')
 async def api_home(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'api.jinja')
+    return await frontend_response(req)
 
 @router.get('/api/docs')
 async def api_docs(req: Request) -> HTMLResponse:
-    return templates.TemplateResponse(req, 'docs/rapidoc.jinja')
+    return await frontend_response(req)
 
 @router.get('/about')
 async def about(req: Request) -> HTMLResponse:
-    stats = search.search_stats()
-    states = search.search(StateDetail)
-    naics = search.search(NaicsDetail, dict(reports_count_min=1, depth_max=0))
-    context = dict(stats=await stats, states=await states, naics=await naics)
-    return templates.TemplateResponse(req, 'about.jinja', context)
+    return await frontend_response(req)
 
 @router.get('/r/{id}')
 async def report_view(req: Request, id: UUID) -> HTMLResponse:
-    report = await search.retrieve404(ReportData, id=[id])
-    context = dict(report=report)
-    return templates.TemplateResponse(req, 'report.jinja', context)
+    return await frontend_response(req, '/report')
+
+@router.get('/feed')
+async def feed_builder(req: Request, params: FeedSearchParams) -> HTMLResponse:
+    return await frontend_response(req)
 
 @router.get('/d/{id}')
 @router.head('/d/{id}')
 async def artifact_download(id: UUID) -> FileResponse:
-    return await artifact(id, 'download')
+    return await api.artifact_data(id, disposition='download')
 
 @router.get('/v/{id}')
 @router.head('/v/{id}')
 async def artifact_view(id: UUID) -> FileResponse:
-    return await artifact(id, 'inline')
+    return await api.artifact_data(id, disposition='inline')
 
-async def artifact(id: UUID, disposition: str) -> FileResponse:
-    artifact = await search.retrieve404(ArtifactDetail, id=[id])
-    return FileResponse(
-        Path(settings.ARTIFACTS_DIR, artifact.path),
-        media_type=artifact.media_type,
-        filename=artifact.name,
-        content_disposition_type=disposition)
 
+async def frontend_response(req: Request, path: str|None = None) -> HTMLResponse:
+    if path is None:
+        path = req.url.path
+    return templates.TemplateResponse(req, 'frontend.jinja', dict(path=path))
 
 app = FastAPI(
     lifespan=lifespan,

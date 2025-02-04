@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
-from typing import Annotated, Any
+import binascii
+from typing import Any
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from feedgen.feed import FeedGenerator
@@ -14,42 +15,13 @@ from starlette.datastructures import URL
 from .. import settings, utils
 from ..models import *
 from ..search import *
-from .common import NaicsParam, StateParam, TextSearchParam
+from .common import FeedSearchParams, feed_search_params
 
 logger = utils.get_logger('feed')
 router = APIRouter()
 templates = Jinja2Templates(env=utils.jinja_env())
 
-def search_params(
-    text: TextSearchParam = None,
-    state: StateParam = None,
-    naics: NaicsParam = None,
-    employees_min: int = None,
-):
-    return dict(
-        text=text,
-        state=state,
-        naics=naics,
-        employees_min=employees_min)
-
-FeedSearchParams = Annotated[dict, Depends(search_params)]
-
-@router.get('/')
-async def feed_index(req: Request, params: FeedSearchParams) -> HTMLResponse:
-    id = id_encode(params)
-    is_custom = any(params.values())
-    custom_desc = query_description(params)
-    permalinks = {fmt: id_permalink(id, fmt) for fmt in ('rss', 'atom')}
-    context = dict(
-        params=params,
-        is_custom=is_custom,
-        custom_desc=custom_desc,
-        permalinks=permalinks)
-    params = dict(params, order='-reported')
-    reports = await search(ReportData, params, 50)
-    states = await search(StateDetail)
-    context.update(reports=reports, states=states)
-    return templates.TemplateResponse(req, 'feed.jinja', context)
+valid_feed_params = tuple(sorted(feed_search_params()))
 
 @router.get('/rss')
 async def rss_query(params: FeedSearchParams) -> HTMLResponse:
@@ -67,8 +39,6 @@ async def atom_query(params: FeedSearchParams) -> HTMLResponse:
 async def atom_permalink(id: str) -> HTMLResponse:
     return await feed_permalink('atom', id)
 
-
-
 async def feed_query(fmt: str, params: FeedSearchParams) -> HTMLResponse:
     return HTMLResponse(content=await build_feed(fmt, params), media_type='text/xml')
 
@@ -82,6 +52,7 @@ async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
     return await feed_query(fmt, params)
 
 async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
+    params = clean_params(params)
     title = f'WARN Reports {query_description(params)}'.strip()
     id = id_encode(params)
     url = str(id_permalink(id, fmt))
@@ -92,7 +63,6 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     feed.title(title)
     feed.description(title)
     params = dict(params, order='-reported')
-    template = utils.get_template('reports/feed.jinja')
     for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
@@ -100,11 +70,23 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
         entry.link(href=str(report_link(report)))
         entry.published(report.tzreplace(report.reported))
         entry.updated(entry.published())
-        entry.description(template.render(report=report))
+        entry.description(entry_description(report))
     return getattr(feed, f'{fmt}_str')(pretty=True)
 
+def entry_description(report: ReportData) -> str:
+    descs = [report.state]
+    if report.employees:
+        descs.append(f'{report.employees} employees')
+    if report.starting:
+        descs.append(f'starting {report.starting.date()}')
+    if report.action:
+        descs.append(report.action)
+    if report.location:
+        descs.append(report.location)
+    return ' | '.join(descs)
+
 def query_description(params: FeedSearchParams) -> str:
-    params = {k: v for k, v in params.items() if v is not None}
+    params = clean_params(params)
     descs = []
     if (state := params.pop('state', None)) is not None:
         descs.append(','.join(state))
@@ -118,37 +100,41 @@ def query_description(params: FeedSearchParams) -> str:
     return ' '.join(descs)
 
 def id_encode(params: FeedSearchParams) -> str:
+    params = clean_params(params)
     items = []
-    for k in sorted(params):
-        if (v := params[k]) is not None:
-            if not isinstance(v, list):
-                v = [v]
-            for value in v:
-                items.append((k, value))
+    for k in params:
+        if not isinstance(v := params[k], list):
+            v = [v]
+        for value in v:
+            items.append((k, value))
     q = urlencode(items)
-    return base64.b32hexencode(q.encode()).decode().lower()
+    return base64.urlsafe_b64encode(q.encode()).decode()
 
 def id_decode(id: str) -> dict[str, Any]:
-    q = base64.b32hexdecode(id, casefold=True).decode()
+    try:
+        q = base64.urlsafe_b64decode(id).decode()
+    except binascii.Error:
+        q = base64.b32hexdecode(id, casefold=True).decode()
     params = parse_qs(q)
     for key in ('employees_min', 'naics'):
         if key in params:
             params[key] = list(map(int, params[key]))
-    return {
+    params = {
         k: v if k in ('naics', 'state') else v[0]
         for k, v in params.items()}
+    return clean_params(params)
+
+def clean_params(params: dict) -> FeedSearchParams:
+    return {key: params[key] for key in valid_feed_params if params.get(key) is not None}
 
 def id_permalink(id: str, fmt: str) -> URL:
-    from ..main import app
+    path = f'/feed/{fmt}'
     if id:
-        path = app.url_path_for(f'{fmt}_permalink', id=id)
-    else:
-        path = app.url_path_for(f'{fmt}_query')
+        path = f'{path}/{id}'
     url = settings.SITE_URL
     return url.replace(path=url.path.rstrip('/') + path)
 
 def report_link(report: ReportData) -> URL:
-    from ..main import app
+    path = f'/r/{report.id}'
     url = settings.SITE_URL
-    path = app.url_path_for('report_view', id=report.id)
     return url.replace(path=url.path.rstrip('/') + path)

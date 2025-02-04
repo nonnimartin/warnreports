@@ -1,11 +1,13 @@
-{%- extends 'base.jinja' %}
-{%- block title %}{{ super() }} - API{%- endblock %}
-{%- block content %}
+const staticHtml =
+`
 <h2>API Docs</h2>
 <ul>
     <li><a href="/api/docs">Rapidoc</a></li>
     <li><a href="/api/docs/redoc" target="_blank">Redoc</a></li>
     <li><a href="/api/docs/swagger" target="_blank">Swagger</a></li>
     <li><a href="/openapi.json">openapi.json</a></li>
-</ul>
-{%- endblock %}
+</ul>`
+
+export async function renderPage(target) {
+    $(target).html(staticHtml)
+}
