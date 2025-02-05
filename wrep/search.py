@@ -269,7 +269,7 @@ async def search_stats(*names: str, dbname: str|None = None) -> dict[str, dict[s
     stats = {}
     for name in names:
         stat = await db.command('collstats', name)
-        stats[name] = dict(count=stat['count'], size=stat['size'])
+        stats[name] = dict(name=name, count=stat['count'], size=stat['size'])
     return stats
 
 async def search_init(*names: str, dbname: str|None = None) -> None:

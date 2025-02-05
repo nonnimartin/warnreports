@@ -1,10 +1,36 @@
-import { aajax, escapeHtml, renderError } from './main.js'
-import { createTableComponent, ReportColumns, ReportFieldRender } from './table.js'
+import { aajax, escapeHtml, renderError, renderDate, nf } from './main.js'
+import { ReportColumns, ReportFieldRender, TableComponent } from './table.js'
 
 class ReportDetail {
 
     constructor(reportId) {
         this.reportId = reportId
+        this.relatedComponent = new TableComponent({
+            id: 'related_reports',
+            title: 'Related',
+            collection: 'reports',
+            columns: ReportColumns,
+            titleTag: 'h3',
+            params: params => ({
+                ...params,
+                company_id: this.report.company_id,
+                id_not: this.report.id,
+                order: '-reported',
+            }),
+            wrapperClasses: ['hidden'],
+            opts: {
+                pageLength: 10,
+                ordering: false,
+                lengthChange: false,
+                filter: false,
+                layout: {
+                    bottomStart: null
+                },
+            },
+        })
+        this.relatedComponent.table.on('init.dt', (e, settings, json) => {
+            this.relatedComponent.wrapper.toggle(Boolean(json.recordsFiltered))
+        })
     }
 
     async fetch() {
@@ -17,7 +43,7 @@ class ReportDetail {
             this.renderDetail(),
             this.renderArtifacts(),
             this.renderNaics(),
-            this.renderRelatedTable(),
+            this.renderRelated(),
         ]
         const wrapper = $('<div class="report-view"/>')
         for (const prom of renders) {
@@ -48,6 +74,9 @@ class ReportDetail {
             ['URL', 'url'],
         ]
         const renderers = {...ReportFieldRender}
+        renderers.reported = renderDate
+        renderers.starting = renderDate
+        renderers.employees = nf
         for (const [label, name] of fielddefs) {
             let value = report[name]
             if (!value) {
@@ -111,27 +140,11 @@ class ReportDetail {
         ])
     }
 
-    async renderRelatedTable() {
-        const {id, company_id} = this.report
-        const defn = {
-            id: 'related_reports',
-            title: 'Related',
-            collection: 'reports',
-            columns: ReportColumns,
-            params: {company_id, id_not: id, order: '-reported'},
-        }
-        const opts = {
-            pageLength: 10,
-            ordering: false,
-            lengthChange: false,
-            filter: false,
-            layout: {
-                bottomStart: null
-            },
-        }
-        return createTableComponent(defn, opts).addClass(['hide-empty', 'hidden'])
+    async renderRelated() {
+        return await this.relatedComponent.build()
     }
 }
+
 export async function renderPage(target) {
     const reportId = window.location.pathname.split('/').pop()
     const detail = new ReportDetail(reportId)

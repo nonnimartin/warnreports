@@ -1,73 +1,62 @@
-import {nf} from './main.js'
-import {createTableComponent} from './table.js'
+import { getCollectionStats } from './main.js'
+import { TableComponent } from './table.js'
 
 
-function renderDate(value) {
-    return value ? value.substring(0, 10) : ''
-}
-
-function renderState(value, type, row) {
+function renderState(value) {
+    const params = new URLSearchParams({state: value})
     return $('<a/>')
-        .attr({href: `/feed?state=${row.id}`, title: value})
-        .text(row.id)
-        .get(0)
-        .outerHTML
+        .attr({href: `/feed?${params}`, title: value})
+        .text(value)
 }
 
-const opts = {
-    paging: false,
-    filter: false,
-    layout: {
-        bottomStart: null,
-    },
-}
-
-const reports_count = {title: 'Reports', name: 'reports_count', render: nf, type: 'num'}
-const defns = [
+const components = [
     {
         id: 'collection_stats',
         title: 'Collection Stats',
-        url: '/api/v0/_db',
         columns: [
             {title: 'Name', name: 'name'},
-            {title: 'Records', name: 'count', render: nf, type: 'num'},
-            {title: 'Size', name: 'size', render: nf, type: 'num'},
+            {title: 'Records', name: 'count', type: 'num'},
+            {title: 'Size', name: 'size', type: 'num'},
         ],
-        data: data => {
-            const records = []
-            for (const [name, record] of Object.entries(data.collections)) {
-                record.name = name
-                records.push(record)
-            }
-            return records
-        },
+        data: async () => (await getCollectionStats()).values(),
     },
     {
         id: 'state_stats',
         title: 'State Stats',
-        url: '/api/v0/states',
+        collection: 'states',
         columns: [
             {title: 'State', name: 'id', render: renderState},
-            reports_count,
-            {title: 'Last Reported', name: 'last_reported', render: renderDate, type: 'date'},
+            {title: 'Reports', name: 'reports_count', type: 'num'},
+            {title: 'Last Reported', name: 'last_reported', type: 'date'},
         ],
     },
     {
         id: 'naics_stats',
         title: 'NAICS Stats',
-        url: '/api/v0/naics',
+        collection: 'naics',
         params: {reports_count_min: 1, depth_max: 0},
         columns: [
             {title: 'ID', name: 'id'},
             {title: 'Title', name: 'title'},
-            reports_count,
+            {title: 'Reports', name: 'reports_count', type: 'num'},
         ],
     }
-]
+].map(defn => new TableComponent({
+    ...defn,
+    opts: {
+        paging: false,
+        filter: false,
+        layout: {
+            bottomStart: null,
+        },
+    },
+}))
+
 
 export async function renderPage(target) {
+    await getCollectionStats()
     target = $(target).empty()
-    for (const defn of defns) {
-        target.append(createTableComponent(defn, opts))
+    for (const task of components.map(it => it.build())) {
+        target.append(await task)
     }
 }

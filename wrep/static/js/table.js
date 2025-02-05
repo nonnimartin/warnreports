@@ -1,59 +1,18 @@
-import {aajax, nf} from './main.js'
-
-export function createTableComponent(defn, opts) {
-    opts = opts || {}
-    opts = {...opts, ...getDefnTableOpts(defn)}
-    const table = $('<table/>')
-        .addClass(['table', 'table-striped', 'responsive'])
-    const wrapper = $('<div/>')
-    if (defn.id) {
-        wrapper.attr({id: defn.id})
-    }
-    if (defn.title) {
-        wrapper.append($('<h2/>').text(defn.title))
-    }
-    wrapper.append(table)
-    const dt = table.DataTable(opts)
-    dt.on('init', (e, settings, json) => {
-        if (wrapper.hasClass('hide-empty')) {
-            let length
-            if (Array.isArray(json)) {
-                length = json.length
-            } else if (typeof json.recordsTotal === 'number') {
-                length = json.recordsFiltered
-            }
-            wrapper.toggle(Boolean(length))
-            if (length) {
-                dt.draw()
-            }
-        }
-    })
-    return wrapper
-}
+import { aajax, nf, strunc, renderDate, getCollectionStats } from './main.js'
 
 export const ReportFieldRender = {
-    company: renderCompany,
-    reported: renderDate,
-    starting: renderDate,
-    employees: nf,
-    action: renderAction,
-    url: renderUrl,
+    company: (value, type, row) => $('<a/>')
+        .attr({href: `/r/${row.id}`, title: value})
+        .text(strunc(value, 50)),
+    action: value => !value ? '' : $('<span/>')
+        .attr({title: value})
+        .text(strunc(value, 40)),
+    url: value => !value ? '' : $('<a/>')
+        .attr({href: value, target: '_blank'})
+        .text(value),
 }
 
-const columnRenderer = name => {
-    const renderer = ReportFieldRender[name]
-    if (!renderer) {
-        return
-    }
-    return (...args) => {
-        const value = renderer(...args)
-        return typeof value === 'object'
-            ? value.get(0).outerHTML
-            : value
-    }
-}
-
-const column = (name, opts) => ({name, render: columnRenderer(name), ...(opts || {})})
+const column = (name, opts) => ({name, render: ReportFieldRender[name], ...(opts || {})})
 
 export const ReportColumns = [
     column('state', {title: 'State'}),
@@ -64,15 +23,153 @@ export const ReportColumns = [
     column('action', {title: 'Action', orderable: false}),
 ]
 
-export async function populateStateSelects(form) {
-    const stateSelects = $('select[name="state"]', form).toArray()
-    if (stateSelects.length) {
-        const stateIds = await getAllStateIds()
-        for (const select of stateSelects) {
-            for (const id of stateIds) {
-                $('<option/>').attr({value: id}).text(`${id}`).appendTo(select)
+export class TableComponent {
+
+    constructor(defn) {
+        defn = defn || {}
+        this.id = defn.id || `id_${String(Math.random()).substring(2)}`
+        this.opts = defn.opts || {}
+        this.tableClasses = defn.tableClasses || ['table', 'table-striped', 'responsive']
+        this.wrapperClasses = defn.wrapperClasses || []
+        this.titleTag = defn.titleTag || 'h2'
+        for (const key of ['url', 'title', 'columns', 'data', 'collection', 'params', 'searchForm']) {
+            this[key] = defn[key]
+        }
+        this.wrapper = $('<div/>')
+            .attr({id: this.id})
+            .addClass(this.wrapperClasses)
+        if (this.title) {
+            this.heading = $(`<${this.titleTag}/>`)
+                .text(this.title)
+                .appendTo(this.wrapper)
+        }
+        this.table = $('<table/>')
+            .addClass(this.tableClasses)
+            .appendTo(this.wrapper)
+    }
+
+    async build() {
+        this.dt = this.table.DataTable(await this.getTableOpts())
+        return this.wrapper
+    }
+
+    async getTableOpts() {
+        const opts = {...this.opts}
+        opts.columns = []
+        for (const c of this.columns) {
+            const col = {...c}
+            col.data = c.data || c.name
+            col.render = columnRenderer(c)
+            opts.columns.push(col)
+        }
+        if (this.collection) {
+            opts.ajax = async (data, callback, settings) => {
+                const params = await this.getSearchParams(data)
+                let rep
+                try {
+                    rep = await dtAjax(this.collection, params)
+                } catch(e) {
+                    await this.responseError(e)
+                    return
+                }
+                callback(rep)
+            }
+            opts.processing = true
+            opts.serverSide = true
+        } else if (this.url) {
+            opts.ajax = {dataSrc: this.data || '', url: this.url}
+            const params = await this.getSearchParams({})
+            const query = new URLSearchParams(params).toString()
+            if (query) {
+                opts.ajax.url += '?' + query
+            }
+        } else if (this.data) {
+            if (typeof this.data === 'function') {
+                opts.data = Array.from(await this.data())
+            } else {
+                opts.data = Array.from(this.data)
             }
         }
+        return opts
+    }
+
+    async responseError(e) {
+        throw e
+    }
+
+    async getSearchParams(params) {
+        if (this.searchForm) {
+            let formData = new FormData($(this.searchForm).get(0))
+            const ret = await this.getSearchFormData(formData)
+            if (ret) {
+                formData = ret
+            }
+            if (formData) {
+                params = {...params, ...plainObjParams(formData)}
+            }
+        }
+        if (this.params) {
+            if (typeof this.params === 'function') {
+                const ret = await this.params(params)
+                if (ret) {
+                    params = plainObjParams(ret)
+                }
+                return params
+            }
+            params = {...params, ...plainObjParams(this.params)}
+        }
+        return params
+    }
+
+    getSearchFormData(formData) {
+        formData = formData || new FormData($(this.searchForm).get(0))
+        const params = new URLSearchParams
+        for (const [field, value] of formData.entries()) {
+            if (value.length) {
+                params.append(field, value)
+            }
+        }
+        return plainObjParams(params)
+    }
+}
+
+function plainObjParams(params) {
+    if (!params) {
+        return {}
+    }
+    if ((params instanceof FormData) || (params instanceof URLSearchParams)) {
+        return Object.fromEntries(params.entries())
+    }
+    return params
+}
+
+export async function populateStateSelects(form) {
+    const stateOpt = id => $('<option/>').attr({value: id}).text(String(id))
+    let stateIds
+    for (const select of $('select[name="state"]', form).toArray()) {
+        stateIds = stateIds || await getAllStateIds()
+        for (const id of stateIds) {
+            stateOpt(id).appendTo(select)
+        }
+    }
+}
+
+const columnRenderer = c => {
+    let {render, type} = c
+    if (!render) {
+        if (type === 'num') {
+            return nf
+        }
+        if (type === 'date') {
+            return renderDate
+        }
+        return
+    }
+    return (...args) => {
+        const value = render(...args)
+        return typeof value === 'object'
+            ? value.get(0).outerHTML
+            : value
     }
 }
 
@@ -88,13 +185,17 @@ async function dtAjax(collection, params) {
         data: body,
         recordsFiltered: +xhr.getResponseHeader('count'),
         recordsTotal: stats.get(collection).count,
-        draw
+        draw,
+        xhr,
     }
 }
 
 function cleanDtParams(params) {
     params = {...params}
     params.limit = params.length
+    if (+params.limit < 0) {
+        delete params.limit
+    }
     params.offset = params.start
     delete params.length
     delete params.start
@@ -118,28 +219,11 @@ function cleanDtParams(params) {
     return params
 }
 
-const CollectionStats = new Map
-CollectionStats.expiry = 1 * 60 * 1000
-CollectionStats.at = null
-
-async function getCollectionStats() {
-    const cache = CollectionStats
-    if (cache.size === 0 || cache.at < +new Date - cache.expiry) {
-        const {body} = await aajax({url: '/api/v0/_db'})
-        cache.clear()
-        for (const entry of Object.entries(body.collections)) {
-            cache.set(...entry)
-        }
-        cache.at = +new Date
-    }
-    return cache
-}
-
 const StateIds = []
 
 async function getAllStateIds() {
     if (!StateIds.length) {
-        const {body} = await aajax({url: '/api/v0/states'})
+        const {body} = await aajax('/api/v0/states')
         for (const state of body) {
             StateIds.push(state.id)
         }
@@ -147,75 +231,4 @@ async function getAllStateIds() {
     return StateIds
 }
 
-function renderDate(value) {
-    return value ? value.substring(0, 10) : ''
-}
 
-function strunc(str, len) {
-    if (str.length > len) {
-        str = str.substring(0, len - 4) + ' ...'
-    }
-    return str
-}
-
-function renderCompany(value, type, row) {
-    return $('<a/>')
-        .attr({href: `/r/${row.id}`, title: value})
-        .text(strunc(value, 50))
-        .get(0)
-        .outerHTML
-}
-
-function renderAction(value) {
-    if (!value) {
-        return ''
-    }
-    return $('<span/>')
-        .attr({title: value})
-        .text(strunc(value, 40))
-        .get(0)
-        .outerHTML
-}
-
-function renderUrl(value) {
-    if (!value) {
-        return ''
-    }
-    return $('<a/>')
-        .attr({href: value, target: '_blank'})
-        .text(value)
-        .get(0)
-        .outerHTML
-
-}
-
-function getDefnTableOpts(defn) {
-    const {columns, collection, params} = defn
-    for (const c of columns) {
-        c.data = c.data || c.name
-    }
-    const opts = {columns}
-    if (collection) {
-        opts.ajax = async (data, callback, settings) => {
-            if (params) {
-                if (typeof params === 'function') {
-                    const ret = await params(data)
-                    if (ret) {
-                        data = ret
-                    }
-                } else {
-                    data = {...data, ...params}
-                }
-            }
-            callback(await dtAjax(collection, data))
-        }
-        opts.processing = true
-        opts.serverSide = true
-    } else {
-        opts.ajax = {dataSrc: defn.data || '', url: defn.url}
-        if (params) {
-            opts.ajax.url += '?' + new URLSearchParams(params).toString()
-        }
-    }
-    return opts
-}
