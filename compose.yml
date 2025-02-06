@@ -14,6 +14,7 @@ services:
     tmpfs: /tmp
     volumes:
       - postgres:/var/lib/postgresql/data
+      - pgadmin:/pgadmin
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust
       POSTGRES_DB: wrep
@@ -31,10 +32,10 @@ services:
     ports: [127.0.0.1:8000:8000]
     environment:
       UVICORN_RELOAD: true
-      ASSETS_AUTO_BUILD: true
       MONGODB_URL: &mongourl ${MOGNODB_URL:-mongodb://root:wrep@mongo:27017/}
       DB_URL: ${DB_URL:-postgresql://wrep@postgres/wrep}
-      CSS_BUILD_DIR: ${CSS_BUILD_DIR:-/build/css}
+      FRONTEND_DIST: ${FRONTEND_DIST:-/build/dist}
+      FRONTEND_AUTO_BUILD: true
     command: ./scripts/wait-for-it.sh -h postgres -p 5432 -t 0 -- python -m wrep.main
     depends_on:
       - mongo

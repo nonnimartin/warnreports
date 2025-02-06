@@ -5,9 +5,8 @@ import binascii
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from feedgen.feed import FeedGenerator
 from pydantic import ValidationError
 from starlette.datastructures import URL
@@ -19,7 +18,6 @@ from .common import FeedSearchParams, feed_search_params
 
 logger = utils.get_logger('feed')
 router = APIRouter()
-templates = Jinja2Templates(env=utils.jinja_env())
 
 valid_feed_params = tuple(sorted(feed_search_params()))
 

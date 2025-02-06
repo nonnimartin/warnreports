@@ -10,7 +10,6 @@ from argparse import ArgumentParser, _SubParsersAction
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
                         asynccontextmanager)
 from datetime import datetime, timedelta, timezone
-from functools import cache
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
                     Iterable, Iterator)
@@ -97,12 +96,6 @@ def get_mimetype(value: Any) -> str:
 def file_mtime(file: Path) -> datetime:
     return datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
 
-def render(template: str, *args, **kw) -> str:
-    return get_template(template).render(*args, **kw)
-
-def get_template(template: str):
-    return jinja_env().get_template(template)
-
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -144,29 +137,6 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
         logger.info('Failed to send email.')
     return success
 
-@cache
-def jinja_env():
-    import jinja2
-    loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
-    env = jinja2.Environment(loader=loader)
-    env.filters['nf'] = '{:,}'.format
-    return env
-
-def build_css():
-    logger.info(f'Building css')
-    import sass
-    context = dict(bootstrap_dir=settings.BOOTSTRAP_DIR)
-    outdir = settings.CSS_BUILD_DIR
-    outdir.mkdir(parents=True, exist_ok=True)
-    content = render('scss/bootstrap.scss', context)
-    with Path(outdir, 'bootstrap.css').open('w') as file:
-        file.write(sass.compile(string=content))
-    with Path(outdir, 'bootstrap.min.css').open('w') as file:
-        file.write(sass.compile(string=content, output_style='compressed'))
-
-def assets_build():
-    'Build static web assets'
-    build_css()
 
 class StrEnum(str, enum.Enum):
 

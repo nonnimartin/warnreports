@@ -6,14 +6,13 @@ from starlette.datastructures import URL
 
 BASEDIR = Path(__file__).parent
 REPODIR = BASEDIR.parent
-STATIC_DIR = BASEDIR/'static'
-TEMPLATES_DIR = BASEDIR/'templates'
 ALEMBIC_INI = REPODIR/'alembic.ini'
 BUILD_DIR = Path(getenv('BUILD_DIR', REPODIR/'build'))
 ARTIFACTS_DIR = Path(getenv('ARTIFACTS_DIR', BUILD_DIR/'artifacts'))
 BOOTSTRAP_DIR = Path(getenv('BOOTSTRAP_DIR', REPODIR/'lib'/'bootstrap'))
-ASSETS_AUTO_BUILD = getenv('ASSETS_AUTO_BUILD', '').lower() == 'true'
-CSS_BUILD_DIR = Path(getenv('CSS_BUILD_DIR', BUILD_DIR/'css'))
+FRONTEND_SRC = BASEDIR/'frontend'/'src'
+FRONTEND_DIST = Path(getenv('FRONTEND_DIST', BUILD_DIR/'dist'))
+FRONTEND_AUTO_BUILD = getenv('FRONTEND_AUTO_BUILD', '').lower() == 'true'
 NAICS_DOWNLOAD = 'https://archive.warnreports.org/naics/dist/2022-2/2022.min.json'
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
 QUERY_LOGGING = getenv('QUERY_LOGGING', '').lower() == 'true'
