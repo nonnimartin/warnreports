@@ -1,7 +1,7 @@
 import 'https://cdn.datatables.net/2.1.8/js/dataTables.min.js'
 import 'https://cdn.datatables.net/2.1.8/js/dataTables.bootstrap5.min.js'
 
-import { aajax, nf, strunc, renderDate, getCollectionStats } from './main.js'
+import { aajax, cache, nf, strunc, renderDate } from './main.js'
 
 export const ReportFieldRender = {
     company: (value, type, row) => $('<a/>')
@@ -151,11 +151,11 @@ function plainObjParams(params) {
 
 export async function populateStateSelects(form) {
     const stateOpt = id => $('<option/>').attr({value: id}).text(String(id))
-    let stateIds
+    let states
     for (const select of $('select[name="state"]', form).toArray()) {
-        stateIds = stateIds || await getAllStateIds()
-        for (const id of stateIds) {
-            stateOpt(id).appendTo(select)
+        states = states || await cache.fetch('states')
+        for (const state of states) {
+            stateOpt(state.id).appendTo(select)
         }
     }
 }
@@ -184,13 +184,13 @@ async function dtAjax(collection, params) {
     const {draw} = params
     delete params.draw
     const opts = {url: `/api/v0/${collection}`, method: 'GET', data: params}
-    const tasks = [getCollectionStats(), aajax(opts)]
+    const tasks = [cache.fetch('stats'), aajax(opts)]
     const {body, xhr} = await tasks.pop()
     const stats = await tasks.pop()
     return {
         data: body,
         recordsFiltered: +xhr.getResponseHeader('count'),
-        recordsTotal: stats.get(collection).count,
+        recordsTotal: stats.collections[collection].count,
         draw,
         xhr,
     }
@@ -224,17 +224,3 @@ function cleanDtParams(params) {
     }
     return params
 }
-
-const StateIds = []
-
-async function getAllStateIds() {
-    if (!StateIds.length) {
-        const {body} = await aajax('/api/v0/states')
-        for (const state of body) {
-            StateIds.push(state.id)
-        }
-    }
-    return StateIds
-}
-
-

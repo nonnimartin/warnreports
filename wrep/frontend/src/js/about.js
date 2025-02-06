@@ -1,4 +1,4 @@
-import { getCollectionStats } from './main.js'
+import { cache } from './main.js'
 import { TableComponent } from './table.js'
 
 
@@ -21,17 +21,17 @@ class AboutComponent {
                     {title: 'Records', name: 'count', type: 'num'},
                     {title: 'Size', name: 'size', type: 'num'},
                 ],
-                data: async () => (await getCollectionStats()).values(),
+                data: async () => Object.values((await cache.fetch('stats')).collections),
             },
             {
                 id: 'state_stats',
                 title: 'State Stats',
-                collection: 'states',
                 columns: [
                     {title: 'State', name: 'id', render: renderState},
                     {title: 'Reports', name: 'reports_count', type: 'num'},
                     {title: 'Last Reported', name: 'last_reported', type: 'date'},
                 ],
+                data: () => cache.fetch('states')
             },
             {
                 id: 'naics_stats',
@@ -54,14 +54,11 @@ class AboutComponent {
                 },
             },
         }))
-        this.wrapper = $('<div/>')
-        for (const component of this.components) {
-            this.wrapper.append(component.wrapper)
-        }
+        this.wrapper = $('<div/>').append(this.components.map(it => it.wrapper))
     }
 
     async build() {
-        await getCollectionStats()
+        await cache.fetch('stats')
         for (const task of this.components.map(it => it.build())) {
             await task
         }

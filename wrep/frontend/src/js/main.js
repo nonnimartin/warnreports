@@ -41,22 +41,6 @@ export async function renderError(err) {
     return $('<pre/>').text(lines.join('\n'))
 }
 
-const CollectionStats = new Map
-CollectionStats.expiry = 1 * 60 * 1000
-CollectionStats.at = null
-
-export async function getCollectionStats() {
-    const cache = CollectionStats
-    if (cache.size === 0 || cache.at < +new Date - cache.expiry) {
-        const {body} = await aajax('/api/v0/_db')
-        cache.clear()
-        for (const entry of Object.entries(body.collections)) {
-            cache.set(...entry)
-        }
-        cache.at = +new Date
-    }
-    return cache
-}
 
 export class StaticComponent {
     constructor(content) {
@@ -66,3 +50,49 @@ export class StaticComponent {
         return this.content
     }
 }
+
+
+
+class Cache {
+    constructor(prefix, config) {
+        this.prefix = prefix || ''
+        this.config = config
+    }
+
+    async fetch(key) {
+        let item = this.getItem(key)
+        if (item?.expiry > +new Date) {
+            return item.value
+        }
+        return await this.load(key)
+    }
+
+    async load(key) {
+        const {duration, source} = this.config[key]
+        const value = typeof source === 'function'
+            ? await source()
+            : (await aajax(source)).body
+        const item = {value, expiry: +new Date + duration}
+        this.setItem(key, item)
+        return value
+    }
+
+    getItem(key) {
+        return JSON.parse(localStorage.getItem(this.prefix+key) || 'null')
+    }
+
+    setItem(key, item) {
+        localStorage.setItem(this.prefix+key, JSON.stringify(item))
+    }
+}
+
+export const cache = new Cache('wrdata_', {
+    states: {
+        duration: 5 * 60 * 1000,
+        source: '/api/v0/states',
+    },
+    stats: {
+        duration: 5 * 60 * 1000,
+        source: '/api/v0/_db',
+    },
+})

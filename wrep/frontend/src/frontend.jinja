@@ -1,26 +1,35 @@
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="dark">
   <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>WARN Reporter</title>
-      <link href="/assets/css/bootstrap.min.css" rel="stylesheet">
-      <link href="https://cdn.datatables.net/2.1.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
-      <link href="/assets/css/main.css" rel="stylesheet">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WARN Reporter</title>
+    <link href="/assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/2.1.8/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="/assets/css/main.css" rel="stylesheet">
   </head>
   <body>
     <div class="container-flex bg-light">
-        <div class="container" id="id_mainnav"></div>
+      <div class="container" id="id_mainnav"></div>
     </div>
     <div id="id_maincontent" class="container"></div>
     <script type="module">
     import 'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js'
     import 'https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js'
+    import { renderError } from '/assets/js/main.js'
     import nav from '/assets/js/nav.js'
     import page from "/assets/js/{{ path.strip('/') }}.js"
     $(async () => {
+      try {
         $('#id_mainnav').html(await nav.build())
+      } catch(e) {
+        $('#id_mainnav').html(await renderError(e))
+      }
+      try {
         $('#id_maincontent').html(await page.build())
+      } catch(e) {
+        $('#id_maincontent').html(await renderError(e))
+      }
     })
     </script>
   </body>
