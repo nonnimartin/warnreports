@@ -1,7 +1,6 @@
-import {TableComponent, ReportColumns} from './table.js'
+import { ReportColumns, TableComponent } from './table.js'
 
-
-const component = new TableComponent({
+export default new TableComponent({
     id: 'reports_recent',
     title: 'Recent 50+ employees',
     collection: 'reports',
@@ -13,11 +12,8 @@ const component = new TableComponent({
         lengthChange: false,
         filter: false,
         layout: {
-            bottomStart: null
+            bottomStart: null,
         },
+        autoWidth: false,
     },
 })
-
-export async function renderPage(target) {
-    $(target).html(await component.build())
-}

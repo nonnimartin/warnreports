@@ -1,7 +1,9 @@
 import 'https://unpkg.com/rapidoc/dist/rapidoc-min.js'
 
+const rapi = $(`
+    <rapi-doc spec-url="/openapi.json" theme="dark" render-style="view" class="hidden"/>
+`)
 function initRapi() {
-    const rapi = $('rapi-doc')
     const checkStart = +new Date
     const iflag = setInterval(
         () => {
@@ -36,10 +38,9 @@ function initRapi() {
     }
 }
 
-const rapiHtml =
-`<rapi-doc spec-url="/openapi.json" theme="dark" render-style="view" class="hidden"></rapi-doc>`
-
-export async function renderPage(target) {
-    $(target).html(rapiHtml)
-    initRapi()
+export default {
+    build: async () => {
+        setTimeout(initRapi)
+        return rapi
+    }
 }

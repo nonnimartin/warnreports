@@ -17,7 +17,7 @@ export function aajax(opts) {
 }
 
 const nformatter = new Intl.NumberFormat()
-export const nf = number => nformatter.format(number)
+export const nf = number => number == null ? '' : nformatter.format(number)
 
 export function escapeHtml(value) {
     return $('<p/>').text(value).html()
@@ -56,4 +56,13 @@ export async function getCollectionStats() {
         cache.at = +new Date
     }
     return cache
+}
+
+export class StaticComponent {
+    constructor(content) {
+        this.content = content
+    }
+    async build() {
+        return this.content
+    }
 }

@@ -34,6 +34,11 @@ if __name__ == '__main__':
     import uvicorn
     def cmd(*args, **kw):
         logger.info(f'Starting uvicorn')
+        kw.update(reload_includes=[
+            'wrep/**/*.py',
+            *map('frontend/src/**/*.{}'.format, 'js css scss jinja2'.split()),
+        ])
+        # kw.update(reload_excludes=['.*', '.py[cod]', '~*', f'build/**'])
         return uvicorn.main.callback('wrep.main:app', *args, **kw)
     main = click.Command(
         name='main',

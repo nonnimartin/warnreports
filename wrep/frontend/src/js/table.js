@@ -1,3 +1,6 @@
+import 'https://cdn.datatables.net/2.1.8/js/dataTables.min.js'
+import 'https://cdn.datatables.net/2.1.8/js/dataTables.bootstrap5.min.js'
+
 import { aajax, nf, strunc, renderDate, getCollectionStats } from './main.js'
 
 export const ReportFieldRender = {
@@ -59,6 +62,9 @@ export class TableComponent {
         for (const c of this.columns) {
             const col = {...c}
             col.data = c.data || c.name
+            if (c.name) {
+                col.className = col.className || `field-${c.name}`
+            }
             col.render = columnRenderer(c)
             opts.columns.push(col)
         }

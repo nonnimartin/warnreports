@@ -1,10 +1,12 @@
+import { StaticComponent } from './main.js'
+
 const nav = $(`
     <nav class="nav main-nav nav-pills">
-    <a class="nav-link" href="/">Home</a>
-    <a class="nav-link" href="/search">Search</a>
-    <a class="nav-link" href="/feed">Feed</a>
-    <a class="nav-link" href="/api/docs">API</a>
-    <a class="nav-link" href="/about">About</a>
+        <a class="nav-link" href="/">Home</a>
+        <a class="nav-link" href="/search">Search</a>
+        <a class="nav-link" href="/feed">Feed</a>
+        <a class="nav-link" href="/api/docs">API</a>
+        <a class="nav-link" href="/about">About</a>
     </nav>
 `)
 
@@ -15,6 +17,4 @@ $('a.nav-link', nav).each(function() {
     }
 })
 
-export async function renderNav(target) {
-    $(target).html(nav)
-}
+export default new StaticComponent(nav)

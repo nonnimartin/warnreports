@@ -19,10 +19,11 @@ async def lifespan(app: FastAPI):
     if settings.FRONTEND_AUTO_BUILD:
         from ..frontend import frontend_build
         await frontend_build()
-    logger.info(f'Caching html')
-    read_html.cache_clear()
-    for path in routes.values():
-        read_html(path.lstrip('/'))
+    read_html_cached.cache_clear()
+    if settings.FRONTEND_CACHE_HTML:
+        logger.info(f'Caching html')
+        for path in dict.fromkeys(routes.values()):
+            read_html(path)
     app.mount('/assets', StaticFiles(directory=settings.FRONTEND_DIST/'assets'), name='assets')
     yield
 
@@ -37,14 +38,22 @@ routes = {
 }
 routes = {k: v or k for k, v in routes.items()}
 
-@functools.cache
-def read_html(path: str):
+def read_html_uncached(path: str) -> str:
+    path = path.lstrip('/')
     return (settings.FRONTEND_DIST/f'{path}.html').read_text()
 
-def frontend_response(path: str) -> HTMLResponse:
-    return HTMLResponse(read_html(path.lstrip('/')))
+read_html_cached = functools.cache(read_html_uncached)
 
-def default_handler(key):
+def read_html(path: str) -> str:
+    path = path.lstrip('/')
+    if settings.FRONTEND_CACHE_HTML:
+        return read_html_cached(path)
+    return read_html_uncached(path)
+
+def frontend_response(path: str) -> HTMLResponse:
+    return HTMLResponse(read_html(path))
+
+def default_handler(key: str):
     path = routes[key]
     @router.get(key)
     async def handler() -> HTMLResponse:

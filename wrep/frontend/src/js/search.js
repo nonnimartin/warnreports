@@ -130,6 +130,4 @@ class SearchTableComponent extends TableComponent {
     }
 }
 
-export async function renderPage(target) {
-    $(target).html(await new SearchTableComponent().build())
-}
+export default new SearchTableComponent

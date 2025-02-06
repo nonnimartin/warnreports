@@ -10,10 +10,12 @@ class FeedComponent {
         this.wrapper = $(`
             <div>
                 <h2>Full Feed</h2>
-                <ul>
-                    <li><a href="/feed/rss">RSS</a></li>
-                    <li><a href="/feed/atom">Atom</a></li>
-                </ul>
+                <dl>
+                    <dt>RSS</dt>
+                    <dd><a href="/feed/rss">/feed/rss</a></dd>
+                    <dt>Atom</dt>
+                    <dd><a href="/feed/atom">/feed/atom</a></dd>
+                </dl>
                 <h2>Custom Feed</h2>
             </div>
         `)
@@ -66,8 +68,9 @@ class FeedComponent {
                 lengthChange: false,
                 filter: false,
                 layout: {
-                    bottomStart: null
+                    bottomStart: null,
                 },
+                autoWidth: false,
             },
         })
         this.tableComponent.table.on('xhr.dt', async (e, settings, json) => {
@@ -123,15 +126,15 @@ class FeedComponent {
             return
         }
         const description = feedDescription(this.feedId)
+        const atom = `/feed/atom/${this.feedId}`
+        const rss = `/feed/rss/${this.feedId}`
         this.feedInfo.html([
-            '<dt>Feed Title</dt>',
+            '<dt>Description</dt>',
             $('<dd/>').text(`WARN Reports ${description}`),
-            '<dt>Permalinks</dt>',
-            $('<dd/>').append([
-                $('<a/>').attr({href: `/feed/rss/${this.feedId}`}).text('RSS'),
-                '<span> | </span>',
-                $('<a/>').attr({href: `/feed/atom/${this.feedId}`}).text('Atom'),
-            ])
+            '<dt>RSS</dt>',
+            $('<dd/>').append($('<a/>').attr({href: rss}).text(rss)),
+            '<dt>Atom</dt>',
+            $('<dd/>').append($('<a/>').attr({href: atom}).text(atom)),
         ])
     }
 }
@@ -168,6 +171,4 @@ function decodeFeedId(feedId) {
     return new URLSearchParams(atob(feedId.replace('-', '+').replace('_', '/')))
 }
 
-export async function renderPage(target) {
-    $(target).html(await new FeedComponent().build())
-}
+export default new FeedComponent
