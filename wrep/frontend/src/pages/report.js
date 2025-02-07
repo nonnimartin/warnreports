@@ -1,5 +1,5 @@
-import { aajax, escapeHtml, renderError, renderDate, nf } from './main.js'
-import { ReportColumns, ReportFieldRender, TableComponent } from './table.js'
+import { aajax, escapeHtml, renderError, renderDate, nf } from '../lib/main.js'
+import { ReportColumns, ReportFieldRender, TableComponent } from '../lib/table.js'
 
 class ReportDetail {
 

@@ -1,4 +1,4 @@
-import { StaticComponent } from './main.js'
+import { StaticComponent } from '../lib/main.js'
 
 export default new StaticComponent($(
     `

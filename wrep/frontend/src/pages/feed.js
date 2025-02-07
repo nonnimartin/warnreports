@@ -1,5 +1,5 @@
-import { renderError } from './main.js'
-import { populateStateSelects, ReportColumns, TableComponent } from './table.js'
+import { renderError } from '../lib/main.js'
+import { populateStateSelects, ReportColumns, TableComponent } from '../lib/table.js'
 
 
 class FeedComponent {

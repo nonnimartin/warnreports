@@ -1,7 +1,7 @@
 import 'https://cdn.datatables.net/2.1.8/js/dataTables.min.js'
 import 'https://cdn.datatables.net/2.1.8/js/dataTables.bootstrap5.min.js'
 
-import { aajax, cache, nf, strunc, renderDate } from './main.js'
+import { aajax, cache, nf, strunc, renderDate, renderError } from './main.js'
 
 export const ReportFieldRender = {
     company: (value, type, row) => $('<a/>')
@@ -47,6 +47,7 @@ export class TableComponent {
                 .appendTo(this.wrapper)
         }
         this.table = $('<table/>')
+            .attr({id: `${this.id}_table`})
             .addClass(this.tableClasses)
             .appendTo(this.wrapper)
     }
@@ -75,7 +76,9 @@ export class TableComponent {
                 try {
                     rep = await dtAjax(this.collection, params)
                 } catch(e) {
-                    await this.responseError(e)
+                    const errHtml = await renderError(e)
+                    callback({data: [], recordsFiltered: 0, recordsTotal: 0})
+                    $('.dt-empty', this.table).html(errHtml)
                     return
                 }
                 callback(rep)
@@ -97,10 +100,6 @@ export class TableComponent {
             }
         }
         return opts
-    }
-
-    async responseError(e) {
-        throw e
     }
 
     async getSearchParams(params) {
@@ -184,9 +183,8 @@ async function dtAjax(collection, params) {
     const {draw} = params
     delete params.draw
     const opts = {url: `/api/v0/${collection}`, method: 'GET', data: params}
-    const tasks = [cache.fetch('stats'), aajax(opts)]
-    const {body, xhr} = await tasks.pop()
-    const stats = await tasks.pop()
+    const {body, xhr} = await aajax(opts)
+    const stats = await cache.fetch('stats')
     return {
         data: body,
         recordsFiltered: +xhr.getResponseHeader('count'),

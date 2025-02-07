@@ -1,4 +1,4 @@
-import { populateStateSelects, ReportColumns, TableComponent } from './table.js'
+import { populateStateSelects, ReportColumns, TableComponent } from '../lib/table.js'
 
 
 class SearchTableComponent extends TableComponent {

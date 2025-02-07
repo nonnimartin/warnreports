@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable, Iterator, Sequence
+from typing import Any, AsyncIterator, Iterable, Iterator, Sequence
 
-from fastapi import HTTPException, status
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCursor,
+                                 AsyncIOMotorDatabase)
 from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
 from .models import *
 from .utils import BaseCommand, FuncCommand
 
-__all__ = ['filters', 'retrieve', 'retrieve404', 'search', 'search_result', 'NotFoundError']
+__all__ = ['filters', 'Search']
 
 type MongoDB = AsyncIOMotorDatabase
 
@@ -135,9 +135,6 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoSearch[ArtifactDetail]):
                 yield {field: value}
         yield from super().get_filters()
 
-class NotFoundError(Exception):
-    pass
-
 filters: dict[type[DataModel], type[MongoSearch]] = {
     ReportData: MongoReportsFilter,
     StateDetail: MongoStatesFilter,
@@ -145,54 +142,55 @@ filters: dict[type[DataModel], type[MongoSearch]] = {
     NaicsDetail: MongoNaicsFilter,
     ArtifactDetail: MongoArtifactsFilter}
 
-async def search_result(
-    model: type[DM],
-    params: dict[str, Any]|None = None,
-    limit: Limit|None = None,
-    offset: Offset = 0,
-    dbname: str|None = None,
-) -> tuple[list[DM], int]:
-    filt = filters[model](**params or {})
-    db = get_mongo_database(dbname)
-    coll = db.get_collection(collections_map[model])
-    filts = tuple(filt.get_filters())
-    q = {'$and': filts} if filts else {}
-    total = await coll.count_documents(q)
-    if limit == 0:
-        objs = []
-    else:
-        cur = coll.find(q)
-        orders = list(filt.get_ordering())
-        if ('_id', 1) not in orders and ('_id', -1) not in orders:
-            orders.append(('_id', 1))
-        if orders:
-            cur = cur.sort(orders)
-        if offset:
-            cur = cur.skip(offset)
-        if limit:
-            cur = cur.limit(limit)
-        objs = [model.model_validate(obj) async for obj in cur]
-    return objs, total
+class Search[DM: DataModel]:
 
-async def search(
-    model: type[DM],
-    params: dict[str, Any]|None = None,
-    limit: Limit|None = None,
-    offset: Offset = 0
-) -> list[DM]:
-    return (await search_result(model, params, limit, offset))[0]
+    def __init__(
+        self,
+        model: type[DM],
+        params: dict[str, Any]|None = None,
+        limit: Limit|None = None,
+        offset: Offset = 0,
+        dbname: str|None = None
+    ) -> None:        
+        self.model = model
+        db = get_mongo_database(dbname)
+        self.collection = db.get_collection(collections_map[model])
+        filt = filters[model](**params or {})
+        filts = tuple(filt.get_filters())
+        self.q = {'$and': filts} if filts else {}
+        self.limit = limit
+        self.offset = offset
+        if limit == 0:
+            self.orders = []
+        else:
+            self.orders = list(filt.get_ordering())
+            if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
+                self.orders.append(('_id', 1))
 
-async def retrieve(model: type[DM], **params) -> DM:
-    results, total = await search_result(model, params, 1)
-    if total:
-        return results[0]
-    raise NotFoundError
+    async def count(self) -> int:
+        return await self.collection.count_documents(self.q)
 
-async def retrieve404(model: type[DM], **params) -> DM:
-    try:
-        return await retrieve(model, **params)
-    except NotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    async def tolist(self) -> list[DM]:
+        return [obj async for obj in self.objs()]
+
+    async def objs(self) -> AsyncIterator[DM]:
+        async for doc in self.execute():
+            yield self.model.model_validate(doc)
+
+    async def docs(self) -> AsyncIterator[dict[str, Any]]:
+        async for doc in self.execute():
+            yield doc
+
+    def execute(self) -> AsyncIOMotorCursor:
+        cur = self.collection.find(self.q)
+        if self.orders:
+            cur = cur.sort(self.orders)
+        if self.offset:
+            cur = cur.skip(self.offset)
+        if self.limit is not None:
+            cur = cur.limit(self.limit)
+        return cur
+
 
 _mongo_client = AsyncIOMotorClient(settings.SEARCH_MONGODB_URL, uuidRepresentation='standard')
 _mongo_database_default = _mongo_client.get_database(settings.SEARCH_MONGODB_DBNAME)
@@ -347,6 +345,3 @@ class Command(BaseCommand):
         init=FuncCommand(search_init, SubCommand),
         build=FuncCommand(search_build, SubCommand),
         clean=FuncCommand(search_clean, SubCommand))
-
-if __name__ == '__main__':
-    Command.main()

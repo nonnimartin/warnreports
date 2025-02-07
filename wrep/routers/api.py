@@ -3,15 +3,16 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
+                     Response, status)
 from fastapi.responses import FileResponse
 from pydantic import Field
 from starlette.datastructures import URL
 
 from .. import search, settings, utils
 from ..models import *
-from . import feed
 from .common import *
+from .common import feed_id_encode
 
 logger = utils.get_logger('api')
 router = APIRouter()
@@ -64,7 +65,7 @@ async def reports_list_head(req: Request, rep: Response, params: ReportSearchPar
 @router.head('/reports/{id}', include_in_schema=False)
 @router.get('/reports/{id}', **repopts(ReportDataView))
 async def report_get(id: UUID) -> ReportData:
-    return await search.retrieve404(ReportData, id=[id])
+    return await retrieve404(ReportData, id=[id])
 
 @router.get('/companies', **repopts(list[CompanyDetailView]))
 async def companies_list(req: Request, rep: Response, params: CompanySearchParams, opts: SearchOpts) -> list[CompanyDetail]:
@@ -77,7 +78,7 @@ async def companies_list_head(req: Request, rep: Response, params: ReportSearchP
 @router.head('/companies/{id}', include_in_schema=False)
 @router.get('/companies/{id}', **repopts(CompanyDetailView))
 async def company_get(id: UUID) -> CompanyDetail:
-    return await search.retrieve404(CompanyDetail, id=[id])
+    return await retrieve404(CompanyDetail, id=[id])
 
 @router.get('/naics')
 async def naics_list(req: Request, rep: Response, params: NaicsSearchParams, opts: SearchOpts) -> list[NaicsDetail]:
@@ -90,7 +91,7 @@ async def naics_list_head(req: Request, rep: Response, params: NaicsSearchParams
 @router.head('/naics/{id}', include_in_schema=False)
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:
-    return await search.retrieve404(NaicsDetail, id=[id])
+    return await retrieve404(NaicsDetail, id=[id])
 
 @router.get('/states')
 async def states_list(req: Request, rep: Response, params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
@@ -103,11 +104,11 @@ async def states_list_head(req: Request, rep: Response, params: StateSearchParam
 @router.head('/states/{id}', include_in_schema=False)
 @router.get('/states/{id}')
 async def state_get(id: StateCode) -> StateDetail:
-    return await search.retrieve404(StateDetail, id=[id])
+    return await retrieve404(StateDetail, id=[id])
 
 @router.get('/artifacts/{id}/data', include_in_schema=False)
 async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
-    artifact = await search.retrieve404(ArtifactDetail, id=[id])
+    artifact = await retrieve404(ArtifactDetail, id=[id])
     return FileResponse(
         settings.ARTIFACTS_DIR/artifact.path,
         media_type=artifact.media_type,
@@ -126,16 +127,23 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     if req.method == 'HEAD':
         opts['limit'] = 0
         rep.status_code = status.HTTP_204_NO_CONTENT
-    res, total = await search.search_result(model, params, **opts)
+    result = search.Search(model, params, **opts)
+    total = await result.count()
     rep.headers['count'] = str(total)
     if (nexturl := get_next_url(req.url, total, opts['offset'], limit)):
         rep.headers['next'] = str(nexturl)
     if req.method == 'HEAD':
         return rep
-    return res
+    return await result.tolist()
+
+async def retrieve404[DM: DataModel](model: type[DM], **params) -> DM:
+    result = search.Search(model, params, limit=1)
+    if await result.count():
+        return await anext(result.objs())
+    raise HTTPException(status.HTTP_404_NOT_FOUND)
 
 def feed_id_header(rep: Response, params: FeedSearchParams) -> Response:
-    id = feed.id_encode(params)
+    id = feed_id_encode(params)
     if id:
         rep.headers['feed-id'] = id
     return rep

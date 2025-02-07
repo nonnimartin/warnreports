@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import shutil
+from pathlib import Path
 from typing import Iterator
 
 from .. import settings, utils
@@ -32,15 +33,17 @@ class FrontentBuilder:
 
     async def copy_assets(self) -> None:
         for path in self.glob('**/*.js', '**/*.css'):
-            dest = self.dist/'assets'/path
+            destpath = f'assets/{path}'
+            logger.info(f'Copying {destpath}')
+            dest = self.dist/destpath
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(self.src/path, dest)
 
     async def build_html(self) -> None:
-        from ..routers.frontend import routes
         htmltmpl = self.jinja.get_template('frontend.jinja')
-        for routepath in dict.fromkeys(routes.values()):
-            htmlpath = f'{routepath[1:]}.html'
+        for path in self.glob('pages/**/*.js'):
+            routepath = path.removeprefix('pages/').removesuffix('.js')
+            htmlpath = f'html/{routepath}.html'
             logger.info(f'building {htmlpath}')
             htmldest = self.dist/htmlpath
             htmldest.parent.mkdir(parents=True, exist_ok=True)
@@ -61,9 +64,10 @@ class FrontentBuilder:
             dest = self.dist/'assets'/f'{base}.min.css'
             dest.write_text(sass.compile(string=content, output_style='compressed'))
 
-    def glob(self, *globs: str) -> Iterator[str]:
+    def glob(self, *globs: str, root: Path|None = None) -> Iterator[str]:
+        root = root or self.src
         for pat in globs:
-            yield from glob.glob(pat, root_dir=self.src, recursive=True)
+            yield from glob.glob(pat, root_dir=root, recursive=True)
 
 async def frontend_build() -> None:
     'Build frontend web assets'

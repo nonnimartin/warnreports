@@ -1,4 +1,4 @@
-import { ReportColumns, TableComponent } from './table.js'
+import { ReportColumns, TableComponent } from '../lib/table.js'
 
 export default new TableComponent({
     id: 'reports_recent',

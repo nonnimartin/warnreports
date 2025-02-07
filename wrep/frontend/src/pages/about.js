@@ -1,5 +1,5 @@
-import { cache } from './main.js'
-import { TableComponent } from './table.js'
+import { cache } from '../lib/main.js'
+import { TableComponent } from '../lib/table.js'
 
 
 function renderState(value) {
