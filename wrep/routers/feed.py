@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
-from urllib.parse import urlencode
+import binascii
+from typing import Any
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -11,7 +13,7 @@ from starlette.datastructures import URL
 
 from .. import search, settings, utils
 from ..models import *
-from .common import FeedSearchParams, feed_id_encode, clean_feed_params
+from .common import FeedSearchParams, clean_feed_params, feed_id_encode
 
 logger = utils.get_logger('feed')
 router = APIRouter()
@@ -38,7 +40,7 @@ async def feed_query(fmt: str, params: FeedSearchParams) -> HTMLResponse:
 
 async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
     try:
-        params = feed_id_encode(id)
+        params = id_decode(id)
     except ValidationError:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY)
     except ValueError:
@@ -48,7 +50,7 @@ async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
 async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     params = clean_feed_params(params)
     title = f'WARN Reports {query_description(params)}'.strip()
-    id = id_encode(params)
+    id = feed_id_encode(params)
     url = str(id_permalink(id, fmt))
     feed = FeedGenerator()
     feed.id(url)
@@ -94,16 +96,19 @@ def query_description(params: FeedSearchParams) -> str:
     descs.extend(filter(None, urlencode(params).split('&')))
     return ' '.join(descs)
 
-def id_encode(params: FeedSearchParams) -> str:
-    params = clean_feed_params(params)
-    items = []
-    for k in params:
-        if not isinstance(v := params[k], list):
-            v = [v]
-        for value in v:
-            items.append((k, value))
-    q = urlencode(items)
-    return base64.urlsafe_b64encode(q.encode()).decode()
+def id_decode(id: str) -> dict[str, Any]:
+    try:
+        q = base64.urlsafe_b64decode(id).decode()
+    except binascii.Error:
+        q = base64.b32hexdecode(id, casefold=True).decode()
+    params = parse_qs(q)
+    for key in ('employees_min', 'naics'):
+        if key in params:
+            params[key] = list(map(int, params[key]))
+    params = {
+        k: v if k in ('naics', 'state') else v[0]
+        for k, v in params.items()}
+    return clean_feed_params(params)
 
 def id_permalink(id: str, fmt: str) -> URL:
     path = f'/feed/{fmt}'
