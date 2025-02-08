@@ -117,7 +117,9 @@ async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = '
 
 @router.get('/_db', include_in_schema=False)
 async def dbstats() -> dict:
-    return dict(collections=await search.search_stats())
+    db = await search.client.get_database()
+    tasks = {name: defn.stats(db=db) for name, defn in search.collection_defns.items()}
+    return dict(collections={name: await task for name, task in tasks.items()})
 
 async def search_response[DM: DataModel](req: Request, rep: Response, model: type[DM], params: dict, opts: SearchOpts) -> list[DM]|Response:
     params = dict(params)

@@ -638,14 +638,10 @@ class Command(utils.BaseCommand):
             help='Only show stats, do not run.')
         arg('--search-dbname', '-d',
             default=None,
-            help=(
-                f'Alternate mongo search db name, '
-                f'default MONGODB_DBNAME ({settings.MONGODB_DBNAME})'))
+            help=f'Alternate mongo search db name')
         arg('--etl-dbname', '-b',
             default=None,
-            help=(
-                f'Alternate mongo etl db name, '
-                f'default ETL_MONGODB_DBNAME ({settings.ETL_MONGODB_DBNAME})'))
+            help=f'Alternate mongo etl db name')
         arg('--max-workers', '-w',
             type=int,
             metavar='<n>',
@@ -661,9 +657,6 @@ class Command(utils.BaseCommand):
     def setup(self, opts):
         opts.states = opts.states or sorted(scrapers)
         runner_opts = vars(opts)
-        for be in ('etl', 'search'):
-            if runner_opts[f'{be}_dbname'] is None:
-                del runner_opts[f'{be}_dbname']
         self.runner = PipelineRunner(**runner_opts)
 
     async def run(self):

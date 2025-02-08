@@ -17,9 +17,9 @@ from uuid import UUID
 
 import dateutil.parser
 
-from . import settings
 
 type AP = ArgumentParser
+type Delta = float|str|timedelta
 type EitherIterable[T] = Iterable[T]|AsyncIterable[T]
 type EitherContext[T] = AbstractContextManager[T]|AbstractAsyncContextManager[T]
 type SubParsers = _SubParsersAction[ArgumentParser]
@@ -34,11 +34,41 @@ def get_logger(name: str|None = None) -> logging.Logger:
 
 logger = get_logger('utils')
 
+DELTA_PAT = re.compile(
+    r'^((?P<weeks>[\d.]+?)w)?'
+    r'((?P<days>[\d.]+?)d)?'
+    r'((?P<hours>[\d.]+?)h)?'
+    r'((?P<minutes>[\d.]+?)m)?'
+    r'((?P<seconds>[\d.]+?)s)?'
+    r'((?P<milliseconds>[\d.]+?)ms)?'
+    r'((?P<microseconds>[\d.]+?)us)?$')
+
 def now(**kw) -> datetime:
     dt = datetime.now(tz=kw.pop('tz', None))
     if kw:
         dt += timedelta(**kw)
     return dt
+
+def deltaparse(value: Delta, default_unit: str|None = None) -> timedelta:
+    if isinstance(value, timedelta):
+        return value
+    value = str(value)
+    match = DELTA_PAT.match(value)
+    if match:
+        kw = {
+            name: float(value)
+            for name, value in match.groupdict().items() if value}
+    else:
+        if not default_unit:
+            raise ValueError(value)
+        kw = {default_unit: float(value)}
+    return timedelta(**kw)
+
+def deltaopt(default_unit: str):
+    timedelta(**{default_unit: 1})
+    def opt(value: Delta):
+        return deltaparse(value, default_unit=default_unit)
+    return opt
 
 def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):
@@ -104,6 +134,7 @@ def json_default(value: Any) -> Any:
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
 
 def init_logging() -> None:
+    from . import settings
     level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
     logging.basicConfig(level=level)
 
@@ -127,6 +158,7 @@ from .backends.email import instances as email_backends
 
 
 def send_email(recipient: str, subject: str, body: str) -> bool:
+    from . import settings
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_FROM_ADDRESS
     logger.info(f'Sending email {recipient=} {backend=} {subject=}')
