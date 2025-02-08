@@ -3,9 +3,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 import click
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, status
+from sentry_sdk import capture_exception
 
 from . import settings, utils
+from .backends.mongo import MissingControlDoc
 from .models import *
 from .routers import api, feed, frontend
 
@@ -29,6 +31,11 @@ app.include_router(frontend.router, include_in_schema=False)
 app.include_router(api.router, prefix='/api/v0')
 app.include_router(feed.router, prefix='/feed', include_in_schema=False)
 
+@app.exception_handler(MissingControlDoc)
+async def missing_control_doc(req: Request, exc: MissingControlDoc):
+    logger.exception(f'Missing control', exc_info=exc)
+    capture_exception(exc)
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 if __name__ == '__main__':
     import uvicorn

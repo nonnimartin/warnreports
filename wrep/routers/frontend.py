@@ -7,8 +7,8 @@ from contextlib import asynccontextmanager
 from email.utils import formatdate
 from uuid import UUID
 
-from fastapi import APIRouter, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, FastAPI, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import settings, utils
@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI):
     read_html_cached.cache_clear()
     app.mount('/assets', assets, name='assets')
     yield
+    read_html_cached.cache_clear()
 
 assets = StaticFiles(directory=settings.FRONTEND_DIST/'assets', check_dir=False)
 
@@ -52,6 +53,24 @@ async def report_view(id: UUID) -> HTMLResponse:
 @router.get('/feed')
 async def feed_builder(params: FeedSearchParams) -> HTMLResponse:
     return frontend_response('/feed')
+
+@router.head('/v/{id}')
+@router.get('/v/{id}')
+async def artifact_view(id: UUID) -> RedirectResponse:
+    return artifact_redirect(id, 'inline')
+
+@router.head('/d/{id}')
+@router.get('/d/{id}')
+async def artifact_download(id: UUID) -> RedirectResponse:
+    return artifact_redirect(id, 'download')
+
+def artifact_redirect(id: UUID, disposition: str) -> RedirectResponse:
+    path = f'/api/v0/artifacts/{id}/data'
+    url = settings.SITE_URL
+    url = url.replace(
+        path=url.path.rstrip('/') + path,
+        query=f'disposition={disposition}')
+    return RedirectResponse(url, status_code=status.HTTP_308_PERMANENT_REDIRECT)
 
 def frontend_response(path: str) -> HTMLResponse:
     content, headers = read_html(path)

@@ -38,7 +38,10 @@ class MongoClient:
         doc = await self.get_doc()
         dbname = doc['value']
         if dbname != self.dbname_cache['name']:
-            logger.info(f'Selecting new {self.dbname_key} {dbname=}')
+            if self.dbname_cache['name']:
+                logger.info(f'Selecting NEW {self.dbname_key}={dbname}')
+            else:
+                logger.info(f'Using {self.dbname_key}={dbname}')
             self.dbname_cache['name'] = dbname
         ttl = utils.deltaparse(doc.get('ttl', self.dbname_ttl), default_unit='seconds')
         self.dbname_cache['expiry'] = now + ttl
@@ -49,14 +52,21 @@ class MongoClient:
         doc = await self.control_db.settings.find_one({'_id': self.doc_id})
         if not doc:
             if self.dbname_default == '_':
-                raise MissingControlDoc
+                raise MissingControlDoc(self.dbname_key, self.doc_id)
             doc = await self.set_dbname(self.dbname_default)
         return doc
 
     async def set_dbname(self, dbname: str, ttl: utils.Delta|None = None) -> dict[str, Any]:
         'Set the control dbname'
-        doc = dict(_id=self.doc_id, key=self.dbname_key, value=dbname)
-        if ttl is not None:
+        now = utils.now()
+        doc = dict(
+            _id=self.doc_id,
+            key=self.dbname_key,
+            value=dbname,
+            updated=now)
+        if ttl is None:
+            ttl = self.dbname_ttl
+        else:
             ttl = utils.deltaparse(ttl, default_unit='seconds')
             doc['ttl'] = f'{int(ttl.total_seconds())}s'
         res = await self.control_db.settings.replace_one(
@@ -67,6 +77,8 @@ class MongoClient:
             logger.info(f'Creating control setting {doc}')
         else:
             logger.info(f'Updated control setting {doc}')
+        self.dbname_cache['name'] = dbname
+        self.dbname_cache['expiry'] = now + ttl
         return doc
 
 class MissingControlDoc(Exception):
