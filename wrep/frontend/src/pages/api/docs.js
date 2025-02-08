@@ -1,7 +1,7 @@
 import 'https://unpkg.com/rapidoc/dist/rapidoc-min.js'
 
 const rapi = $(`
-    <rapi-doc spec-url="/openapi.json" theme="dark" render-style="view" class="hidden"/>
+    <rapi-doc spec-url="/api/v0/openapi.json" theme="dark" render-style="view" class="hidden"/>
 `)
 function initRapi() {
     const checkStart = +new Date

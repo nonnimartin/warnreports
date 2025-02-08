@@ -1,77 +1,108 @@
 from __future__ import annotations
 
-import glob
-import shutil
-from pathlib import Path
-from typing import Iterator
+import functools
+import hashlib
+import os
+from contextlib import asynccontextmanager
+from email.utils import formatdate
+from uuid import UUID
+
+from fastapi import APIRouter, FastAPI, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from .. import settings, utils
+from ..routers.common import FeedSearchParams, site_absurl
 
 logger = utils.get_logger('frontend')
 
-class FrontentBuilder:
+router = APIRouter()
 
-    def __init__(self) -> None:
-        import jinja2
-        self.src = settings.FRONTEND_SRC
-        self.dist = settings.FRONTEND_DIST
-        self.jinja = jinja2.Environment(loader=jinja2.FileSystemLoader(self.src))
+def default_handler(route: str, path: str|None):
+    path = path or route
+    async def handler() -> HTMLResponse:
+        return frontend_response(path)
+    return handler
 
-    async def build(self) -> None:
-        await self.clean()
-        await self.init()
-        await self.copy_assets()
-        await self.build_html()
-        await self.build_scss()
+handlers = {
+    route: router.head(route)(router.get(route)(default_handler(route, path)))
+    for route, path in dict.items({
+        '/': '/index',
+        '/search': None,
+        '/api': None,
+        '/api/docs': None,
+        '/about': None})}
 
-    async def clean(self) -> None:
-        if self.dist.exists():
-            shutil.rmtree(self.dist)
+@router.head('/r/{id}')
+@router.get('/r/{id}')
+async def report_view(id: UUID) -> HTMLResponse:
+    return frontend_response('/report')
 
-    async def init(self) -> None:
-        self.dist.mkdir(parents=True, exist_ok=True)
+@router.head('/feed')
+@router.get('/feed')
+async def feed_builder(params: FeedSearchParams) -> HTMLResponse:
+    return frontend_response('/feed')
 
-    async def copy_assets(self) -> None:
-        for path in self.glob('**/*.js', '**/*.css'):
-            destpath = f'assets/{path}'
-            logger.info(f'Copying {destpath}')
-            dest = self.dist/destpath
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(self.src/path, dest)
+@router.head('/v/{id}')
+@router.get('/v/{id}')
+async def artifact_view(id: UUID) -> RedirectResponse:
+    return artifact_redirect(id, 'inline')
 
-    async def build_html(self) -> None:
-        htmltmpl = self.jinja.get_template('frontend.jinja')
-        for path in self.glob('pages/**/*.js'):
-            routepath = path.removeprefix('pages/').removesuffix('.js')
-            htmlpath = f'html/{routepath}.html'
-            logger.info(f'building {htmlpath}')
-            htmldest = self.dist/htmlpath
-            htmldest.parent.mkdir(parents=True, exist_ok=True)
-            htmldest.write_text(htmltmpl.render(path=routepath))
+@router.head('/d/{id}')
+@router.get('/d/{id}')
+async def artifact_download(id: UUID) -> RedirectResponse:
+    return artifact_redirect(id, 'download')
 
-    async def build_scss(self) -> None:
-        import sass
-        context = dict(bootstrap_dir=settings.BOOTSTRAP_DIR)
-        for path in self.glob('**/*.scss'):
-            base = path.removesuffix('.scss')
-            logger.info(f'Building {base}.css')
-            tmpl = self.jinja.get_template(path)
-            content = tmpl.render(context)
-            dest = self.dist/'assets'/f'{base}.css'
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(sass.compile(string=content))
-            logger.info(f'Building {base}.min.css')
-            dest = self.dist/'assets'/f'{base}.min.css'
-            dest.write_text(sass.compile(string=content, output_style='compressed'))
+@router.head('/openapi.json')
+@router.get('/openapi.json')
+async def openapi_redirect() -> RedirectResponse:
+    url = site_absurl('/api/v0/openapi.json')
+    return RedirectResponse(url, status.HTTP_308_PERMANENT_REDIRECT)
 
-    def glob(self, *globs: str, root: Path|None = None) -> Iterator[str]:
-        root = root or self.src
-        for pat in globs:
-            yield from glob.glob(pat, root_dir=root, recursive=True)
+def artifact_redirect(id: UUID, disposition: str) -> RedirectResponse:
+    path = f'/api/v0/artifacts/{id}/data'
+    url = site_absurl(path=path).include_query_params(disposition=disposition)
+    return RedirectResponse(url, status.HTTP_308_PERMANENT_REDIRECT)
 
-async def frontend_build() -> None:
-    'Build frontend web assets'
-    await FrontentBuilder().build()
+def frontend_response(path: str) -> HTMLResponse:
+    content, headers = read_html(path)
+    return HTMLResponse(content, headers=headers)
+
+def read_html(path: str) -> tuple[str, dict[str, str]]:
+    path = path.lstrip('/')
+    if settings.FRONTEND_CACHE_HTML:
+        return read_html_cached(path)
+    return read_html_uncached(path)
+
+def read_html_uncached(path: str) -> tuple[str, dict[str, str]]:
+    path = path.lstrip('/')
+    file = settings.FRONTEND_DIST/'html'/f'{path}.html'
+    return file.read_text(), get_stat_headers(file.stat())
+
+read_html_cached = functools.cache(read_html_uncached)
+
+def get_stat_headers(stat: os.stat_result) -> dict[str, str]:
+    etag_base = f'{stat.st_mtime}-{stat.st_size}'
+    digest = hashlib.md5(etag_base.encode(), usedforsecurity=False).hexdigest()
+    return {
+        'content-length': str(stat.st_size),
+        'last-modified': formatdate(stat.st_mtime, usegmt=True),
+        'etag': f'"{digest}"'}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.FRONTEND_AUTO_BUILD:
+        await frontend_build()
+    read_html_cached.cache_clear()
+    assets = StaticFiles(directory=settings.FRONTEND_DIST/'assets', check_dir=False)
+    app.mount('/assets', assets, name='assets')
+    yield
+    read_html_cached.cache_clear()
+
+from .build import Command as BuildCommand
+from .build import frontend_build
+
 
 class Command(utils.BaseCommand):
-    commands = dict(build=utils.FuncCommand(frontend_build))
+    commands = dict(build=BuildCommand)

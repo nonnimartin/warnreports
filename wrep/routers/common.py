@@ -7,7 +7,9 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import Depends, Query
+from starlette.datastructures import URL
 
+from .. import settings
 from ..models import *
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     'ReportSearchParams',
     'StateSearchParams',
     'FeedSearchParams',
+    'feed_id_encode',
+    'site_absurl',
 ]
 
 TextSearchParam = Annotated[str, Query(description='General text search')]
@@ -266,3 +270,8 @@ def feed_id_encode(params: FeedSearchParams) -> str:
             items.append((k, value))
     q = urlencode(items)
     return base64.urlsafe_b64encode(q.encode()).decode()
+
+def site_absurl(path: str, **components) -> URL:
+    url = settings.SITE_URL
+    return url.replace(path=url.path.rstrip('/') + path, **components)
+

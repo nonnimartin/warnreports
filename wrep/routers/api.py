@@ -12,10 +12,19 @@ from starlette.datastructures import URL
 from .. import search, settings, utils
 from ..models import *
 from .common import *
-from .common import feed_id_encode
 
 logger = utils.get_logger('api')
 router = APIRouter()
+
+artifacts_data = APIRouter()
+@artifacts_data.get('/artifacts/{id}/data', include_in_schema=False)
+async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
+    artifact = await retrieve404(ArtifactDetail, id=[id])
+    return FileResponse(
+        settings.ARTIFACTS_DIR/artifact.path,
+        media_type=artifact.media_type,
+        filename=artifact.name,
+        content_disposition_type=disposition)
 
 def search_opts(
     order: Annotated[
@@ -94,15 +103,6 @@ async def states_list(req: Request, rep: Response, params: StateSearchParams, op
 async def state_get(id: StateCode) -> StateDetail:
     return await retrieve404(StateDetail, id=[id])
 
-@router.get('/artifacts/{id}/data', include_in_schema=False)
-async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
-    artifact = await retrieve404(ArtifactDetail, id=[id])
-    return FileResponse(
-        settings.ARTIFACTS_DIR/artifact.path,
-        media_type=artifact.media_type,
-        filename=artifact.name,
-        content_disposition_type=disposition)
-
 @router.get('/_db', include_in_schema=False)
 async def dbstats() -> dict:
     db = await search.client.get_database()
@@ -147,16 +147,11 @@ def feed_id_header(rep: Response, params: FeedSearchParams) -> Response:
 def get_next_url(url: URL, total: int, offset: int, limit: int) -> URL|None:
     if not has_next_url(total, offset, limit):
         return
-    baseurl = settings.SITE_URL
     params = dict(offset=offset + limit, limit=limit)
-    return (url
+    return (
+        site_absurl(url.path, query=url.query)
         .remove_query_params(params)
-        .include_query_params(**params)
-        .replace(
-            scheme=baseurl.scheme,
-            hostname=baseurl.hostname,
-            port=baseurl.port,
-            path=baseurl.path.rstrip('/') + url.path))
+        .include_query_params(**params))
 
 def has_next_url(total: int, offset: int, limit: int) -> bool:
     return limit > 0 and total > offset + limit

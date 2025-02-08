@@ -13,7 +13,7 @@ from starlette.datastructures import URL
 
 from .. import search, settings, utils
 from ..models import *
-from .common import FeedSearchParams, clean_feed_params, feed_id_encode
+from .common import FeedSearchParams, clean_feed_params, feed_id_encode, site_absurl
 
 logger = utils.get_logger('feed')
 router = APIRouter()
@@ -114,10 +114,7 @@ def id_permalink(id: str, fmt: str) -> URL:
     path = f'/feed/{fmt}'
     if id:
         path = f'{path}/{id}'
-    url = settings.SITE_URL
-    return url.replace(path=url.path.rstrip('/') + path)
+    return site_absurl(path)
 
 def report_link(report: ReportData) -> URL:
-    path = f'/r/{report.id}'
-    url = settings.SITE_URL
-    return url.replace(path=url.path.rstrip('/') + path)
+    return site_absurl(f'/r/{report.id}')
