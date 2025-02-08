@@ -17,7 +17,7 @@ logger = utils.get_logger('api')
 router = APIRouter()
 
 artifacts_data = APIRouter()
-@artifacts_data.get('/artifacts/{id}/data', include_in_schema=False)
+@artifacts_data.get('/artifacts/{id}/data')
 async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
     artifact = await retrieve404(ArtifactDetail, id=[id])
     return FileResponse(

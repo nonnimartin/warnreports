@@ -1,6 +1,6 @@
-import { renderError } from '../lib/main.js'
+import cm from '../lib/cm.js'
+import { aajax, renderError } from '../lib/main.js'
 import { populateStateSelects, ReportColumns, TableComponent } from '../lib/table.js'
-
 
 class FeedComponent {
 
@@ -77,7 +77,7 @@ class FeedComponent {
             try {
                 const {xhr} = json
                 this.feedId = xhr.getResponseHeader('feed-id') || ''
-                this.updateFeedInfo()
+                await this.updateFeedInfo()
             } catch(e) {
                 console.error(e)
                 this.feedInfo.html(await renderError(e))
@@ -120,22 +120,42 @@ class FeedComponent {
         }
     }
 
-    updateFeedInfo() {
+    async updateFeedInfo() {
         if (!this.feedId) {
             this.feedInfo.html('')
             return
         }
         const description = feedDescription(this.feedId)
-        const atom = `/feed/atom/${this.feedId}`
-        const rss = `/feed/rss/${this.feedId}`
+        const title = `warnreports ${description}`
+        this.title = title
+        document.title = title
+        const urls = {
+            atom: `/feed/atom/${this.feedId}`,
+            rss: `/feed/rss/${this.feedId}`,
+        }
+        const fmtItem = title => {
+            const url = urls[title.toLowerCase()]
+            return [
+                `<dt>${title}</dt>`,
+                $(`<dd/>`).append($('<a/>').attr({href: url}).text(url)),
+            ]
+        }
         this.feedInfo.html([
-            '<dt>Description</dt>',
-            $('<dd/>').text(`WARN Reports ${description}`),
-            '<dt>RSS</dt>',
-            $('<dd/>').append($('<a/>').attr({href: rss}).text(rss)),
-            '<dt>Atom</dt>',
-            $('<dd/>').append($('<a/>').attr({href: atom}).text(atom)),
+            '<dt>Title</dt>',
+            $('<dd/>').text(title),
+            ...fmtItem('RSS'),
+            ...fmtItem('Atom'),
         ])
+        const getTasks = Object.fromEntries(Object.entries(urls).map(([type, url]) => [type, aajax(url)]))
+        const targets = {
+            rss: $('<div/>').appendTo(this.feedInfo).hide(),
+            atom: $('<div/>').appendTo(this.feedInfo).hide(),
+        }
+        for (const [type, task] of Object.entries(getTasks)) {
+            task.then(({body}) => {
+                cm(targets[type], {value: body.children[0].outerHTML, mode: 'xml'})
+            }).catch(renderError)
+        }
     }
 }
 

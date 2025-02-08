@@ -65,8 +65,8 @@ if __name__ == '__main__':
                     f'{pkgdirname}/**/*.py',
                     f'{pkgdirname}/logging.yml',
                     *map(
-                        'frontend/src/**/*.{}'.format,
-                        'js css scss jinja2'.split())])
+                        f'{pkgdirname}/''frontend/src/**/*.{}'.format,
+                        'js css scss jinja'.split())])
         return uvicorn.main.callback(f'{pkgdirname}.main:{appname}', **kw)
     params = [
         click.Argument(['role'], default='app'),
