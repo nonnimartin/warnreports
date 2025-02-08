@@ -53,53 +53,41 @@ class ArtifactDetailView(ArtifactDataView, ArtifactDetail):
 def repopts(model: type) -> dict:
     return dict(response_model_by_alias=False, response_model=model)
 
+@router.head('/reports', include_in_schema=False)
 @router.get('/reports', **repopts(list[ReportDataView]))
 async def reports_list(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> list[ReportData]:
     feed_id_header(rep, params)
     return await search_response(req, rep, ReportData, params, opts)
-
-@router.head('/reports', include_in_schema=False)
-async def reports_list_head(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> Response:
-    return await reports_list(req, rep, params, opts)
 
 @router.head('/reports/{id}', include_in_schema=False)
 @router.get('/reports/{id}', **repopts(ReportDataView))
 async def report_get(id: UUID) -> ReportData:
     return await retrieve404(ReportData, id=[id])
 
+@router.head('/companies', include_in_schema=False)
 @router.get('/companies', **repopts(list[CompanyDetailView]))
 async def companies_list(req: Request, rep: Response, params: CompanySearchParams, opts: SearchOpts) -> list[CompanyDetail]:
     return await search_response(req, rep, CompanyDetail, params, opts)
-
-@router.head('/companies', include_in_schema=False)
-async def companies_list_head(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> Response:
-    return await companies_list(req, rep, params, opts)
 
 @router.head('/companies/{id}', include_in_schema=False)
 @router.get('/companies/{id}', **repopts(CompanyDetailView))
 async def company_get(id: UUID) -> CompanyDetail:
     return await retrieve404(CompanyDetail, id=[id])
 
+@router.head('/naics', include_in_schema=False)
 @router.get('/naics')
 async def naics_list(req: Request, rep: Response, params: NaicsSearchParams, opts: SearchOpts) -> list[NaicsDetail]:
     return await search_response(req, rep, NaicsDetail, params, opts)
-
-@router.head('/naics', include_in_schema=False)
-async def naics_list_head(req: Request, rep: Response, params: NaicsSearchParams, opts: SearchOpts) -> Response:
-    return await naics_list(req, rep, params, opts)
 
 @router.head('/naics/{id}', include_in_schema=False)
 @router.get('/naics/{id}')
 async def naics_get(id: int) -> NaicsDetail:
     return await retrieve404(NaicsDetail, id=[id])
 
+@router.head('/states', include_in_schema=False)
 @router.get('/states')
 async def states_list(req: Request, rep: Response, params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
     return await search_response(req, rep, StateDetail, params, opts)
-
-@router.head('/states', include_in_schema=False)
-async def states_list_head(req: Request, rep: Response, params: StateSearchParams, opts: SearchOpts) -> Response:
-    return await states_list(req, rep, params, opts)
 
 @router.head('/states/{id}', include_in_schema=False)
 @router.get('/states/{id}')
@@ -120,6 +108,12 @@ async def dbstats() -> dict:
     db = await search.client.get_database()
     tasks = {name: defn.stats(db=db) for name, defn in search.collection_defns.items()}
     return dict(collections={name: await task for name, task in tasks.items()})
+
+@router.head('/_ok', include_in_schema=False)
+@router.get('/_ok', include_in_schema=False)
+async def checkok() -> Response:
+    await search.client.get_database()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 async def search_response[DM: DataModel](req: Request, rep: Response, model: type[DM], params: dict, opts: SearchOpts) -> list[DM]|Response:
     params = dict(params)
