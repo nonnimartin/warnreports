@@ -18,7 +18,6 @@ class ReportDetail {
                 id_not: this.report.id,
                 order: '-reported',
             }),
-            wrapperClasses: ['hidden'],
             opts: {
                 pageLength: 10,
                 ordering: false,

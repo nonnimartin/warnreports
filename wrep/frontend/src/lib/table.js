@@ -76,7 +76,7 @@ export class TableComponent {
                 try {
                     rep = await dtAjax(this.collection, params)
                 } catch(e) {
-                    const errHtml = await renderError(e)
+                    const errHtml = await this.renderError(e)
                     callback({data: [], recordsFiltered: 0, recordsTotal: 0})
                     $('.dt-empty', this.table).html(errHtml)
                     return
@@ -100,6 +100,10 @@ export class TableComponent {
             }
         }
         return opts
+    }
+
+    async renderError(e) {
+        return await await renderError(e)
     }
 
     async getSearchParams(params) {
