@@ -318,14 +318,12 @@ class Search[DM: DataModel]:
         return [obj async for obj in self.objs()]
 
     async def objs(self) -> AsyncIterator[DM]:
-        async for doc in await self.execute():
+        async for doc in await self.docs():
             yield self.model.model_validate(doc)
 
     async def docs(self) -> AsyncIterator[dict[str, Any]]:
-        async for doc in await self.execute():
-            yield doc
-
-    async def execute(self) -> AsyncIOMotorCursor:
+        if self.limit == 0:
+            return utils.as_aiter(())
         cur = (await self.collection()).find(self.q)
         if self.orders:
             cur = cur.sort(self.orders)
