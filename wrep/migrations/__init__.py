@@ -55,8 +55,10 @@ class AutoHelper:
             rev_id = '0001'
         return rev_id, parent
 
-def migrate() -> None:
+def migrate(auto_only: bool = False) -> None:
     'Run schema migrations'
+    if auto_only and not settings.DB_AUTO_MIGRATE:
+        return
     config = Config(settings.ALEMBIC_INI)
     with orm.engine.begin() as connection:
         config.attributes['connection'] = connection
@@ -68,7 +70,10 @@ def auto(message: str|None = None) -> None:
     AutoHelper(message).run()
 
 class MigrateCommand(FuncCommand(migrate)):
-    pass
+
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--auto-only', action='store_true', help='Only run if DB_AUTO_MIGRATE=true')
 
 class AutoCommand(FuncCommand(auto)):
 

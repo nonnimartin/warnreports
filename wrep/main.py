@@ -13,15 +13,6 @@ from .models import *
 logger = utils.get_logger('main')
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with frontend.lifespan(app):
-        if settings.DB_AUTO_MIGRATE:
-            logger.info(f'Running auto migrate')
-            from .migrations import migrate
-            migrate()
-        yield
-
 async def missing_control_doc(req: Request, exc: MissingControlDoc):
     logger.exception(f'Missing control', exc_info=exc)
     capture_exception(exc)
@@ -43,7 +34,7 @@ def _create_app(**kw):
     app.add_exception_handler(MissingControlDoc, missing_control_doc)
     return app
 
-app = _create_app(lifespan=lifespan)
+app = _create_app(lifespan=frontend.lifespan)
 app.include_router(frontend.router, include_in_schema=False)
 app.include_router(routers.backend)
 backend_app = _create_app()

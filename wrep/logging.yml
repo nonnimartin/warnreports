@@ -25,21 +25,17 @@ handlers:
 loggers:
   uvicorn.error:
     level: INFO
-    handlers:
-      - uvicorn
+    handlers: [uvicorn]
     propagate: no
   uvicorn.access:
     level: INFO
-    handlers:
-      - access
+    handlers: [access]
     propagate: no
   wrep:
     level: INFO
-    handlers:
-      - default
+    handlers: [default]
     propagate: no
 root:
-  level: WARNING
-  handlers:
-    - default
+  level: INFO
+  handlers: [default]
   propagate: no

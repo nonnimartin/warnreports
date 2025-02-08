@@ -397,7 +397,7 @@ def load_naics() -> None:
             .execute(select(Naics.id).limit(1))
             .scalar_one_or_none())
         if exists:
-            logger.info(f'NAICS already loaded')
+            logger.debug(f'NAICS already loaded')
             return
         logger.info(f'Loading NAICS')
         import requests
@@ -504,7 +504,3 @@ class MroneCommand(utils.BaseCommand):
 class Command(utils.BaseCommand):
     'ORM/SQL commands'
     commands = dict(dump=DumpCommand, naics=NaicsCommand, mrone=MroneCommand)
-
-
-if __name__ == '__main__':
-    Command.main()

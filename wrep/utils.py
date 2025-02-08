@@ -136,10 +136,13 @@ def json_default(value: Any) -> Any:
 
 def init_logging() -> None:
     from . import settings
+    levelname = settings.LOG_LEVEL.upper()
     file = settings.BASEDIR/'logging.yml'
     config = yaml.safe_load(file.read_bytes())
-    config['loggers']['wrep']['level'] = settings.LOG_LEVEL
-    # config['root']['level'] = settings.LOG_LEVEL
+    config['loggers']['wrep']['level'] = levelname
+    config['root']['level'] = sorted(
+        ['INFO', levelname],
+        key=lambda x: getattr(logging, x)).pop()
     logging.config.dictConfig(config)
 
 async def wait(ret):
