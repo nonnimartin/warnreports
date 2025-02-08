@@ -70,7 +70,7 @@ def artifact_redirect(id: UUID, disposition: str) -> RedirectResponse:
     url = url.replace(
         path=url.path.rstrip('/') + path,
         query=f'disposition={disposition}')
-    return RedirectResponse(url, status_code=status.HTTP_308_PERMANENT_REDIRECT)
+    return RedirectResponse(url, status.HTTP_308_PERMANENT_REDIRECT)
 
 def frontend_response(path: str) -> HTMLResponse:
     content, headers = read_html(path)

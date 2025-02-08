@@ -113,7 +113,7 @@ async def dbstats() -> dict:
 @router.get('/_ok', include_in_schema=False)
 async def checkok() -> Response:
     await search.client.get_database()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return Response(status.HTTP_204_NO_CONTENT)
 
 async def search_response[DM: DataModel](req: Request, rep: Response, model: type[DM], params: dict, opts: SearchOpts) -> list[DM]|Response:
     params = dict(params)

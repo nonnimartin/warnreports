@@ -99,7 +99,7 @@ def query_description(params: FeedSearchParams) -> str:
 def id_decode(id: str) -> dict[str, Any]:
     try:
         q = base64.urlsafe_b64decode(id).decode()
-    except binascii.Error:
+    except (binascii.Error, UnicodeDecodeError):
         q = base64.b32hexdecode(id, casefold=True).decode()
     params = parse_qs(q)
     for key in ('employees_min', 'naics'):

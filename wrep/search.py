@@ -4,8 +4,7 @@ import json
 import re
 from typing import Any, AsyncIterator, Iterable, Iterator, Sequence
 
-from motor.motor_asyncio import (AsyncIOMotorCollection, AsyncIOMotorCursor,
-                                 AsyncIOMotorDatabase)
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
@@ -44,7 +43,7 @@ class CollectionDefn:
     def filter_class(self) -> type[MongoFilter]:
         return filters[self.data_model]
 
-    async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, dict[str, int]]:
+    async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, str|int]:
         'Get collection stats'
         db = await client.get_database(db)
         stat = await db.command('collstats', self.name)

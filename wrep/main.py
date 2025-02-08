@@ -35,20 +35,28 @@ app.include_router(feed.router, prefix='/feed', include_in_schema=False)
 async def missing_control_doc(req: Request, exc: MissingControlDoc):
     logger.exception(f'Missing control', exc_info=exc)
     capture_exception(exc)
-    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE)
 
 if __name__ == '__main__':
     import uvicorn
-    def cmd(*args, **kw):
+
+    def cmd(**kw):
         logger.info(f'Starting uvicorn')
-        kw.update(reload_includes=[
-            'wrep/**/*.py',
-            *map('frontend/src/**/*.{}'.format, 'js css scss jinja2'.split()),
-        ])
-        return uvicorn.main.callback('wrep.main:app', *args, **kw)
+        pkgdirname = settings.BASEDIR.name
+        if settings.UVICORN_RELOAD:
+            kw.update(
+                reload_includes=[
+                    f'{pkgdirname}/**/*.py',
+                    *map(
+                        'frontend/src/**/*.{}'.format,
+                        'js css scss jinja2'.split())])
+        return uvicorn.main.callback(f'{pkgdirname}.main:app', **kw)
+    params = []
+    # params += [click.Argument(['roles'], nargs=-1)]
+    params += uvicorn.main.params[1:]
     main = click.Command(
         name='main',
         callback=cmd,
-        params=uvicorn.main.params[1:],
+        params=params,
         context_settings=uvicorn.main.context_settings)
     main()
