@@ -12,13 +12,14 @@ from .models import *
 
 logger = utils.get_logger('main')
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if settings.DB_AUTO_MIGRATE:
-        logger.info(f'Running auto migrate')
-        from .migrations import migrate
-        migrate()
     async with frontend.lifespan(app):
+        if settings.DB_AUTO_MIGRATE:
+            logger.info(f'Running auto migrate')
+            from .migrations import migrate
+            migrate()
         yield
 
 async def missing_control_doc(req: Request, exc: MissingControlDoc):
@@ -26,12 +27,18 @@ async def missing_control_doc(req: Request, exc: MissingControlDoc):
     capture_exception(exc)
     raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE)
 
+@asynccontextmanager
+async def _default_lifespan(app: FastAPI):
+    utils.init_logging()
+    yield
+
 def _create_app(**kw):
     kw = dict(
+        lifespan=_default_lifespan,
         title='warnreports API',
         openapi_url='/api/v0/openapi.json',
         docs_url='/api/docs/swagger',
-        redoc_url='/api/docs/redoc') | kw
+        redoc_url='/api/docs/redoc') | kw    
     app = FastAPI(**kw)
     app.add_exception_handler(MissingControlDoc, missing_control_doc)
     return app
@@ -52,9 +59,8 @@ frontend_app.include_router(frontend.router, include_in_schema=False)
 if __name__ == '__main__':
     import uvicorn
 
-    def cmd(**kw):
-        role = kw.pop('role', None)
-        if not role or role == 'app':
+    def cmd(*, role: str, **kw):
+        if role == 'app':
             appname = 'app'
         elif role in ('backend', 'search', 'artifacts', 'frontend'):
             appname = f'{role}_app'
@@ -66,13 +72,14 @@ if __name__ == '__main__':
             kw.update(
                 reload_includes=[
                     f'{pkgdirname}/**/*.py',
+                    f'{pkgdirname}/logging.yml',
                     *map(
                         'frontend/src/**/*.{}'.format,
                         'js css scss jinja2'.split())])
         return uvicorn.main.callback(f'{pkgdirname}.main:{appname}', **kw)
-    params = []
-    params += [click.Argument(['role'], required=False)]
-    params += uvicorn.main.params[1:]
+    params = [
+        click.Argument(['role'], default='app'),
+        *uvicorn.main.params[1:]]
     main = click.Command(
         name='main',
         callback=cmd,

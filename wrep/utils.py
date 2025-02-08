@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import enum
 import logging
+import logging.config
 import mimetypes
 import re
 from argparse import ArgumentParser, _SubParsersAction
@@ -16,7 +17,7 @@ from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
 from uuid import UUID
 
 import dateutil.parser
-
+import yaml
 
 type AP = ArgumentParser
 type Delta = float|str|timedelta
@@ -135,8 +136,11 @@ def json_default(value: Any) -> Any:
 
 def init_logging() -> None:
     from . import settings
-    level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
-    logging.basicConfig(level=level)
+    file = settings.BASEDIR/'logging.yml'
+    config = yaml.safe_load(file.read_bytes())
+    config['loggers']['wrep']['level'] = settings.LOG_LEVEL
+    # config['root']['level'] = settings.LOG_LEVEL
+    logging.config.dictConfig(config)
 
 async def wait(ret):
     return await ret if asyncio.iscoroutine(ret) else ret

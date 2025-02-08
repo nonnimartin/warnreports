@@ -92,6 +92,7 @@ def get_stat_headers(stat: os.stat_result) -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    utils.init_logging()
     if settings.FRONTEND_AUTO_BUILD:
         await frontend_build()
     read_html_cached.cache_clear()
