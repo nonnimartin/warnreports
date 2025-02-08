@@ -6,7 +6,7 @@ from abc import abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, AsyncIterable, Callable
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.operations import IndexModel
 
 from .. import search, settings, utils
@@ -75,14 +75,21 @@ class SearchIndexBackend(StageBackend):
     async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
 
 class MongoPipelineLog(PipelineLogBackend):
+    collection_name: str = 'pipelinelogs'
 
     def __init__(self, **context):
         self.context = context
         self._indexes_created = False
+        self._coll = None
+
+    async def collection(self):
+        if self._coll is None:
+            db = await client.get_database(self.context.get('dbname'))
+            self._coll = db.get_collection(self.collection_name)
+        return self._coll
 
     async def save(self, doc):
-        db = await client.get_database(self.context.get('dbname'))
-        coll = db.pipelinelogs
+        coll = await self.collection()
         if not self._indexes_created:
             await coll.create_indexes(self.indexes)
             self._indexes_created = True
@@ -103,13 +110,13 @@ class MongoETBase(StageBackend):
     ordering = []
     clean_keys = []
     stat_clean_keys = []
-
-    _db = None
+    _coll = None
 
     async def collection(self):
-        if self._db is None:
-            self._db = await client.get_database(self.context.get('dbname'))
-        return self._db.get_collection(self.collection_name)
+        if self._coll is None:
+            db = await client.get_database(self.context.get('dbname'))
+            self._coll = db.get_collection(self.collection_name)
+        return self._coll
 
     async def clean(self) -> None:
         filt = self.get_filter()
@@ -184,12 +191,11 @@ class MongoTranslation(MongoETBase, TranslationBackend):
 
 class MongoSearchIndex(SearchIndexBackend):
     collections = search.collection_defns
-
     _db = None
 
     async def db(self):
         if self._db is None:
-            self._db = await client.get_database(self.context.get('dbname'))
+            self._db = await search.client.get_database(self.context.get('dbname'))
         return self._db
 
     async def clean(self) -> None:

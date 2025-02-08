@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from .. import settings, utils
 
-logger = utils.get_logger('search')
+logger = utils.get_logger('backends.mongo')
 
 @dataclasses.dataclass
 class MongoClient:
@@ -38,7 +38,7 @@ class MongoClient:
         doc = await self.get_doc()
         dbname = doc['value']
         if dbname != self.dbname_cache['name']:
-            logger.info(f'Selecting new search DB {dbname=}')
+            logger.info(f'Selecting new {self.dbname_key} {dbname=}')
             self.dbname_cache['name'] = dbname
         ttl = utils.deltaparse(doc.get('ttl', self.dbname_ttl), default_unit='seconds')
         self.dbname_cache['expiry'] = now + ttl
