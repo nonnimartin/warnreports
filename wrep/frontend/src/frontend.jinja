@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>warnreports</title>
+    <link href="/assets/css/main.css" rel="stylesheet">
+    {%- if path in ['feed'] %}
+    <link href="/assets/css/cm.css" rel="stylesheet">
+    {%- endif %}
+  </head>
+  <body>
+    <div class="container-flex bg-light">
+      <div class="container" id="id_mainnav"></div>
+    </div>
+    <div id="id_maincontent" class="container"></div>
+    <script type="module">
+    import { renderError } from '/assets/lib/main.js'
+    import nav from '/assets/lib/nav.js'
+    import page from "/assets/pages/{{ path.strip('/') }}.js"
+    $(async () => {
+      try {
+        $('#id_mainnav').html(await nav.build())
+      } catch(e) {
+        $('#id_mainnav').html(await renderError(e))
+      }
+      try {
+        $('#id_maincontent').html(await page.build())
+      } catch(e) {
+        $('#id_maincontent').html(await renderError(e))
+      }
+    })
+    </script>
+  </body>
+</html>

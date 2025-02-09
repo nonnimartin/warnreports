@@ -799,7 +799,9 @@ class MO(Scraper):
                 if not dt:
                     logger.warning(f'Cannot parse last-modified header')
                 elif dt < utils.now(days=-7, tz=timezone.utc):
-                    logger.warning(f'Current year page more than 7 days old {url=}')
+                    logger.warning(
+                        f'Current year page more than 7 days old {url=}. '
+                        f'Refresh from {self.absurl(f'/{year}')}')
 
     async def clean(self) -> None:
         self.cache.delete('pages/*.html', glob=True)
@@ -1542,6 +1544,7 @@ class Artifacts:
         self.metrics = defaultdict(int)
 
     def add(self, key: str, file: Path|None = None) -> tuple[SaveType, int]:
+        key = key.strip('/')
         file = file or self.src/key
         dest = self.dir/key
         sta = file.stat()

@@ -153,7 +153,7 @@ __all__ += [
     'ReportsFilter',
     'StatesFilter']
 
-class FilterModel(DataModel, Generic[DM]):
+class FilterModel[DM: DataModel](DataModel):
     order: str|None = None
     result_model: ClassVar[type[DM]]
     order_fields: ClassVar[set[str]] = set()

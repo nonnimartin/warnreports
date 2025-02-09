@@ -1,0 +1,20 @@
+import { StaticComponent } from './main.js'
+
+const nav = $(`
+    <nav class="nav main-nav nav-pills">
+        <a class="nav-link" href="/">Home</a>
+        <a class="nav-link" href="/search">Search</a>
+        <a class="nav-link" href="/feed">Feed</a>
+        <a class="nav-link" href="/api/docs">API</a>
+        <a class="nav-link" href="/about">About</a>
+    </nav>
+`)
+
+$('a.nav-link', nav).each(function() {
+    if ($(this).attr('href') === window.location.pathname) {
+        $(this).addClass('active')
+        return false
+    }
+})
+
+export default new StaticComponent(nav)

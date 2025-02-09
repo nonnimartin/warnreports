@@ -5,23 +5,19 @@ import binascii
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from feedgen.feed import FeedGenerator
 from pydantic import ValidationError
 from starlette.datastructures import URL
 
-from .. import settings, utils
+from .. import search, settings, utils
 from ..models import *
-from ..search import *
-from .common import FeedSearchParams, feed_search_params
+from .common import FeedSearchParams, clean_feed_params, feed_id_encode, site_absurl
 
 logger = utils.get_logger('feed')
 router = APIRouter()
-templates = Jinja2Templates(env=utils.jinja_env())
 
-valid_feed_params = tuple(sorted(feed_search_params()))
 
 @router.get('/rss')
 async def rss_query(params: FeedSearchParams) -> HTMLResponse:
@@ -52,9 +48,9 @@ async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
     return await feed_query(fmt, params)
 
 async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
-    params = clean_params(params)
-    title = f'WARN Reports {query_description(params)}'.strip()
-    id = id_encode(params)
+    params = clean_feed_params(params)
+    title = f'warnreports {query_description(params)}'.strip()
+    id = feed_id_encode(params)
     url = str(id_permalink(id, fmt))
     feed = FeedGenerator()
     feed.id(url)
@@ -62,8 +58,10 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     feed.language('en')
     feed.title(title)
     feed.description(title)
+    feed.generator('')
     params = dict(params, order='-reported')
-    for report in await search(ReportData, params, settings.FEED_ENTRY_LIMIT):
+    result = search.Search(ReportData, params, settings.FEED_ENTRY_LIMIT)
+    async for report in result.objs():
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
         entry.title(report.company)
@@ -86,7 +84,7 @@ def entry_description(report: ReportData) -> str:
     return ' | '.join(descs)
 
 def query_description(params: FeedSearchParams) -> str:
-    params = clean_params(params)
+    params = clean_feed_params(params)
     descs = []
     if (state := params.pop('state', None)) is not None:
         descs.append(','.join(state))
@@ -99,21 +97,10 @@ def query_description(params: FeedSearchParams) -> str:
     descs.extend(filter(None, urlencode(params).split('&')))
     return ' '.join(descs)
 
-def id_encode(params: FeedSearchParams) -> str:
-    params = clean_params(params)
-    items = []
-    for k in params:
-        if not isinstance(v := params[k], list):
-            v = [v]
-        for value in v:
-            items.append((k, value))
-    q = urlencode(items)
-    return base64.urlsafe_b64encode(q.encode()).decode()
-
 def id_decode(id: str) -> dict[str, Any]:
     try:
         q = base64.urlsafe_b64decode(id).decode()
-    except binascii.Error:
+    except (binascii.Error, UnicodeDecodeError):
         q = base64.b32hexdecode(id, casefold=True).decode()
     params = parse_qs(q)
     for key in ('employees_min', 'naics'):
@@ -122,19 +109,13 @@ def id_decode(id: str) -> dict[str, Any]:
     params = {
         k: v if k in ('naics', 'state') else v[0]
         for k, v in params.items()}
-    return clean_params(params)
-
-def clean_params(params: dict) -> FeedSearchParams:
-    return {key: params[key] for key in valid_feed_params if params.get(key) is not None}
+    return clean_feed_params(params)
 
 def id_permalink(id: str, fmt: str) -> URL:
     path = f'/feed/{fmt}'
     if id:
         path = f'{path}/{id}'
-    url = settings.SITE_URL
-    return url.replace(path=url.path.rstrip('/') + path)
+    return site_absurl(path)
 
 def report_link(report: ReportData) -> URL:
-    path = f'/r/{report.id}'
-    url = settings.SITE_URL
-    return url.replace(path=url.path.rstrip('/') + path)
+    return site_absurl(f'/r/{report.id}')

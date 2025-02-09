@@ -5,8 +5,8 @@ WORKDIR /code
 CMD ["python", "-m", "wrep.main"]
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
-ENV CSS_BUILD_DIR=/srv/css
 ENV BOOTSTRAP_DIR=/usr/local/src/bootstrap
+ENV FRONTEND_DIST=/srv/dist
 ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
 RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
@@ -17,4 +17,4 @@ RUN ./scripts/download-warn-scraper.sh &&\
 COPY ./requirements.txt ./
 RUN pip install -qqq --no-cache-dir --no-input -r requirements.txt
 COPY . .
-RUN wrep assets
+RUN wrep frontend build

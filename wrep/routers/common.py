@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from typing import Annotated
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import Depends, Query
+from starlette.datastructures import URL
 
+from .. import settings
 from ..models import *
 
 __all__ = [
@@ -14,6 +18,8 @@ __all__ = [
     'ReportSearchParams',
     'StateSearchParams',
     'FeedSearchParams',
+    'feed_id_encode',
+    'site_absurl',
 ]
 
 TextSearchParam = Annotated[str, Query(description='General text search')]
@@ -248,3 +254,24 @@ CompanySearchParams = Annotated[dict, Depends(company_search_params)]
 NaicsSearchParams = Annotated[dict, Depends(naics_search_params)]
 StateSearchParams = Annotated[dict, Depends(state_search_params)]
 FeedSearchParams = Annotated[dict, Depends(feed_search_params)]
+
+valid_feed_params = tuple(sorted(feed_search_params()))
+
+def clean_feed_params(params: dict) -> FeedSearchParams:
+    return {key: params[key] for key in valid_feed_params if params.get(key) is not None}
+
+def feed_id_encode(params: FeedSearchParams) -> str:
+    params = clean_feed_params(params)
+    items = []
+    for k in params:
+        if not isinstance(v := params[k], list):
+            v = [v]
+        for value in v:
+            items.append((k, value))
+    q = urlencode(items)
+    return base64.urlsafe_b64encode(q.encode()).decode()
+
+def site_absurl(path: str, **components) -> URL:
+    url = settings.SITE_URL
+    return url.replace(path=url.path.rstrip('/') + path, **components)
+

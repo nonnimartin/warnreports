@@ -1,23 +1,57 @@
-import { aajax, escapeHtml, renderError } from './main.js'
-import { createTableComponent, ReportColumns, ReportFieldRender } from './table.js'
+import { aajax, escapeHtml, renderError, renderDate, nf } from '../lib/main.js'
+import { ReportColumns, ReportFieldRender, TableComponent } from '../lib/table.js'
 
 class ReportDetail {
 
     constructor(reportId) {
+
         this.reportId = reportId
+        this.relatedComponent = new TableComponent({
+            id: 'related_reports',
+            title: 'Related',
+            collection: 'reports',
+            columns: ReportColumns,
+            titleTag: 'h3',
+            params: params => ({
+                ...params,
+                company_id: this.report.company_id,
+                id_not: this.report.id,
+                order: '-reported',
+            }),
+            opts: {
+                pageLength: 10,
+                ordering: false,
+                lengthChange: false,
+                filter: false,
+                layout: {
+                    bottomStart: null
+                },
+                autoWidth: false,
+            },
+        })
+        this.relatedComponent.table.on('init.dt', (e, settings, json) => {
+            this.relatedComponent.wrapper.toggle(Boolean(json.recordsFiltered))
+        })
     }
 
     async fetch() {
-        const url = `/api/v0/reports/${this.reportId}`
-        this.report = (await aajax({url})).body
+        if (!this.report) {
+            const url = `/api/v0/reports/${this.reportId}`
+            this.report = (await aajax(url)).body
+        }
     }
 
-    async render() {
+    async build() {
+        try {
+            await this.fetch()
+        } catch(e) {
+            return await renderError(e)
+        }
         const renders = [
             this.renderDetail(),
             this.renderArtifacts(),
             this.renderNaics(),
-            this.renderRelatedTable(),
+            this.renderRelated(),
         ]
         const wrapper = $('<div class="report-view"/>')
         for (const prom of renders) {
@@ -48,9 +82,12 @@ class ReportDetail {
             ['URL', 'url'],
         ]
         const renderers = {...ReportFieldRender}
+        renderers.reported = renderDate
+        renderers.starting = renderDate
+        renderers.employees = nf
         for (const [label, name] of fielddefs) {
-            let value = report[name]
-            if (!value) {
+            const value = report[name]
+            if (value === null) {
                 continue
             }
             const render = renderers[name] || escapeHtml
@@ -72,7 +109,7 @@ class ReportDetail {
         const link = (id, disposition) => $('<a/>')
             .attr({
                 href: `/api/v0/artifacts/${id}/data?disposition=${disposition}`,
-                target: '_blank',
+                target: disposition === 'download' ? undefined : '_blank',
             })
         const row = ({id, name}) => {
             $('<tr/>').appendTo(tbody).append([
@@ -111,35 +148,11 @@ class ReportDetail {
         ])
     }
 
-    async renderRelatedTable() {
-        const {id, company_id} = this.report
-        const defn = {
-            id: 'related_reports',
-            title: 'Related',
-            collection: 'reports',
-            columns: ReportColumns,
-            params: {company_id, id_not: id, order: '-reported'},
-        }
-        const opts = {
-            pageLength: 10,
-            ordering: false,
-            lengthChange: false,
-            filter: false,
-            layout: {
-                bottomStart: null
-            },
-        }
-        return createTableComponent(defn, opts).addClass(['hide-empty', 'hidden'])
+    async renderRelated() {
+        return await this.relatedComponent.build()
     }
 }
-export async function renderPage(target) {
-    const reportId = window.location.pathname.split('/').pop()
-    const detail = new ReportDetail(reportId)
-    try {
-        await detail.fetch()
-    } catch(e) {
-        $(target).html(await renderError(e))
-        return
-    }
-    $(target).html(await detail.render())
-}
+
+export default new ReportDetail(
+    window.location.pathname.split('/').pop()
+)

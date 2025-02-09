@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from . import migrations, orm, pipeline, search, utils
+from . import frontend, migrations, orm, pipeline, search, utils
 
 
 class Command(utils.BaseCommand):
@@ -10,7 +10,7 @@ class Command(utils.BaseCommand):
         search=search.Command,
         migrations=migrations.Command,
         orm=orm.Command,
-        assets=utils.FuncCommand(utils.assets_build))
+        frontend=frontend.Command)
 
 if __name__ == '__main__':
     Command.main()

@@ -4,23 +4,23 @@ import argparse
 import asyncio
 import enum
 import logging
+import logging.config
 import mimetypes
 import re
 from argparse import ArgumentParser, _SubParsersAction
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
                         asynccontextmanager)
 from datetime import datetime, timedelta, timezone
-from functools import cache
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
                     Iterable, Iterator)
 from uuid import UUID
 
 import dateutil.parser
-
-from . import settings
+import yaml
 
 type AP = ArgumentParser
+type Delta = float|str|timedelta
 type EitherIterable[T] = Iterable[T]|AsyncIterable[T]
 type EitherContext[T] = AbstractContextManager[T]|AbstractAsyncContextManager[T]
 type SubParsers = _SubParsersAction[ArgumentParser]
@@ -35,11 +35,41 @@ def get_logger(name: str|None = None) -> logging.Logger:
 
 logger = get_logger('utils')
 
+DELTA_PAT = re.compile(
+    r'^((?P<weeks>[\d.]+?)w)?'
+    r'((?P<days>[\d.]+?)d)?'
+    r'((?P<hours>[\d.]+?)h)?'
+    r'((?P<minutes>[\d.]+?)m)?'
+    r'((?P<seconds>[\d.]+?)s)?'
+    r'((?P<milliseconds>[\d.]+?)ms)?'
+    r'((?P<microseconds>[\d.]+?)us)?$')
+
 def now(**kw) -> datetime:
     dt = datetime.now(tz=kw.pop('tz', None))
     if kw:
         dt += timedelta(**kw)
     return dt
+
+def deltaparse(value: Delta, default_unit: str|None = None) -> timedelta:
+    if isinstance(value, timedelta):
+        return value
+    value = str(value)
+    match = DELTA_PAT.match(value)
+    if match:
+        kw = {
+            name: float(value)
+            for name, value in match.groupdict().items() if value}
+    else:
+        if not default_unit:
+            raise ValueError(value)
+        kw = {default_unit: float(value)}
+    return timedelta(**kw)
+
+def deltaopt(default_unit: str):
+    timedelta(**{default_unit: 1})
+    def opt(value: Delta):
+        return deltaparse(value, default_unit=default_unit)
+    return opt
 
 def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):
@@ -97,12 +127,6 @@ def get_mimetype(value: Any) -> str:
 def file_mtime(file: Path) -> datetime:
     return datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
 
-def render(template: str, *args, **kw) -> str:
-    return get_template(template).render(*args, **kw)
-
-def get_template(template: str):
-    return jinja_env().get_template(template)
-
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -111,8 +135,15 @@ def json_default(value: Any) -> Any:
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
 
 def init_logging() -> None:
-    level = getattr(logging, settings.LOG_LEVEL, logging.INFO)
-    logging.basicConfig(level=level)
+    from . import settings
+    levelname = settings.LOG_LEVEL.upper()
+    file = settings.BASEDIR/'logging.yml'
+    config = yaml.safe_load(file.read_bytes())
+    config['loggers']['wrep']['level'] = levelname
+    config['root']['level'] = sorted(
+        ['INFO', levelname],
+        key=lambda x: getattr(logging, x)).pop()
+    logging.config.dictConfig(config)
 
 async def wait(ret):
     return await ret if asyncio.iscoroutine(ret) else ret
@@ -134,6 +165,7 @@ from .backends.email import instances as email_backends
 
 
 def send_email(recipient: str, subject: str, body: str) -> bool:
+    from . import settings
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_FROM_ADDRESS
     logger.info(f'Sending email {recipient=} {backend=} {subject=}')
@@ -144,29 +176,6 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
         logger.info('Failed to send email.')
     return success
 
-@cache
-def jinja_env():
-    import jinja2
-    loader = jinja2.FileSystemLoader(settings.TEMPLATES_DIR)
-    env = jinja2.Environment(loader=loader)
-    env.filters['nf'] = '{:,}'.format
-    return env
-
-def build_css():
-    logger.info(f'Building css')
-    import sass
-    context = dict(bootstrap_dir=settings.BOOTSTRAP_DIR)
-    outdir = settings.CSS_BUILD_DIR
-    outdir.mkdir(parents=True, exist_ok=True)
-    content = render('scss/bootstrap.scss', context)
-    with Path(outdir, 'bootstrap.css').open('w') as file:
-        file.write(sass.compile(string=content))
-    with Path(outdir, 'bootstrap.min.css').open('w') as file:
-        file.write(sass.compile(string=content, output_style='compressed'))
-
-def assets_build():
-    'Build static web assets'
-    build_css()
 
 class StrEnum(str, enum.Enum):
 

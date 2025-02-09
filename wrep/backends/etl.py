@@ -6,12 +6,13 @@ from abc import abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, AsyncIterable, Callable
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.operations import IndexModel
 
 from .. import search, settings, utils
 from ..models import *
 from ..utils import EitherIterable
+from .mongo import MongoClient
 
 __all__ = [
     'ExtractionBackend',
@@ -27,13 +28,13 @@ __all__ = [
 
 type Doc = dict[str, Any]
 logger = utils.get_logger('backends.etl')
-_mongo_client = AsyncIOMotorClient(settings.ETL_MONGODB_URL, uuidRepresentation='standard')
-_mongo_database_default = _mongo_client.get_database(settings.ETL_MONGODB_DBNAME)
 
-def get_mongo_database(dbname: str|None = None):
-    if dbname:
-        return _mongo_client.get_database(dbname)
-    return _mongo_database_default
+client = MongoClient(
+    url=settings.ETL_MONGODB_URL,
+    control_dbname=settings.ETL_MONGODB_CONTROL_DBNAME,
+    dbname_key='etl.dbname',
+    dbname_ttl=settings.ETL_MONGODB_DBNAME_TTL,
+    dbname_default=settings.ETL_MONGODB_DBNAME)
 
 class ReaderMixin:
 
@@ -74,14 +75,21 @@ class SearchIndexBackend(StageBackend):
     async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
 
 class MongoPipelineLog(PipelineLogBackend):
+    collection_name: str = 'pipelinelogs'
 
     def __init__(self, **context):
         self.context = context
-        self.db = get_mongo_database(context.get('dbname'))
         self._indexes_created = False
+        self._coll = None
+
+    async def collection(self):
+        if self._coll is None:
+            db = await client.get_database(self.context.get('dbname'))
+            self._coll = db.get_collection(self.collection_name)
+        return self._coll
 
     async def save(self, doc):
-        coll = self.db.pipelinelogs
+        coll = await self.collection()
         if not self._indexes_created:
             await coll.create_indexes(self.indexes)
             self._indexes_created = True
@@ -102,23 +110,24 @@ class MongoETBase(StageBackend):
     ordering = []
     clean_keys = []
     stat_clean_keys = []
+    _coll = None
 
-    def __init__(self, state, **context):
-        super().__init__(state, **context)
-        self.db = get_mongo_database(context.get('dbname'))
-
-    @property
-    def collection(self):
-        return self.db.get_collection(self.collection_name)
+    async def collection(self):
+        if self._coll is None:
+            db = await client.get_database(self.context.get('dbname'))
+            self._coll = db.get_collection(self.collection_name)
+        return self._coll
 
     async def clean(self) -> None:
         filt = self.get_filter()
-        res = await self.collection.delete_many(filt)
+        coll = await self.collection()
+        res = await coll.delete_many(filt)
         logger.debug(f'{filt=} {res=}')
 
     @asynccontextmanager
     async def reader(self):
-        it = self.collection.find(self.get_filter()).sort(self.ordering)
+        coll = await self.collection()
+        it = coll.find(self.get_filter()).sort(self.ordering)
         yield utils.amap(self.clean_doc, it)
 
     async def stat(self):
@@ -147,10 +156,11 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
 
     async def update(self, source):
         await self.clean()
-        await self.collection.create_indexes(self.indexes)
+        coll = await self.collection()
+        await coll.create_indexes(self.indexes)
         it = utils.aenumerate(source)
         it = (dict(state=self.state, _i=i) | doc async for i, doc in it)
-        return await update_collection(self.collection, it, self.get_replace_filter)
+        return await update_collection(coll, it, self.get_replace_filter)
 
     def get_replace_filter(self, doc: Doc) -> Doc:
         return dict(_i=doc['_i'], state=self.state)
@@ -166,8 +176,9 @@ class MongoTranslation(MongoETBase, TranslationBackend):
     clean_keys = ['_id', 'row']
 
     async def update(self, source):
-        await self.collection.create_indexes(self.indexes)
-        return await update_collection(self.collection, source, self.get_replace_filter)
+        coll = await self.collection()
+        await coll.create_indexes(self.indexes)
+        return await update_collection(coll, source, self.get_replace_filter)
 
     def get_replace_filter(self, entry: Doc) -> Doc:
         return {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
@@ -179,15 +190,18 @@ class MongoTranslation(MongoETBase, TranslationBackend):
     ]
 
 class MongoSearchIndex(SearchIndexBackend):
-    collections = search.collections
+    collections = search.collection_defns
+    _db = None
 
-    def __init__(self, state, **context):
-        super().__init__(state, **context)
-        self.db = search.get_mongo_database(context.get('dbname'))
+    async def db(self):
+        if self._db is None:
+            self._db = await search.client.get_database(self.context.get('dbname'))
+        return self._db
 
     async def clean(self) -> None:
+        db = await self.db()
         for name in self.collections:
-            coll = self.db.get_collection(name)
+            coll = db.get_collection(name)
             if name == 'naics':
                 coro = coll.drop()
             elif name == 'artifacts':
@@ -204,11 +218,11 @@ class MongoSearchIndex(SearchIndexBackend):
             await coro
 
     async def stat(self):
-        it = self.db.reports.find(dict(state=self.state)).sort('id')
+        it = (await self.db()).reports.find(dict(state=self.state)).sort('id')
         return await docs_stat(it)
 
     async def update(self, name, source):
-        coll = self.db.get_collection(name)
+        coll = (await self.db()).get_collection(name)
         await coll.create_indexes(self.collections[name].indexes)
         it = (inst.as_doc() async for inst in utils.as_aiter(source))
         key = 'id' if name in ('states', 'naics') else '_id'
