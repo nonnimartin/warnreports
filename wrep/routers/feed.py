@@ -49,7 +49,7 @@ async def feed_permalink(fmt: str, id: str) -> HTMLResponse:
 
 async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     params = clean_feed_params(params)
-    title = f'WARN Reports {query_description(params)}'.strip()
+    title = f'warnreports {query_description(params)}'.strip()
     id = feed_id_encode(params)
     url = str(id_permalink(id, fmt))
     feed = FeedGenerator()
@@ -58,6 +58,7 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     feed.language('en')
     feed.title(title)
     feed.description(title)
+    feed.generator('')
     params = dict(params, order='-reported')
     result = search.Search(ReportData, params, settings.FEED_ENTRY_LIMIT)
     async for report in result.objs():

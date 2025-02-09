@@ -7,6 +7,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from itertools import chain
+from pathlib import Path
 from typing import Any, Iterable
 
 from sentry_sdk import capture_exception
@@ -328,7 +329,7 @@ class Pipeline:
     def save_artifacts(self, report: Report, index: dict[str, str]) -> SaveType:
         save = SaveType.Nochange
         index = {
-            f'{self.state.lower()}/{key}': value
+            str(Path(f'{self.state.lower()}/{key}')): value
             for key, value in index.items()}
         oldmap = {a.id: a for a in report.artifacts}
         artifacts: list[Artifact] = []

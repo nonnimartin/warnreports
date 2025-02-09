@@ -356,7 +356,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
             memo['reports'].add(report.id)
 
     def self_update(self) -> bool:
-        file = Path(settings.ARTIFACTS_DIR, self.path)
+        file = Path(f'{settings.ARTIFACTS_DIR}/{self.path}')
         with file.open('rb') as f:
             digest = hashlib.file_digest(f, 'sha1')
         stat = file.stat()

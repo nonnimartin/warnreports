@@ -59,11 +59,11 @@ class FeedComponent {
             searchForm: this.form,
             params: {
                 order: '-reported',
-                limit: 50,
+                limit: 10,
                 offset: 0,
             },
             opts: {
-                paging: false,
+                // paging: false,
                 ordering: false,
                 lengthChange: false,
                 filter: false,
@@ -83,6 +83,15 @@ class FeedComponent {
                 this.feedInfo.html(await renderError(e))
             }
         })
+        this.wrapper.append(this.tableComponent.wrapper)
+        const fmkp = (title, fmt) => $(`
+                <div class="card feed-markup-wrapper format-${fmt} gy-3">
+                    <div class="card-header markup-title format-${fmt} h5">${title}</div>
+                    <div class="card-body feed-markup-content"></div>
+                </div>`)
+            .appendTo(this.wrapper)
+            .find('.feed-markup-content')
+        this.feedMarkups = {rss: fmkp('RSS', 'rss'), atom: fmkp('Atom', 'atom')}
     }
 
     async build() {
@@ -94,7 +103,7 @@ class FeedComponent {
                 $(`:input[name="${name}"]`, this.form).val(params.getAll(name).join(','))
             }
         }
-        this.wrapper.append(await this.tableComponent.build())
+        await this.tableComponent.build()
         return this.wrapper
     }
 
@@ -123,6 +132,8 @@ class FeedComponent {
     async updateFeedInfo() {
         if (!this.feedId) {
             this.feedInfo.html('')
+            this.feedMarkups.rss.empty().closest('.feed-markup-wrapper').hide()
+            this.feedMarkups.atom.empty().closest('.feed-markup-wrapper').hide()
             return
         }
         const description = feedDescription(this.feedId)
@@ -134,10 +145,15 @@ class FeedComponent {
             rss: `/feed/rss/${this.feedId}`,
         }
         const fmtItem = title => {
-            const url = urls[title.toLowerCase()]
+            const fmt = title.toLowerCase()
+            const url = urls[fmt]
             return [
                 `<dt>${title}</dt>`,
-                $(`<dd/>`).append($('<a/>').attr({href: url}).text(url)),
+                $(`<dd/>`).append(
+                    $(`<a class="feed-link ${fmt}-link"/>`)
+                        .attr({href: url})
+                        .text(url)
+                ),
             ]
         }
         this.feedInfo.html([
@@ -146,15 +162,23 @@ class FeedComponent {
             ...fmtItem('RSS'),
             ...fmtItem('Atom'),
         ])
-        const getTasks = Object.fromEntries(Object.entries(urls).map(([type, url]) => [type, aajax(url)]))
-        const targets = {
-            rss: $('<div/>').appendTo(this.feedInfo).hide(),
-            atom: $('<div/>').appendTo(this.feedInfo).hide(),
+        const cmXml = ({body}, opts) => cm({
+            value: body.children[0].outerHTML,
+            mode: 'xml',
+            ...(opts || {}),
+        })
+        const tasks = []
+        for (const [type, url] of Object.entries(urls)) {
+            const target = this.feedMarkups[type]
+            target.empty().closest('.feed-markup-wrapper').show()
+            tasks.push(
+                aajax(url)
+                    .then(res => cmXml(res, {target}))
+                    .catch(async err => target.html(await renderError(err)))
+            )
         }
-        for (const [type, task] of Object.entries(getTasks)) {
-            task.then(({body}) => {
-                cm(targets[type], {value: body.children[0].outerHTML, mode: 'xml'})
-            }).catch(renderError)
+        for (const task of tasks) {
+            await task
         }
     }
 }

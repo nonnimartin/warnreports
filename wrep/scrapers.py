@@ -1544,6 +1544,7 @@ class Artifacts:
         self.metrics = defaultdict(int)
 
     def add(self, key: str, file: Path|None = None) -> tuple[SaveType, int]:
+        key = key.strip('/')
         file = file or self.src/key
         dest = self.dir/key
         sta = file.stat()

@@ -1,2 +1,7 @@
 @import url(https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css);
 @import url(https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/seti.min.css);
+@import url(https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/theme/rubyblue.min.css);
+
+.cm-target {
+    font-size: 0.875em;
+}
