@@ -53,6 +53,7 @@ COMPANY_NAMES: NormDefs = {
     'Carbon Health': [
         'Carbon Health Medical Group',
     ],
+    'Caterpillar': _sw,
     'CVS': [
         _r(r'^cvs\s.*', re.I),
     ],
@@ -67,7 +68,9 @@ COMPANY_NAMES: NormDefs = {
     'Goodwill': [
         _r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
     ],
-    'Hard Rock Cafe': _sw,
+    'Hard Rock Cafe': [
+        _r(r'^Hard Rock (Cafe|Café|International|Hotel).*', re.I),
+    ],
     'Hawker Beechcraft': [
         _r(r'^Hawker Beechcraft Corp.*', re.I),
     ],
@@ -104,6 +107,7 @@ COMPANY_NAMES: NormDefs = {
     ],
     'LSC Communications': _sw,
     'LTF Club Management Company': _sw('LTF Club Management'),
+    'ManpowerGroup': _sw,
     'Marvell Semiconductor': _sw,
     'Meta Platforms': _sw,
     'Nordstrom': [
@@ -114,6 +118,7 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
     ],
     'Packers Sanitation Services': _sw('Packers Sanitation'),
+    'PepsiCo': _sw,
     'Pitney Bowes': [
         _r(r'^(Newgistics.*)?Pitney Bowes.*', re.I),
     ],
@@ -157,6 +162,7 @@ COMPANY_NAMES: NormDefs = {
     'Symantec': [
         _r(r'^Symantec( -.*|Corp.*)?$', re.I),
     ],
+    'T-Mobile': _sw,
     'Tesla': [
         'Tesla Inc',
     ],

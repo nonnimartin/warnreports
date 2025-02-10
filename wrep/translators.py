@@ -897,6 +897,11 @@ class MI(Translator):
         'Incident Type': 'action',
         'Number of Layoffs': 'employees'
     }
+    rewrites=dict(
+        company=[
+            (_r(r'\u00ef\u00bf\u00bd'), 'e'),
+        ],
+    )
 
 class MO(Translator):
     default_url = 'https://jobs.mo.gov/warn/'
