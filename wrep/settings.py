@@ -43,3 +43,4 @@ SENTRY_ENABLED = getenv('SENTRY_ENABLED', '').lower() == 'true'
 SENTRY_DSN = getenv('SENTRY_DSN', '')
 SENTRY_ENVIRONMENT = getenv('SENTRY_ENVIRONMENT', 'dev')
 UVICORN_RELOAD = getenv('UVICORN_RELOAD', '').lower() == 'true'
+UVICORN_PROXY_HEADERS = getenv('UVICORN_PROXY_HEADERS', '').lower() == 'true'

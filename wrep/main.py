@@ -23,6 +23,19 @@ async def _default_lifespan(app: FastAPI):
     utils.init_logging()
     yield
 
+async def set_proxy_client(req: Request, call_next):
+    fwd = req.headers.get('x-forwarded-for')
+    if fwd:
+        port = req.client.port
+        prt = req.headers.get('x-forwarded-port')
+        if prt:
+            try:
+                port = int(prt.split(' ')[-1])
+            except ValueError:
+                logger.warning(f'Invalid port in {prt}', exc_info=True)
+        req.scope['client'] = (fwd.split(' ')[-1], port)
+    return await call_next(req)
+
 def _create_app(**kw):
     kw = dict(
         lifespan=_default_lifespan,
@@ -31,6 +44,8 @@ def _create_app(**kw):
         docs_url='/api/docs/swagger',
         redoc_url='/api/docs/redoc') | kw    
     app = FastAPI(**kw)
+    if settings.UVICORN_PROXY_HEADERS:
+        app.middleware('http')(set_proxy_client)
     app.add_exception_handler(MissingControlDoc, missing_control_doc)
     return app
 
