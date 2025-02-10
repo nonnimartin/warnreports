@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import ipaddress
 
 import click
 from fastapi import FastAPI, HTTPException, Request, status
@@ -24,16 +25,14 @@ async def _default_lifespan(app: FastAPI):
     yield
 
 async def set_proxy_client(req: Request, call_next):
-    fwd = req.headers.get('x-forwarded-for')
-    if fwd:
-        port = req.client.port
-        prt = req.headers.get('x-forwarded-port')
-        if prt:
-            try:
-                port = int(prt.split(' ')[-1])
-            except ValueError:
-                logger.warning(f'Invalid port in {prt}', exc_info=True)
-        req.scope['client'] = (fwd.split(' ')[-1], port)
+    if (fwd := req.headers.get('x-forwarded-for')):
+        addr = fwd.split(' ')[-1]
+        try:
+            ip, port = addr.rsplit(':', 1)
+            ip = ipaddress.ip_address(ip.strip('[]'))
+            req.scope['client'] = (str(ip), int(port))
+        except:
+            logger.warning(f'Cannot parse x-forwarded-for {addr=}')
     return await call_next(req)
 
 def _create_app(**kw):
