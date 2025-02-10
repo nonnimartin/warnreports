@@ -361,6 +361,8 @@ class CollectionCmdBase(utils.BaseCommand):
             self.funckw.update(lazy=opts.lazy)
 
     async def run(self):
+        if self.opts.dbname:
+            logger.info(f'Using search dbname={self.opts.dbname}')
         db = await client.get_database(self.opts.dbname)
         names = self.opts.names or collection_defns
         results: dict[str, Any] = {}

@@ -80,6 +80,7 @@ class MongoClient:
             _id=self.doc_id,
             key=self.dbname_key,
             value=dbname,
+            dbid=uuid.uuid5(settings.NAMESPACE, f'dbid:{dbname}'),
             updated=now)
         if ttl is None:
             ttl = self.dbname_ttl
