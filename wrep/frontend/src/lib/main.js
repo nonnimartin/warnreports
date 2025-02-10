@@ -98,4 +98,8 @@ export const cache = new Cache('wrdata_', {
         duration: 5 * 60 * 1000,
         source: '/api/v0/_db',
     },
+    naicsRoots: {
+        duration: 30 * 60 * 1000,
+        source: '/api/v0/naics?depth_max=0',
+    },
 })

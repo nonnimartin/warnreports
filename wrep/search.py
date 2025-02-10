@@ -311,6 +311,8 @@ class Search[DM: DataModel]:
         return (await self.db()).get_collection(self.collection_name)
 
     async def count(self) -> int:
+        if settings.QUERY_LOGGING:
+            logger.info(f'COUNT q={self.q}')
         return await (await self.collection()).count_documents(self.q)
 
     async def tolist(self) -> list[DM]:
@@ -323,6 +325,8 @@ class Search[DM: DataModel]:
     async def docs(self) -> AsyncIterator[dict[str, Any]]:
         if self.limit == 0:
             return utils.as_aiter(())
+        if settings.QUERY_LOGGING:
+            logger.info(f'FIND q={self.q}')
         cur = (await self.collection()).find(self.q)
         if self.orders:
             cur = cur.sort(self.orders)
