@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import ipaddress
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import click
 from fastapi import FastAPI, HTTPException, Request, status
@@ -48,28 +49,25 @@ def _create_app(**kw):
     app.add_exception_handler(MissingControlDoc, missing_control_doc)
     return app
 
-app = _create_app(lifespan=frontend.lifespan)
-app.include_router(frontend.router, include_in_schema=False)
-app.include_router(routers.backend)
-backend_app = _create_app()
-backend_app.include_router(routers.backend)
-search_app = _create_app()
-search_app.include_router(routers.search)
-artifacts_app = _create_app(title='warnreports artifacts')
-artifacts_app.include_router(routers.artifacts)
-frontend_app = _create_app(lifespan=frontend.lifespan, title='warnreports frontend')
-frontend_app.include_router(frontend.router, include_in_schema=False)
+apps = SimpleNamespace()
+apps.frontend = _create_app(lifespan=frontend.lifespan, title='warnreports frontend')
+apps.frontend.include_router(frontend.router, include_in_schema=False)
+apps.search = _create_app()
+apps.search.include_router(routers.search)
+apps.artifacts = _create_app(title='warnreports artifacts')
+apps.artifacts.include_router(routers.artifacts)
+apps.backend = _create_app()
+apps.backend.include_router(routers.backend)
+apps.app = _create_app(lifespan=frontend.lifespan)
+apps.app.include_router(frontend.router, include_in_schema=False)
+apps.app.include_router(routers.backend)
 
 
 if __name__ == '__main__':
     import uvicorn
 
     def cmd(*, role: str, **kw):
-        if role == 'app':
-            appname = 'app'
-        elif role in ('backend', 'search', 'artifacts', 'frontend'):
-            appname = f'{role}_app'
-        else:
+        if not hasattr(apps, role):
             raise ValueError(role) 
         logger.info(f'Starting uvicorn {role=}')
         pkgdirname = settings.BASEDIR.name
@@ -81,7 +79,7 @@ if __name__ == '__main__':
                     *map(
                         f'{pkgdirname}/''frontend/src/**/*.{}'.format,
                         'js css scss jinja'.split())])
-        return uvicorn.main.callback(f'{pkgdirname}.main:{appname}', **kw)
+        return uvicorn.main.callback(f'{pkgdirname}.main:apps.{role}', **kw)
     params = [
         click.Argument(['role'], default='app'),
         *uvicorn.main.params[1:]]

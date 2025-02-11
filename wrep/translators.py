@@ -152,6 +152,7 @@ class Translator:
                 data = {}
         artifacts = {}
         for path, url in data.items():
+            path = path.strip('/')
             try:
                 HttpUrl(url)
                 Path(path)
