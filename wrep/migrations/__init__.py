@@ -16,9 +16,9 @@ class AutoHelper:
 
     def __init__(self, message: str|None = None):
         self.message = message
+        self.config = Config(settings.ALEMBIC_INI)
 
     def run(self) -> None:
-        self.config = Config(settings.ALEMBIC_INI)
         with orm.engine.begin() as connection:
             self.config.attributes['connection'] = connection
             if self.has_changes():

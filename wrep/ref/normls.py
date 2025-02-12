@@ -77,6 +77,7 @@ COMPANY_NAMES: NormDefs = {
     'Hostess Brands': [
         _r(r'^Hostess( Brand.*)?$', re.I),
     ],
+    'HyAxiom': _sw,
     'Intel Corporation': [
         _r(r'^Intel( Corp.*)?$', re.I),
     ],
@@ -159,6 +160,7 @@ COMPANY_NAMES: NormDefs = {
     'SunPower': [
         _r(r'^SunPower( Corp.*)?$', re.I),
     ],
+    'Syzygy Plasmonics': _sw('Syzygy'),
     'Symantec': [
         _r(r'^Symantec( -.*|Corp.*)?$', re.I),
     ],
@@ -171,6 +173,7 @@ COMPANY_NAMES: NormDefs = {
     ],
     'Transamerica Insurance': _sw('Transamerica Life'),
     'Transdev Services': _sw,
+    'True Value': [_sw, 'Ziegler True Value'],
     'Tyson Foods': [
         _r(r'^(Tyson|Keystone) Foods.*', re.I),
     ],
@@ -181,6 +184,7 @@ COMPANY_NAMES: NormDefs = {
     'United Retail Service': [
         _r(r'^United Retail Service(, LLC)? -.*', re.I),
     ],
+    'US Foods': _r(r'^US Foods(,? .*)?$'),
     'Visionworks': _sw,
     'Walgreens': [
         _sw,
