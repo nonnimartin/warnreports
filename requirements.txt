@@ -24,7 +24,8 @@ pyopenssl
 tenacity
 # xlrd
 retry
-# selenium
+lxml_html_clean
+selenium
 # xvfbwrapper
 # webdriver-manager
 

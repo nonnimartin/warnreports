@@ -9,7 +9,7 @@ ENV BOOTSTRAP_DIR=/usr/local/src/bootstrap
 ENV FRONTEND_DIST=/srv/dist
 ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
-RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
+RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev chromium-chromedriver &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
 RUN ./scripts/download-warn-scraper.sh &&\

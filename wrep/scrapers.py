@@ -6,6 +6,8 @@ import hashlib
 import json
 import re
 import shutil
+import os
+import time
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -27,6 +29,10 @@ from openpyxl.worksheet.worksheet import Worksheet
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
 from typing_extensions import Buffer
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
 
 import warn.cache
 import warn.runner
@@ -676,6 +682,110 @@ class IN(Scraper):
         if a:
             return self.absurl(a['href'])
         return cell.text.strip()
+
+class KY(Scraper):
+
+    async def scrape(self) -> None:
+
+        self.runner.scrape()
+        index = dict(await self.build_artifacts_index())
+        self.cache.write_json('artifacts.json', index, indent=2)
+        
+        # for key, url in index.values():
+        #     await self.cache_download(key, url, missing_only=True)
+        #     self.artifacts.add(key, self.cache.topath(key))
+
+    
+    async def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
+        "Build the artifacts index from the downloaded csv"
+        csv_file_path = self.cache.topath('ky.csv')
+        csv_dict = {}
+        user_agent = {'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'}
+        chromedriver_path = shutil.which("chromedriver")
+        service = webdriver.ChromeService(executable_path=chromedriver_path)
+
+        # Function to process a single URL
+        async def process_url(url):
+            # Use Selenium to render the page
+            options = webdriver.ChromeOptions()
+            options.add_argument('--headless')  # Run in headless mode
+            options.add_argument('--no-sandbox')
+            options.add_experimental_option("prefs", {
+            "download.default_directory": r"/code/build/artifacts/ky/records",
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True
+            })
+
+            # Initialize the Chrome driver
+            driver = webdriver.Chrome(service=service, options=options)
+            try:
+                # Navigate to the URL
+                driver.get(url)
+                time.sleep(5)  # Wait for the page to fully render (adjust as needed)
+
+                # Get the page source after JavaScript rendering
+                page_source = driver.page_source
+                buttons = driver.find_elements(By.CSS_SELECTOR, "button")
+                for button in buttons:
+                    if 'data-key="download"' in button.get_attribute('innerHTML'):
+                        button.click()
+                        time.sleep(5)
+                        downloads = driver.get("chrome://downloads/")
+                        print('********************************************')
+                        print(downloads)
+                        driver.page_source
+                        #print(page_source)
+                exit()
+
+            finally:
+                # Close the browser
+                driver.quit()      
+
+        async def read_csv():
+            # Initialize the CSV reader
+            with open(csv_file_path, mode='r') as file:
+                csv_reader = csv.DictReader(file)  # Assumes the first row contains headers
+
+                # Loop through each row in the CSV
+                for row in csv_reader:
+                    # Extract data from the row (e.g., a URL or other parameters)
+                    url = row['Notice URL']  # Replace 'url' with the actual column name in your CSV
+                    if type(url) == str:
+                        # Process the URL
+                        await process_url(url)
+
+        try:
+            # Check if an event loop is already running
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # If no event loop is running, create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        # Run the main function
+        if loop.is_running():
+            # If the loop is already running, schedule the task
+            loop.create_task(read_csv())
+        else:
+            # Otherwise, run the loop
+            loop.run_until_complete(read_csv())
+
+        # with open(csv_file_path, mode='r', newline='', encoding='utf-8') as file:
+        #     csv_reader = csv.DictReader(file)
+            
+        #     for row in csv_reader:
+        #         notice_url = row['Notice URL']
+        #         session = AsyncHTMLSession()
+        #         response = await session.get(notice_url)
+        #         await session.close()
+        #         render = response.html.render()
+        #         print(render)
+        #         await session.close()
+                
+                # print(res.status_code, res.headers['location'])
+                # unique_id = f"{row['Company Name']}_{row['Notice URL']}"
+                # print(row)
+                # csv_dict[unique_id] =
 
 class LA(Scraper):
     base_url = 'https://www.laworks.net'
