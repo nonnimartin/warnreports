@@ -27,12 +27,16 @@ COMPANY_NAMES: NormDefs = {
         'Advanced Micro Devices Inc',
         'AMD Inc',
     ],
+    'Air Wisconsin Airlines': [
+        'Air Wisconsin',
+    ],
     "Albertson's": [
         _r(r'^albertsons.*', re.I),
     ],
     'Amazon': [
         'Amazon.com',
     ],
+    'Ameri-Kleen': _sw,
     'Aramark': [
         _r(r'^Aramark (-|\(|@|at )', re.I),
     ],
@@ -61,6 +65,10 @@ COMPANY_NAMES: NormDefs = {
     'Enterprise Holdings': _sw,
     'Ericsson Inc': [
         _r(r'^Ericsson,? Inc.*', re.I),
+    ],
+    'Federal Express': [
+        _sw,
+        _sw('FedEx'),
     ],
     'First Student': _sw,
     'G2 Secure Staff': _sw,
@@ -93,6 +101,7 @@ COMPANY_NAMES: NormDefs = {
         'Kmart Store',
     ],
     "Kohl's": _sw,
+    'LEGOLAND': _sw,
     'Levi Strauss & Company': [
         _r(r'^.*Levi Strauss & Co.*$'),
     ],
@@ -103,6 +112,7 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^Levy Premium Food\s*service.*', re.I),
     ],
     'Lockheed Martin': _sw,
+    'LogRhythm': _sw,
     'Lord & Taylor': [
         _r(r'^Lord\s*(&|\+|and)\s*(Taylor|Tyalor)(\s.*|$)', re.I),
     ],
