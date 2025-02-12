@@ -704,11 +704,11 @@ class KY(Scraper):
         chromedriver_path = shutil.which("chromedriver")
         service = webdriver.ChromeService(executable_path=chromedriver_path)
 
-        # Function to process a single URL
+    
         async def process_url(url):
             # Use Selenium to render the page
             options = webdriver.ChromeOptions()
-            options.add_argument('--headless')  # Run in headless mode
+            options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_experimental_option("prefs", {
             "download.default_directory": r"/code/build/artifacts/ky/records",
@@ -721,21 +721,14 @@ class KY(Scraper):
             try:
                 # Navigate to the URL
                 driver.get(url)
-                time.sleep(5)  # Wait for the page to fully render (adjust as needed)
+                # Wait for the page to fully render
+                time.sleep(2) 
 
-                # Get the page source after JavaScript rendering
-                page_source = driver.page_source
                 buttons = driver.find_elements(By.CSS_SELECTOR, "button")
                 for button in buttons:
                     if 'data-key="download"' in button.get_attribute('innerHTML'):
                         button.click()
-                        time.sleep(5)
-                        downloads = driver.get("chrome://downloads/")
-                        print('********************************************')
-                        print(downloads)
-                        driver.page_source
-                        #print(page_source)
-                exit()
+                        time.sleep(2)
 
             finally:
                 # Close the browser
