@@ -33,6 +33,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 import warn.cache
 import warn.runner
@@ -687,10 +688,14 @@ class KY(Scraper):
 
     async def scrape(self) -> None:
 
+        self.broken_links_map = {
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg' : '',
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM' : ''
+        }
+
         self.runner.scrape()
         index = dict(await self.build_artifacts_index())
         self.cache.write_json('artifacts.json', index, indent=2)
-        
         # for key, url in index.values():
         #     await self.cache_download(key, url, missing_only=True)
         #     self.artifacts.add(key, self.cache.topath(key))
@@ -699,14 +704,29 @@ class KY(Scraper):
     async def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
         "Build the artifacts index from the downloaded csv"
         csv_file_path = self.cache.topath('ky.csv')
-        csv_dict = {}
-        user_agent = {'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'}
         chromedriver_path = shutil.which("chromedriver")
         service = webdriver.ChromeService(executable_path=chromedriver_path)
+        artifact_dict = {}
 
+        async def read_csv():
+            # Initialize the CSV reader
+            with open(csv_file_path, mode='r') as file:
+                csv_reader = csv.DictReader(file)
+
+                # Loop through each row in the CSV
+                for row in csv_reader:
+                    # Extract data from the row (e.g., a URL or other parameters)
+                    url = row['Notice URL']
+                    if url == 'https://kydev.my.salesforce.com':
+                        url = ''
+                    if url in self.broken_links_map.keys():
+                        url = ''
+                    if type(url) == str:
+                        if len(url) != 0:
+                            await process_url(url)
     
         async def process_url(url):
-            # Use Selenium to render the page
+            # Render the page
             options = webdriver.ChromeOptions()
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
@@ -722,30 +742,37 @@ class KY(Scraper):
                 # Navigate to the URL
                 driver.get(url)
                 # Wait for the page to fully render
-                time.sleep(2) 
+                time.sleep(8)
+                page_source = driver.page_source
+                wait = WebDriverWait(driver, 10)
+                # Get element with file format info
+                try:
+                    element = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//*[contains(text(), 'Word document') or contains(text(), 'Adobe PDF')]")))[0]
+                    doc_type = element.get_attribute('innerHTML')
+                except:
+                    doc_type = 'XXXXXXXX'
+                    
+                title = self.find_title(page_source)
+                print('title: ' + str(title))
+                filename = self.build_url(doc_type, title)
 
-                buttons = driver.find_elements(By.CSS_SELECTOR, "button")
+                # Add entry to artifacts dictionary
+                print('*****************')
+                print(url)
+                artifact_dict[url] = ['records/' + filename]
+                print(artifact_dict)
+
+
+                # Click on button to download
+                buttons = driver.find_elements(By.CSS_SELECTOR, 'button')
                 for button in buttons:
                     if 'data-key="download"' in button.get_attribute('innerHTML'):
                         button.click()
-                        time.sleep(2)
+                        time.sleep(10)
 
             finally:
                 # Close the browser
                 driver.quit()      
-
-        async def read_csv():
-            # Initialize the CSV reader
-            with open(csv_file_path, mode='r') as file:
-                csv_reader = csv.DictReader(file)  # Assumes the first row contains headers
-
-                # Loop through each row in the CSV
-                for row in csv_reader:
-                    # Extract data from the row (e.g., a URL or other parameters)
-                    url = row['Notice URL']  # Replace 'url' with the actual column name in your CSV
-                    if type(url) == str:
-                        # Process the URL
-                        await process_url(url)
 
         try:
             # Check if an event loop is already running
@@ -762,23 +789,33 @@ class KY(Scraper):
         else:
             # Otherwise, run the loop
             loop.run_until_complete(read_csv())
+        print(artifact_dict)
+        return artifact_dict
+        
+    def find_title(self, text):
+        # Define the starting string
+        start_str = "Page 1 of "
+        # Find the starting index of the starting string
+        start_index = text.find(start_str)
+        # If the starting string is not found, return None
+        if start_index == -1:
+            return None
+        # Adjust the start index to begin after the starting string
+        start_index += len(start_str)
+        # Find the index of the next double quote after the starting string
+        end_index = text.find('"', start_index)
+        # If no next double quote is found, return None
+        if end_index == -1:
+            return None
+        # remove beginning
+        filename = text[start_index:end_index].split(', ')[1]
+        # Extract and return the text between the starting string and the next double quote
+        return filename
+    
+    def build_url(self, file_type, file_name):
+        extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
+        return file_name + extension
 
-        # with open(csv_file_path, mode='r', newline='', encoding='utf-8') as file:
-        #     csv_reader = csv.DictReader(file)
-            
-        #     for row in csv_reader:
-        #         notice_url = row['Notice URL']
-        #         session = AsyncHTMLSession()
-        #         response = await session.get(notice_url)
-        #         await session.close()
-        #         render = response.html.render()
-        #         print(render)
-        #         await session.close()
-                
-                # print(res.status_code, res.headers['location'])
-                # unique_id = f"{row['Company Name']}_{row['Notice URL']}"
-                # print(row)
-                # csv_dict[unique_id] =
 
 class LA(Scraper):
     base_url = 'https://www.laworks.net'
