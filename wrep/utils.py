@@ -11,6 +11,7 @@ from argparse import ArgumentParser, _SubParsersAction
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
                         asynccontextmanager)
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
                     Iterable, Iterator)
@@ -148,7 +149,7 @@ def init_logging() -> None:
 async def wait(ret):
     return await ret if asyncio.iscoroutine(ret) else ret
 
-async def amap(func, it):
+async def amap[T, R](func: Callable[[T], R], it: EitherIterable[T]) -> AsyncIterator[R]:
     async for x in as_aiter(it):
         yield await wait(func(x))
 
@@ -160,6 +161,21 @@ async def awith[T](ctx: EitherContext[T]):
     else:
         with ctx as it:
             yield it
+
+async def achain_from_iterable[T](it: EitherIterable[EitherIterable[T]]) -> AsyncIterator[T]:
+    async for it in as_aiter(it):
+        async for x in as_aiter(it):
+            yield x
+
+def lazyprop[S, T, F: Callable[[S], T]](wrapped: F) -> property[T]:
+    name = wrapped.__name__
+    @wraps(wrapped)
+    def wrapper(self: S) -> T:
+        try:
+            return self.__dict__[name]
+        except KeyError:
+            return self.__dict__.setdefault(name, wrapped(self))
+    return property(wrapper)
 
 from .backends.email import instances as email_backends
 
@@ -228,15 +244,12 @@ class BaseCommand:
     @classmethod
     def init_parser(cls, parser: AP) -> None:
         parser.formatter_class = cls.formatter_class
-        parser.description = (
-            cls.__dict__.get('description') or
-            cls.__doc__ or
-            cls.description)
+        parser.description = cls.description
         parser.prog = cls.prog or parser.prog
         parser.usage = cls.usage or parser.usage
         cls.add_arguments(parser)
         cls.add_commands(parser)
-        fmt = dict(prog=parser.prog)
+        fmt = cls.parser_fmtargs(parser)
         if parser.description:
             parser.description = parser.description.format(**fmt)
         if parser.usage:
@@ -266,6 +279,10 @@ class BaseCommand:
             required=True)
 
     @classmethod
+    def parser_fmtargs(cls, parser: AP) -> dict[str, Any]:
+        return dict(prog=parser.prog)
+
+    @classmethod
     def main(cls, args=None):
         parser = cls.create_parser()
         opts = parser.parse_args(args)
@@ -290,6 +307,10 @@ class BaseCommand:
 
     def __init_subclass__(cls) -> None:
         cls.command_opt = f'_command_{abs(hash(cls))}'
+        cls.description = (
+            cls.__dict__.get('description') or
+            cls.__doc__ or
+            cls.description)
 
 def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
     class Base(BaseCommand):

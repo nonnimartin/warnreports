@@ -6,6 +6,7 @@ import io
 import json
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar, Iterable, Iterator
@@ -33,7 +34,8 @@ __all__ = [
     'Report',
     'ReportMod',
     'SessionLocal',
-    'StateStat']
+    'StateStat',
+    'ensure_session']
 
 type ReportRowType = tuple[Report, Report, Naics|None, Artifact|None]
 type StateStatRowType = tuple[StateStat]
@@ -45,6 +47,14 @@ logger = utils.get_logger('orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
 mrmodels: dict[str, type[MapReduceBase]] = {}
+
+@contextmanager
+def ensure_session(session: Session|None = None):
+    if session:
+        yield session
+    else:
+        with SessionLocal() as session:
+            yield session
 
 class Base(DeclarativeBase):
 
@@ -127,6 +137,7 @@ ArtifactReport = Table(
 nowopts = dict(server_default=func.now(), default=utils.now)
 
 class Report(MapReduceBase[ReportData, ReportRowType]):
+    NS = uuid.uuid5(settings.NAMESPACE, 'Report')
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm_id: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)

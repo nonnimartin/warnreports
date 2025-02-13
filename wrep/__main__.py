@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from . import frontend, migrations, orm, pipeline, search, utils
+from .backends import etl
 
 
 class Command(utils.BaseCommand):
@@ -9,6 +10,7 @@ class Command(utils.BaseCommand):
         pipeline=pipeline.Command,
         search=search.Command,
         migrations=migrations.Command,
+        etl=etl.Command,
         orm=orm.Command,
         frontend=frontend.Command)
 

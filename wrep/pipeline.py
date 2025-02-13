@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import operator
 import uuid
@@ -8,7 +9,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
-from typing import Any, Iterable
+from types import MappingProxyType as MapProxy
+from typing import TYPE_CHECKING, Any, Iterable
 
 from sentry_sdk import capture_exception
 
@@ -17,8 +19,10 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
-from .scrapers import scrapers
-from .translators import translators
+
+if TYPE_CHECKING:
+    from .scrapers import Scraper
+    from .translators import Translator
 
 logger = utils.get_logger('pipeline')
 
@@ -49,30 +53,41 @@ class Pipeline:
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
         'starting': datetime.fromisoformat}
-    BACKENDS = {
-        Stage.Extract: MongoExtraction,
-        Stage.Translate: MongoTranslation,
-        Stage.Index: MongoSearchIndex}
+    BACKENDS = MapProxy(StageBackend.registry['mongo'])
 
-    def __init__(self, state: str, **opts) -> None:
+    @dataclasses.dataclass
+    class Opts:
+        lazy: bool = True
+
+    def __init__(self, state: str, context: dict[str, Any]|None = None, **opts) -> None:
+        if context is None:
+            context = {}
         self.state = state.upper()
-        self.scraper = scrapers[self.state]()
-        self.translator = translators[self.state]()
-        beopts = _pfxopts(opts, 'etl', 'search')
-        self.backend_opts = {
-            Stage.Extract: beopts['etl'],
-            Stage.Translate: beopts['etl'],
-            Stage.Index: beopts['search']}
+        self.context = context
         self.backends: dict[Stage, StageBackend] = {}
-        self.opts = opts
+        self.opts = self.Opts(**opts)
         self.session: orm.Session|None = None
+
+    @utils.lazyprop
+    def scraper(self):
+        from .scrapers import scrapers
+        return scrapers[self.state]()
+
+    @utils.lazyprop
+    def translator(self):
+        from .translators import translators
+        return translators[self.state]()
+
+    scraper: Scraper
+    translator: Translator
 
     def backend(self, stage: Stage) -> StageBackend:
         try:
             backend = self.backends[stage]
         except KeyError:
-            opts = self.backend_opts[stage]
-            backend = self.BACKENDS[stage](self.state, **opts)
+            backend = self.BACKENDS[stage](
+                self.state,
+                context=self.context)
             self.backends[stage] = backend
         return backend
 
@@ -93,14 +108,14 @@ class Pipeline:
             stat: dict[str, int] = {}
             backend: MongoSearchIndex = self.backend(stage.Index)
             filters = self.get_orm_select_filters()
-            with SessionLocal() as session:
+            with ensure_session(self.session) as session:
                 for name, defn in backend.collections.items():
                     if name in ('naics', 'states'):
                         continue
                     it = defn.orm_model.map_reduce_exec(
                         session,
                         *filters[defn.orm_model],
-                        lazy=bool(self.opts.get('lazy', True)))
+                        lazy=bool(self.opts.lazy))
                     stat[name] = sum(1 for _ in it)
             return stat
         raise ValueError(stage)
@@ -119,13 +134,10 @@ class Pipeline:
             stmts = (
                 orm.delete(model).where(*filters)
                 for model, filters in filters.items())
-            if self.session:
+            with ensure_session(self.session) as session:
                 for stmt in stmts:
-                    self.session.execute(stmt)
-            else:
-                with SessionLocal() as session:
-                    for stmt in stmts:
-                        session.execute(stmt)
+                    session.execute(stmt)
+                if not self.session:
                     session.commit()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
@@ -172,7 +184,8 @@ class Pipeline:
         async with source.reader() as reader:
             with SessionLocal() as session:
                 self.translator.session = session
-                it = utils.amap(self.translator.entry, reader)
+                it = utils.amap(self.translator.entries, reader)
+                it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
             self.translator.session = None
         cur = await self.stat(stage)
@@ -214,7 +227,7 @@ class Pipeline:
                 it = defn.orm_model.map_reduce_exec(
                     session,
                     *filters[defn.orm_model],
-                    lazy=bool(self.opts.get('lazy', True)))
+                    lazy=bool(self.opts.lazy))
                 results[name] = await backend.update(name, it)
         nochange = True
         counts: dict[str, dict[str, int]] = {}
@@ -390,7 +403,6 @@ class Pipeline:
         return value
 
 class PipelineRunner:
-
     GROUPING = {
         Stage.Scrape: 0,
         Stage.Extract: 0,
@@ -409,12 +421,15 @@ class PipelineRunner:
         incremental: bool = False,
         concurrent: bool = False,
         max_workers: int = settings.ETL_DEFAULT_WORKERS,
+        context: dict[str, Any]|None = None,
         **pipeline_opts,
     ):
         if clean_only and (clean or incremental or stat_only):
             raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
         if stat_only and (clean or incremental or clean_only):
             raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
+        if context is None:
+            context = {}
         self.id = uuid.uuid4()
         self.clean = clean
         self.clean_only = clean_only
@@ -430,7 +445,8 @@ class PipelineRunner:
         self.grouping: tuple[list[Stage], ...] = [], [], []
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
-        self.logbackend = MongoPipelineLog(**_pfxopts(pipeline_opts, 'etl')['etl'])
+        self.context = context
+        self.logbackend = PipelineLogBackend.registry['mongo'](context=self.context)
         self.pipeline_opts = pipeline_opts
         self.info = dict(
             id=self.id,
@@ -443,6 +459,7 @@ class PipelineRunner:
                 fail=self.fail,
                 clean_only=self.clean_only,
                 max_workers=self.max_workers),
+            context=self.context,
             pipeline_opts=self.pipeline_opts,
             runs=[])
         self.start: datetime|None = None
@@ -496,7 +513,7 @@ class PipelineRunner:
         if (reason := self._skip_reason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
             return
-        pipeline = Pipeline(state, **self.pipeline_opts)
+        pipeline = Pipeline(state, context=self.context, **self.pipeline_opts)
         if self.stat_only:
             stat = await pipeline.stat(stage)
             logger.info(f'{state}:{stage}:stat {stat}')
@@ -550,12 +567,6 @@ class PipelineRunner:
             if self.incremental and res.get('nochange'):
                 return 'No change'
 
-def _pfxopts(opts: dict[str, Any], *prefixes: str):
-    return {
-        prefix: {
-            key.removeprefix(f'{prefix}_'): opts[key]
-            for key in opts if key.startswith(f'{prefix}_')}
-        for prefix in prefixes}
 
 class Command(utils.BaseCommand):
     description = """
@@ -595,9 +606,16 @@ class Command(utils.BaseCommand):
 
     Available States
     ----------------
-    """ + ' '.join(sorted(scrapers))
+    {states}"""
 
     usage = '{prog} [OPTIONS] <stages> [state ...]'
+
+
+    @classmethod
+    def parser_fmtargs(cls, parser):
+        from .scrapers import scrapers
+        return super().parser_fmtargs(parser) | dict(
+            states=' '.join(sorted(scrapers)))
 
     @classmethod
     def add_arguments(cls, parser):
@@ -656,8 +674,12 @@ class Command(utils.BaseCommand):
             help='Use eager loading of SQL result sets. Uses more memory.')
 
     def setup(self, opts):
+        from .scrapers import scrapers
         opts.states = opts.states or sorted(scrapers)
-        runner_opts = vars(opts)
+        runner_opts = dict(vars(opts))
+        runner_opts['context'] = {
+            'etl.dbname': runner_opts.pop('etl_dbname'),
+            'search.dbname': runner_opts.pop('search_dbname')}
         self.runner = PipelineRunner(**runner_opts)
 
     async def run(self):
@@ -672,7 +694,3 @@ class Command(utils.BaseCommand):
             value = value.replace(stage[0].upper(), f' {stage.value} ')
         trans = {stage[0]: stage for stage in Stage}
         return [Stage(trans.get(value, value)) for value in value.split()]
-
-
-if __name__ == '__main__':
-    Command.main()

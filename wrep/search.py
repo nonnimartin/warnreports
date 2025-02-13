@@ -8,7 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
-from .backends.mongo import MongoClient
+from .backends.mongo import ClientControlCommand, MongoClient
 from .models import *
 
 __all__ = ['filters', 'Search']
@@ -372,45 +372,12 @@ class CollectionCmdBase(utils.BaseCommand):
             if res is not None:
                 results[name] = res
         if res:
-            print(json.dumps(res, indent=2))
+            print(json.dumps(results, indent=2))
 
 def CollectionCmd(method: str) -> type[CollectionCmdBase]:
-    class Cmd(CollectionCmdBase): pass
-    Cmd.method = method
-    Cmd.description = getattr(CollectionDefn, method).__doc__
-    return Cmd
-
-class ControlGetCommand(utils.BaseCommand):
-    'Get the search mongo DB name'
-
-    async def run(self):
-        doc = await client.get_doc()
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlSetCommand(utils.BaseCommand):
-    'Set the search mongo DB name'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            '--ttl',
-            type=utils.deltaopt('seconds'),
-            default=None,
-            help='Override the TTL')
-        arg(
-            'name',
-            help='The database name')
-
-    async def run(self):
-        doc = await client.set_dbname(self.opts.name, ttl=self.opts.ttl)
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlCommand(utils.BaseCommand):
-    'Mongo DB name control commands'
-    commands = dict(
-        get=ControlGetCommand,
-        set=ControlSetCommand)
+    return type(f'{method}_Command', (CollectionCmdBase,), dict(
+        method=method,
+        description=getattr(CollectionDefn, method).__doc__))
 
 class Command(utils.BaseCommand):
     'Search collection commands'
@@ -419,4 +386,4 @@ class Command(utils.BaseCommand):
         init=CollectionCmd('init'),
         build=CollectionCmd('build'),
         clean=CollectionCmd('clean'),
-        control=ControlCommand)
+        control=ClientControlCommand(client))

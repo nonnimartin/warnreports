@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 from contextlib import asynccontextmanager
-from functools import wraps
 from typing import Any, Callable, Coroutine, Iterator, Sequence
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -15,22 +14,15 @@ from .models import *
 type FNext = Callable[[Request], Coroutine[Any, Any, Response]]
 logger = utils.get_logger('main')
 
+appslist: Sequence[str] = []
 
 class Apps:
 
-    appslist: Sequence[str] = []
     opts: dict[str, Any] = dict(proxy_headers=False)
 
-    def wapp[T, F: Callable[[T], FastAPI]](wrapped: F, appslist: list = appslist) -> property[FastAPI]:
-        name = wrapped.__name__
-        appslist.append(name)
-        @wraps(wrapped)
-        def wrapper(self: T) -> FastAPI:
-            try:
-                return self.__dict__[name]
-            except KeyError:
-                return self.__dict__.setdefault(name, wrapped(self))
-        return property(wrapper)
+    def wapp[F: Callable](wrapped: F):
+        appslist.append(wrapped.__name__)
+        return utils.lazyprop(wrapped)
 
     @wapp
     def frontend(self):
@@ -66,7 +58,6 @@ class Apps:
         return app
 
     del(wapp)
-    appslist = tuple(appslist)
 
     def create_app(self, **kw) -> FastAPI:
         kw = dict(
@@ -101,6 +92,7 @@ class Apps:
                 logger.warning(f'Cannot parse x-forwarded-for {fwd=}')
         return await call_next(req)
 
+appslist = tuple(appslist)
 apps = Apps()
 
 del(Apps)
@@ -143,7 +135,7 @@ class Command:
 
     @staticmethod
     def roleopt(ctx, param, value: str) -> str:
-        if value not in apps.appslist:
+        if value not in appslist:
             raise ValueError(value)
         return value
 

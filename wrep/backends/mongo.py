@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 from datetime import timedelta
-from typing import Any
+from typing import Any, Self
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -101,3 +102,48 @@ class MongoClient:
 
 class MissingControlDoc(Exception):
     pass
+
+
+class ControlBaseCommand(utils.BaseCommand):
+    mongo: MongoClient
+
+    @classmethod
+    def parser_fmtargs(cls, parser):
+        return super().parser_fmtargs(parser) | dict(client=cls.mongo)
+
+    @classmethod
+    def fromclient(cls, client: MongoClient) -> type[Self]:
+        return type(cls.__name__, (cls,), dict(mongo=client))
+
+class ControlGetCommand(ControlBaseCommand):
+    'Get the mongo control doc for {client.dbname_key}'
+
+    async def run(self):
+        doc = await self.mongo.get_doc()
+        print(json.dumps(doc, indent=2, default=str))
+
+class ControlSetCommand(ControlBaseCommand):
+    'Update the mongo control doc for {client.dbname_key}'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        arg = parser.add_argument
+        arg(
+            '--ttl',
+            type=utils.deltaopt('seconds'),
+            default=None,
+            help='Override the TTL')
+        arg(
+            'name',
+            help='The database name')
+
+    async def run(self):
+        doc = await self.mongo.set_dbname(self.opts.name, ttl=self.opts.ttl)
+        print(json.dumps(doc, indent=2, default=str))
+
+def ClientControlCommand(client: MongoClient):
+    return type('MongoClientControlCommand', (utils.BaseCommand,), dict(
+        __doc__=f'Mongo control doc commands for {client.dbname_key}',
+        commands=dict(
+            get=ControlGetCommand.fromclient(client),
+            set=ControlSetCommand.fromclient(client))))
