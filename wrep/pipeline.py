@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
+from threading import Thread
 from types import MappingProxyType as MapProxy
 from typing import TYPE_CHECKING, Any, Iterable
 
@@ -405,10 +406,10 @@ class Pipeline:
 class PipelineRunner:
     GROUPING = {
         Stage.Scrape: 0,
-        Stage.Extract: 0,
-        Stage.Translate: 0,
-        Stage.Load: 1,
-        Stage.Index: 2}
+        Stage.Extract: 1,
+        Stage.Translate: 1,
+        Stage.Load: 2,
+        Stage.Index: 3}
 
     def __init__(
         self,
@@ -442,7 +443,8 @@ class PipelineRunner:
         self.states = list(utils.unique(map(str.upper, states)))
         self.errors: list[dict[str, str]] = []
         self.runs: dict[StateCode, list[dict]] = defaultdict(list)
-        self.grouping: tuple[list[Stage], ...] = [], [], []
+        self.grouping: tuple[list[Stage], ...] = tuple(
+            [] for _ in set(self.GROUPING.values()))
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
         self.context = context
@@ -472,9 +474,10 @@ class PipelineRunner:
         if await self._save_log():
             logger.info(f'start id={self.id}')
         try:
-            await self.run_concurrently(*next(it))
+            await self.run_thread_concurrently(*next(it))
+            await self.run_loop_concurrently(*next(it))
             await self.run_consecutively(*next(it))
-            await self.run_concurrently(*next(it))
+            await self.run_loop_concurrently(*next(it))
         finally:
             self.end = utils.now()
             if await self._save_log():
@@ -483,23 +486,55 @@ class PipelineRunner:
     async def run_consecutively(self, *stages: Stage) -> None:
         for state in self.states:
             await self.run_stages(state, *stages)
+            await self._save_log()
 
-    async def run_concurrently(self, *stages: Stage) -> None:
-        if not stages:
-            return
-        if not self.concurrent:
-            await self.run_consecutively(*stages)
-            return
+    async def run_thread_concurrently(self, *stages: Stage) -> None:
+        if not (stages and self.concurrent):
+            return await self.run_consecutively(*stages)
         queue = deque(self.states)
-        async def start_worker():
+        num_workers = min(self.max_workers, len(queue))
+        logger.info(f'concurrent threads={num_workers} stages=[{', '.join(map(str, stages))}]')
+        excs = []
+        def thread_worker():
             while queue and not(self.errors and self.fail):
-                await self.run_stages(queue.popleft(), *stages)
+                try:
+                    state = queue.popleft()
+                except IndexError:
+                    break
+                try:
+                    asyncio.run(self.run_stages(state, *stages))
+                except Exception as err:
+                    excs.append(err)
+                    logger.error(f'Exiting thread due to error')
+                    break
+        workers = [
+            Thread(name=str(i + 1), target=thread_worker)
+            for i in range(num_workers)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        await self._save_log()
+        if excs:
+            if len(excs) == 1:
+                raise excs[0] from None
+            logger.error(f'Encountered {len(excs)} exceptions, raising last')
+            raise excs[-1]
+
+    async def run_loop_concurrently(self, *stages: Stage) -> None:
+        if not (stages and self.concurrent):
+            return await self.run_consecutively(*stages)
+        queue = deque(self.states)
         num_workers = min(self.max_workers, len(queue))
         logger.info(f'concurrent {num_workers=} stages=[{', '.join(map(str, stages))}]')
+        async def loop_worker():
+            while queue and not(self.errors and self.fail):
+                await self.run_stages(queue.popleft(), *stages)
+                await self._save_log()
         try:
             async with asyncio.TaskGroup() as group:
                 for _ in range(num_workers):
-                    group.create_task(start_worker())
+                    group.create_task(loop_worker())
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -513,16 +548,17 @@ class PipelineRunner:
         if (reason := self._skip_reason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
             return
-        pipeline = Pipeline(state, context=self.context, **self.pipeline_opts)
-        if self.stat_only:
-            stat = await pipeline.stat(stage)
-            logger.info(f'{state}:{stage}:stat {stat}')
-            return
         start = utils.now()
-        res = dict(state=state, stage=stage, seq=len(self.info['runs']), start=start, end=None)
-        self.runs[state].append(res)
-        self.info['runs'].append(res)
+        res = dict(state=state, stage=stage, start=start, end=None)
         try:
+            pipeline = Pipeline(state, context=self.context, **self.pipeline_opts)
+            if self.stat_only:
+                stat = await pipeline.stat(stage)
+                logger.info(f'{state}:{stage}:stat {stat}')
+                return
+            res.update(seq=len(self.info['runs']))
+            self.runs[state].append(res)
+            self.info['runs'].append(res)
             if self.clean_only:
                 res.update(clean_only=True)
                 await pipeline.clean(stage)
@@ -539,7 +575,6 @@ class PipelineRunner:
         finally:
             end = utils.now()
             res.update(end=end, elapsed=(end - start).total_seconds())
-            await self._save_log()
 
     def getlog(self) -> dict[str, Any]:
         doc = dict(self.info)
