@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
-from typing import Any, AsyncIterator, Iterable, Iterator, Sequence
+from typing import Any, AsyncIterator, Iterable, Iterator, Literal, Sequence
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
@@ -26,12 +27,14 @@ collection_defns: dict[str, CollectionDefn] = {}
 collections_map: dict[type[DataModel], str] = {}
 filters: dict[type[DataModel], type[MongoFilter|FilterModel]] = {}
 
+@dataclasses.dataclass
 class CollectionDefn:
+    name: str
+    orm_model: type[orm.MapReduceBase]
+    indexes: list[IndexModel]
 
-    def __init__(self, name: str, orm_model: type[orm.MapReduceBase], indexes: Iterable[dict]) -> None:
-        self.name = name
-        self.orm_model = orm_model
-        self.indexes = list(map(IndexModel, indexes))
+    def __post_init__(self) -> None:
+        self.indexes = list(map(IndexModel, self.indexes))
         collection_defns[self.name] = self
         collections_map[self.data_model] = self.name
 
@@ -164,7 +167,7 @@ class MongoFilter:
         return re.compile(f'^{re.escape(text)}.*', flags)
 
     @classmethod
-    def get_naics_filter(cls, naics: list[int], prefix: str = 'naics'):
+    def get_naics_filter(cls, naics: list[int], prefix: str = 'naics') -> dict[Literal['$or'], list[dict[str, Any]]]:
         if prefix:
             prefix = prefix.removesuffix('.') + '.'
         rxs = (
@@ -272,7 +275,6 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoFilter):
             if value:
                 yield {field: value}
         yield from super().get_filters()
-
 
 class Search[DM: DataModel]:
 

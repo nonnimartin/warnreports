@@ -21,6 +21,7 @@ from sqlalchemy.orm import joinedload as joinedload
 from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
+from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 
 from . import settings, utils
 from .models import (ArtifactData, ArtifactDetail, CompanyDetail, DataModel,
@@ -137,7 +138,7 @@ ArtifactReport = Table(
 nowopts = dict(server_default=func.now(), default=utils.now)
 
 class Report(MapReduceBase[ReportData, ReportRowType]):
-    NS = uuid.uuid5(settings.NAMESPACE, 'Report')
+    NS: ClassVar[uuid.UUID] = uuid.uuid5(settings.NAMESPACE, 'Report')
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm_id: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
@@ -202,7 +203,7 @@ class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
             self.last_reported = latest
 
 class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
-    NS = uuid.uuid5(settings.NAMESPACE, 'Company')
+    NS: ClassVar[uuid.UUID] = uuid.uuid5(settings.NAMESPACE, 'Company')
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     name: Mapped[str] = mapped_column(String(512), unique=True)
     name_norm: Mapped[str] = mapped_column(String(512), index=True)
@@ -387,6 +388,14 @@ class ReportMod(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     ns: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
     first_scraped: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+STMT_REPORT_GET: Select[tuple[Report, Artifact, Naics]] = (
+    select(Report, Artifact, Naics)
+    .join(Report.artifacts, isouter=True)
+    .join(Report.naics, isouter=True)
+    .options(
+        joinedload(Report.naics),
+        joinedload(Report.artifacts)))
 
 def lazify[RT](stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None) -> Select[RT]:
     if lazy:

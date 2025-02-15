@@ -11,7 +11,7 @@ from itertools import chain
 from pathlib import Path
 from threading import Thread
 from types import MappingProxyType as MapProxy
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 logger = utils.get_logger('pipeline')
 
 class Pipeline:
-    fields = [
+    fields: ClassVar[tuple[str, ...]] = (
         'id',
         'company',
         'location',
@@ -39,9 +39,11 @@ class Pipeline:
         'url',
         'naics',
         'industry',
-        'artifacts']
-    required_fields = {'company', 'reported'}
-    write_fields = [
+        'artifacts')
+    required_fields: ClassVar[tuple[str, ...]] = (
+        'company',
+        'reported')
+    write_fields: ClassVar[tuple[str, ...]] = (
         'company',
         'location',
         'reported',
@@ -49,18 +51,19 @@ class Pipeline:
         'employees',
         'action',
         'url',
-        'company_norm_id']
-    json_types = {
+        'company_norm_id')
+    json_types: ClassVar[Mapping[str, Callable[[Any], Any]]] = MapProxy({
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
-        'starting': datetime.fromisoformat}
-    BACKENDS = MapProxy(StageBackend.registry['mongo'])
+        'starting': datetime.fromisoformat})
+    BACKENDS: ClassVar[Mapping[Stage, type[StageBackend]]] = MapProxy(
+        StageBackend.registry['mongo'])
 
     @dataclasses.dataclass
     class Opts:
         lazy: bool = True
 
-    def __init__(self, state: str, context: dict[str, Any]|None = None, **opts) -> None:
+    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, **opts) -> None:
         if context is None:
             context = {}
         self.state = state.upper()
@@ -70,17 +73,14 @@ class Pipeline:
         self.session: orm.Session|None = None
 
     @utils.lazyprop
-    def scraper(self):
+    def scraper(self) -> Scraper:
         from .scrapers import scrapers
         return scrapers[self.state]()
 
     @utils.lazyprop
-    def translator(self):
+    def translator(self) -> Translator:
         from .translators import translators
         return translators[self.state]()
-
-    scraper: Scraper
-    translator: Translator
 
     def backend(self, stage: Stage) -> StageBackend:
         try:
@@ -239,15 +239,7 @@ class Pipeline:
             totals['created'] += created
             totals['updated'] += updated
             totals['nochange'] += count - created - updated
-        return dict(counts=counts, totals=dict(totals), nochange=nochange)
-
-    STMT_REPORT_GET = (orm
-        .select(Report, Artifact, Naics)
-        .join(Report.artifacts, isouter=True)
-        .join(Report.naics, isouter=True)
-        .options(
-            orm.joinedload(Report.naics),
-            orm.joinedload(Report.artifacts)))
+        return dict(nochange=nochange, counts=counts, totals=dict(totals))
 
     def save(self, entry: dict) -> SaveType:
         save = SaveType.Nochange
@@ -257,7 +249,7 @@ class Pipeline:
         if not all(map(record.get, self.required_fields)):
             return save.Skip
         uid = record.pop('id')
-        stmt = self.STMT_REPORT_GET.where(Report.id == uid)
+        stmt = orm.STMT_REPORT_GET.where(Report.id == uid)
         report = self.session.scalars(stmt).unique().one_or_none()
         if report is None:
             report = Report(id=uid, state=self.state)
@@ -285,16 +277,6 @@ class Pipeline:
             if any(value is not save.Nochange for value in values):
                 save = save.Update
         return save
-
-    def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
-        trims = {}
-        for field in ('action', 'location', 'company', 'url'):
-            value = record.get(field)
-            limit = Report.__table__._columns[field].type.length
-            if value and len(value) > limit:
-                trims[field] = len(value) - limit
-                record[field] = value[:limit]
-        return trims
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
         save = SaveType.Nochange
@@ -369,47 +351,59 @@ class Pipeline:
             save = save.Update
         return save
 
-    def get_orm_clean_filters(self) -> dict[type[orm.MapReduceBase], list]:
+    def get_orm_clean_filters(self) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
         return {
             Report: [Report.state == self.state],
             Company: [self.get_companies_delete_pred()],
             Artifact: [self.get_artifacts_pred()],
             StateStat: [StateStat.id == self.state]}
 
-    def get_orm_select_filters(self) -> dict[type[orm.MapReduceBase], list]:
+    def get_orm_select_filters(self) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
         return self.get_orm_clean_filters() | {
             Company: [self.get_companies_update_pred()],
             Naics: []}
 
-    def get_artifacts_pred(self):
+    def get_artifacts_pred(self) -> orm.BinaryExpression:
         return Artifact.path.startswith(f'{self.state.lower()}/')
 
-    def get_companies_delete_pred(self):
+    def get_companies_delete_pred(self) -> orm.BinaryExpression:
         return Company.id.not_in(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
             .where(Report.state != self.state))
 
-    def get_companies_update_pred(self):
+    def get_companies_update_pred(self) -> orm.BinaryExpression:
         return Company.id.in_(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
             .where(Report.state == self.state))
 
-    def from_json(self, field: str, value: Any) -> Any:
-        if isinstance(value, str) and field in self.json_types:
-            value = self.json_types[field](value)
+    @staticmethod
+    def truncate_fields(record: dict[str, Any]) -> dict[str, int]:
+        trims = {}
+        for field in ('action', 'location', 'company', 'url'):
+            value = record.get(field)
+            limit = Report.__table__._columns[field].type.length
+            if value and len(value) > limit:
+                trims[field] = len(value) - limit
+                record[field] = value[:limit]
+        return trims
+
+    @classmethod
+    def from_json(cls, field: str, value: Any) -> Any:
+        if isinstance(value, str) and field in cls.json_types:
+            value = cls.json_types[field](value)
         if isinstance(value, datetime) and not value.tzinfo:
             value = value.replace(tzinfo=timezone.utc)
         return value
 
 class PipelineRunner:
-    GROUPING = {
+    GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({
         Stage.Scrape: 0,
         Stage.Extract: 1,
         Stage.Translate: 1,
         Stage.Load: 2,
-        Stage.Index: 3}
+        Stage.Index: 3})
 
     def __init__(
         self,
@@ -424,7 +418,7 @@ class PipelineRunner:
         max_workers: int = settings.ETL_DEFAULT_WORKERS,
         context: dict[str, Any]|None = None,
         **pipeline_opts,
-    ):
+    ) -> None:
         if clean_only and (clean or incremental or stat_only):
             raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
         if stat_only and (clean or incremental or clean_only):
@@ -447,6 +441,7 @@ class PipelineRunner:
             [] for _ in set(self.GROUPING.values()))
         for stage in self.stages:
             self.grouping[self.GROUPING[stage]].append(stage)
+        self.num_workers = min(self.max_workers, len(self.states))
         self.context = context
         self.logbackend = PipelineLogBackend.registry['mongo'](context=self.context)
         self.pipeline_opts = pipeline_opts
@@ -474,10 +469,10 @@ class PipelineRunner:
         if await self._save_log():
             logger.info(f'start id={self.id}')
         try:
-            await self.run_thread_concurrently(*next(it))
-            await self.run_loop_concurrently(*next(it))
+            await self.run_concurrently(True, *next(it))
+            await self.run_concurrently(False, *next(it))
             await self.run_consecutively(*next(it))
-            await self.run_loop_concurrently(*next(it))
+            await self.run_concurrently(False, *next(it))
         finally:
             self.end = utils.now()
             if await self._save_log():
@@ -488,53 +483,39 @@ class PipelineRunner:
             await self.run_stages(state, *stages)
             await self._save_log()
 
-    async def run_thread_concurrently(self, *stages: Stage) -> None:
-        if not (stages and self.concurrent):
+    async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
+        if not (stages and self.concurrent and self.num_workers > 1):
             return await self.run_consecutively(*stages)
-        queue = deque(self.states)
-        num_workers = min(self.max_workers, len(queue))
-        logger.info(f'concurrent threads={num_workers} stages=[{', '.join(map(str, stages))}]')
-        excs = []
-        def thread_worker():
-            while queue and not(self.errors and self.fail):
-                try:
-                    state = queue.popleft()
-                except IndexError:
-                    break
-                try:
-                    asyncio.run(self.run_stages(state, *stages))
-                except Exception as err:
-                    excs.append(err)
-                    logger.error(f'Exiting thread due to error')
-                    break
+        style = 'threads' if threads else 'workers'
+        logger.info(f'concurrent {style}={self.num_workers} stages=[{', '.join(map(str, stages))}]')
+        if threads:
+            await self._run_thread_concurrently(*stages)
+        else:
+            await self._run_loop_concurrently(*stages)
+        await self._save_log()
+
+    async def _run_thread_concurrently(self, *stages: Stage) -> None:
+        args = (deque(self.states), excs := [], *stages)
         workers = [
-            Thread(name=str(i + 1), target=thread_worker)
-            for i in range(num_workers)]
+            Thread(name=str(i + 1), target=self.thread_worker, args=args)
+            for i in range(self.num_workers)]
         for worker in workers:
             worker.start()
         for worker in workers:
             worker.join()
-        await self._save_log()
         if excs:
             if len(excs) == 1:
                 raise excs[0] from None
-            logger.error(f'Encountered {len(excs)} exceptions, raising last')
-            raise excs[-1]
+            raise ExceptionGroup(f'Encountered multiple exceptions', excs)
 
-    async def run_loop_concurrently(self, *stages: Stage) -> None:
-        if not (stages and self.concurrent):
-            return await self.run_consecutively(*stages)
+    async def _run_loop_concurrently(self, *stages: Stage) -> None:
         queue = deque(self.states)
-        num_workers = min(self.max_workers, len(queue))
-        logger.info(f'concurrent {num_workers=} stages=[{', '.join(map(str, stages))}]')
-        async def loop_worker():
-            while queue and not(self.errors and self.fail):
-                await self.run_stages(queue.popleft(), *stages)
-                await self._save_log()
         try:
             async with asyncio.TaskGroup() as group:
-                for _ in range(num_workers):
-                    group.create_task(loop_worker())
+                for i in range(self.num_workers):
+                    group.create_task(
+                        self.loop_worker(queue, *stages),
+                        name=str(i + 1))
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -587,6 +568,23 @@ class PipelineRunner:
                 doc.update(error=self.errors[-1])
         doc.update(runs_count=len(runs), runs=runs)
         return doc
+
+    async def loop_worker(self, queue: deque[str], *stages: Stage) -> None:
+        while queue and not(self.errors and self.fail):
+            await self.run_stages(queue.popleft(), *stages)
+
+    def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
+        while queue and not(self.errors and self.fail):
+            try:
+                state = queue.popleft()
+            except IndexError:
+                break
+            try:
+                asyncio.run(self.run_stages(state, *stages))
+            except Exception as err:
+                excs.append(err)
+                logger.error(f'Exiting thread due to error')
+                break
 
     async def _save_log(self) -> bool:
         if self.stat_only:
@@ -658,38 +656,38 @@ class Command(utils.BaseCommand):
         arg('stages',
             metavar='<stages>',
             type=cls.stages_opt,
-            help='Stage name(s) (various formats) or "all".')
+            help='Stage name(s) (various formats) or "all"')
         arg('states',
             nargs='*',
             metavar='state',
             help=(
                 'Optionally specify states as additional arguments. '
-                'If not specified, include all states.'))
+                'If not specified, include all states'))
         arg('--clean', '-c',
             action='store_true',
-            help='Clean each stage before running.')
+            help='Clean each stage before running')
         arg('--incremental', '-i',
             action='store_true',
             help=(
                 'If a stage indicates no change after running, '
-                'skip subsequent stages for the state.'))
+                'skip subsequent stages for the state'))
         arg('--concurrent', '-t',
             action='store_true',
             help=(
                 'Use multiple async workers when applicable. '
-                'The load stage is always synchronized with one worker.'))
+                'The load stage is always synchronized with one worker'))
         arg('--nofail', '-n',
             action='store_false',
             dest='fail',
             help=(
                 'Do not fail on error. Instead, log an exception, '
-                'and skip subsequent stages for the state.'))
+                'and skip subsequent stages for the state'))
         arg('--clean-only', '-x',
             action='store_true',
-            help='Only clean, do not run.')
+            help='Only clean, do not run')
         arg('--stat-only', '-s',
             action='store_true',
-            help='Only show stats, do not run.')
+            help='Only show stats, do not run')
         arg('--search-dbname', '-d',
             default=None,
             help=f'Alternate mongo search db name')
@@ -706,7 +704,7 @@ class Command(utils.BaseCommand):
         arg('--eager', '-e',
             action='store_false',
             dest='lazy',
-            help='Use eager loading of SQL result sets. Uses more memory.')
+            help='Use eager loading of SQL result sets. Uses more memory')
 
     def setup(self, opts):
         from .scrapers import scrapers
