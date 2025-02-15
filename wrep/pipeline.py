@@ -268,14 +268,16 @@ class Pipeline:
                 dirty = True
         if save is save.Nochange and dirty:
             save = save.Update
+        if save is not save.Nochange:
+            self.session.add(report)
         naics_save = self.save_naics(report, naics, industry)
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
-            values = (company_save, naics_save, artifacts_save)
-            if any(value is not save.Nochange for value in values):
+            if naics_save is not save.Nochange or artifacts_save is not save.Nochange:
                 save = save.Update
-        if save is not save.Nochange:
-            self.session.add(report)
+                self.session.add(report)
+            elif company_save is not save.Nochange:
+                save = save.Update
         return report, save
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
