@@ -4,8 +4,9 @@ import hashlib
 import json
 from abc import abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, AsyncIterable, Callable
-from uuid import UUID, uuid4
+from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar,
+                    Mapping)
+from uuid import UUID, uuid5
 
 import yaml
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -18,15 +19,10 @@ from .mongo import ClientControlCommand, MongoClient
 
 __all__ = [
     'ExtractionBackend',
-    'MongoExtraction',
-    'MongoPipelineLog',
-    'MongoSearchIndex',
-    'MongoTranslation',
     'PipelineLogBackend',
     'SearchIndexBackend',
     'StageBackend',
-    'TranslationBackend',
-]
+    'TranslationBackend']
 
 type Doc = dict[str, Any]
 logger = utils.get_logger('backends.etl')
@@ -52,8 +48,8 @@ class ContextMixin:
         self.context = context
 
 class PipelineLogBackend(ContextMixin):
-    registry: dict[str, type[PipelineLogBackend]] = {}
-    engine: str
+    registry: ClassVar[dict[str, type[PipelineLogBackend]]] = {}
+    engine: ClassVar[str]
 
     @abstractmethod
     async def save(self, doc: Doc) -> None: ...
@@ -64,9 +60,9 @@ class PipelineLogBackend(ContextMixin):
             cls.registry[cls.engine] = cls
 
 class StageBackend(ContextMixin):
-    registry: dict[str, dict[Stage, type[StageBackend]]] = {}
-    stage: Stage
-    engine: str
+    registry: ClassVar[dict[str, dict[Stage, type[StageBackend]]]] = {}
+    stage: ClassVar[Stage]
+    engine: ClassVar[str]
 
     def __init__(self, state: StateCode, context: Doc|None = None):
         super().__init__(context)
@@ -97,13 +93,14 @@ class TranslationBackend(StageBackend, ReaderMixin):
 
 class SearchIndexBackend(StageBackend):
     stage = Stage.Index
+    collections: Mapping[str, search.AbstractCollectionDefn]
 
     @abstractmethod
     async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
 
 class MongoContextMixin(ContextMixin):
     engine = 'mongo'
-    mongo: MongoClient
+    mongo: ClassVar[MongoClient]
     _db = None
 
     async def db(self):
@@ -113,7 +110,7 @@ class MongoContextMixin(ContextMixin):
         return self._db
 
 class MongoContextCollectionMixin(MongoContextMixin):
-    collection_name: str
+    collection_name: ClassVar[str]
     _coll = None
 
     async def collection(self):
@@ -144,11 +141,11 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
 
 class MongoETBase(StageBackend, MongoContextCollectionMixin):
     'Common base class for MongoExraction & MongoTranslation'
-    ordering = []
-    clean_keys = []
-    stat_clean_keys = []
+    ordering: ClassVar[list[str]] = []
+    clean_keys: ClassVar[list[str]] = []
+    stat_clean_keys: ClassVar[list[str]] = []
+    lookup_id_key: ClassVar[str]
     mongo = client
-    lookup_id_key: str
 
     async def clean(self) -> None:
         filt = self.get_filter()
@@ -192,6 +189,7 @@ class MongoETBase(StageBackend, MongoContextCollectionMixin):
         return doc['state'], self.clean_doc(doc)
 
 class MongoExtraction(MongoETBase, ExtractionBackend):
+    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
     collection_name = 'extractions'
     ordering = ['_i']
     clean_keys = ['_id', '_i', 'state']
@@ -203,11 +201,22 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
         coll = await self.collection()
         await coll.create_indexes(self.indexes)
         it = utils.aenumerate(source)
-        it = (dict(state=self.state, _i=i, _id=uuid4()) | doc async for i, doc in it)
+        it = utils.amap(self._makedoc, it)
         return await update_collection(coll, it, self.get_replace_filter)
 
     def get_replace_filter(self, doc: Doc) -> Doc:
         return dict(_i=doc['_i'], state=self.state)
+
+    def _makedoc(self, item: tuple[int, Doc]) -> Doc:
+        i, doc = item
+        return dict(
+            state=self.state,
+            _i=i,
+            _id=self.state_seq_docid(self.state, i)) | doc
+
+    @classmethod
+    def state_seq_docid(cls, state: StateCode, i: int) -> UUID:
+        return uuid5(cls.NS, f'{state}:seq:{int(i)}')
 
     indexes = [
         IndexModel({'state': 1}),
@@ -295,25 +304,47 @@ async def docs_stat(it: EitherIterable[Doc]) -> Doc:
         size += len(buf)
         count += 1
     return dict(
-        hash=h.hexdigest() if count else None,
+        count=count,
         size=size,
-        count=count)
+        hash=h.hexdigest() if count else None)
 
 
-class TroneCommand(utils.BaseCommand):
-    'Run translations for a single extraction doc, and print the result'
+class OneBaseCommand(utils.BaseCommand):
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser: utils.AP):
         arg = parser.add_argument
         arg('--etl-dbname', '-b',
             default=None,
             help=f'Alternate mongo etl db name')
         arg('--yaml', action='store_true', help='Output yaml')
-        arg('id', type=UUID, help='The extraction doc id')
 
     def setup(self, opts):
-        self.context = {MongoExtraction.mongo.dbname_key: opts.etl_dbname}
+        self.context = {client.dbname_key: opts.etl_dbname}
+
+    def printobj(self, obj: Any) -> None:
+        print(self.objtext(obj))
+
+    def objtext(self, obj: Any) -> str:
+        obj = self.jsondoc(obj)
+        if self.opts.yaml:
+            text = yaml.safe_dump(obj, sort_keys=False)
+        else:
+            text = json.dumps(obj, indent=2)
+        return text
+
+    @staticmethod
+    def jsondoc(obj: Any) -> Any:
+        return json.loads(json.dumps(obj, default=str))
+
+class TroneCommand(OneBaseCommand):
+    'Run translations for a single extraction doc, and print the result'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        super().add_arguments(parser)
+        arg = parser.add_argument
+        arg('id', type=UUID, help='The extraction doc id')
 
     async def run(self):
         from ..translators import translators
@@ -321,17 +352,39 @@ class TroneCommand(utils.BaseCommand):
             self.opts.id,
             context=self.context)
         it = translators[state]().entries(doc)
-        it = utils.amap(self.jsondoc, it)
+        it = utils.as_aiter(it)
         res = [x async for x in it]
-        if self.opts.yaml:
-            text = yaml.safe_dump(res, sort_keys=False)
-        else:
-            text = json.dumps(res, indent=2)
-        print(text)
+        self.printobj(res)
 
-    def jsondoc(self, doc: Doc) -> Doc:
-        return json.loads(json.dumps(doc, default=str))
+class LdoneCommand(OneBaseCommand):
+    'Run load operations for a single translation doc, and print the result'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        super().add_arguments(parser)
+        arg = parser.add_argument
+        arg('id', type=UUID, help='The translation doc id')
+
+    async def run(self):
+        from .. import orm
+        from ..pipeline import Pipeline
+        state, doc = await MongoTranslation.doc_lookup(
+            self.opts.id,
+            context=self.context)
+        pipeline = Pipeline(state, context=self.context)
+        with orm.SessionLocal() as session:
+            pipeline.session = session
+            pipeline.artifact_cache = {}
+            report, save = pipeline.save(doc)
+            if report is not None:
+                report, = orm.Report.map_reduce([(report, report, None, None)])
+                report = report.model_dump(mode='json')
+            session.rollback()
+        self.printobj(dict(save=save, report=report))
 
 class Command(utils.BaseCommand):
     'Misc ETL pipeline commands'
-    commands = dict(control=ClientControlCommand(client), trone=TroneCommand)
+    commands = dict(
+        trone=TroneCommand,
+        ldone=LdoneCommand,
+        control=ClientControlCommand(client))

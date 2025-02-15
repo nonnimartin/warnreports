@@ -27,8 +27,16 @@ collection_defns: dict[str, CollectionDefn] = {}
 collections_map: dict[type[DataModel], str] = {}
 filters: dict[type[DataModel], type[MongoFilter|FilterModel]] = {}
 
+class AbstractCollectionDefn:
+    name: str
+    orm_model: type[orm.MapReduceBase]
+
+    @property
+    def data_model(self) -> type[DataModel]:
+        return self.orm_model.data_model
+
 @dataclasses.dataclass
-class CollectionDefn:
+class CollectionDefn(AbstractCollectionDefn):
     name: str
     orm_model: type[orm.MapReduceBase]
     indexes: list[IndexModel]
@@ -37,10 +45,6 @@ class CollectionDefn:
         self.indexes = list(map(IndexModel, self.indexes))
         collection_defns[self.name] = self
         collections_map[self.data_model] = self.name
-
-    @property
-    def data_model(self) -> type[DataModel]:
-        return self.orm_model.data_model
 
     @property
     def filter_class(self) -> type[MongoFilter]:

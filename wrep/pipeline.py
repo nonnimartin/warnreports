@@ -107,7 +107,7 @@ class Pipeline:
             return await self.scraper.stat()
         if stage is stage.Load:
             stat: dict[str, int] = {}
-            backend: MongoSearchIndex = self.backend(stage.Index)
+            backend: SearchIndexBackend = self.backend(stage.Index)
             filters = self.get_orm_select_filters()
             with ensure_session(self.session) as session:
                 for name, defn in backend.collections.items():
@@ -204,7 +204,7 @@ class Pipeline:
                 if clean:
                     await self.clean(Stage.Load)
                 async for entry in reader:
-                    counts[self.save(entry)] += 1
+                    counts[self.save(entry)[1]] += 1
                 stat = session.get(StateStat, self.state)
                 stat = stat or StateStat(id=self.state)
                 stat.self_update(session)
@@ -220,7 +220,7 @@ class Pipeline:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: MongoSearchIndex = self.backend(stage)
+        backend: SearchIndexBackend = self.backend(stage)
         filters = self.get_orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
@@ -241,13 +241,13 @@ class Pipeline:
             totals['nochange'] += count - created - updated
         return dict(nochange=nochange, counts=counts, totals=dict(totals))
 
-    def save(self, entry: dict) -> SaveType:
+    def save(self, entry: dict) -> tuple[Report|None, SaveType]:
         save = SaveType.Nochange
         record = {
             field: self.from_json(field, entry[field])
             for field in self.fields if field in entry}
         if not all(map(record.get, self.required_fields)):
-            return save.Skip
+            return None, save.Skip
         uid = record.pop('id')
         stmt = orm.STMT_REPORT_GET.where(Report.id == uid)
         report = self.session.scalars(stmt).unique().one_or_none()
@@ -268,15 +268,15 @@ class Pipeline:
                 dirty = True
         if save is save.Nochange and dirty:
             save = save.Update
-        if save is not save.Nochange:
-            self.session.add(report)
         naics_save = self.save_naics(report, naics, industry)
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
             values = (company_save, naics_save, artifacts_save)
             if any(value is not save.Nochange for value in values):
                 save = save.Update
-        return save
+        if save is not save.Nochange:
+            self.session.add(report)
+        return report, save
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
         save = SaveType.Nochange
@@ -330,7 +330,7 @@ class Pipeline:
         oldmap = {a.id: a for a in report.artifacts}
         artifacts: list[Artifact] = []
         for path, url in index.items():
-            uid = uuid.uuid5(settings.NAMESPACE, f'artifact:{path}')
+            uid = Artifact.path_to_id(path)
             artifact = oldmap.pop(uid, None) or self.session.get(Artifact, uid)
             if artifact is None:
                 artifact = Artifact(id=uid, path=path, url=url)
@@ -574,7 +574,7 @@ class PipelineRunner:
             await self.run_stages(queue.popleft(), *stages)
 
     def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
-        while queue and not(self.errors and self.fail):
+        while queue and not(self.errors and self.fail) and not excs:
             try:
                 state = queue.popleft()
             except IndexError:
@@ -705,17 +705,27 @@ class Command(utils.BaseCommand):
             action='store_false',
             dest='lazy',
             help='Use eager loading of SQL result sets. Uses more memory')
+        arg('--idfile',
+            default=None,
+            type=Path,
+            help='Write the pipeline log ID to the given file')
 
     def setup(self, opts):
+        from .backends import etl
+        from . import search
         from .scrapers import scrapers
         opts.states = opts.states or sorted(scrapers)
         runner_opts = dict(vars(opts))
+        self.idfile: Path|None = runner_opts.pop('idfile')
         runner_opts['context'] = {
-            'etl.dbname': runner_opts.pop('etl_dbname'),
-            'search.dbname': runner_opts.pop('search_dbname')}
+            etl.client.dbname_key: runner_opts.pop('etl_dbname'),
+            search.client.dbname_key: runner_opts.pop('search_dbname')}
         self.runner = PipelineRunner(**runner_opts)
 
     async def run(self):
+        if self.idfile:
+            logger.info(f'Writing pipeline log ID to {self.idfile}')
+            self.idfile.write_text(str(self.runner.id))
         await self.runner.run()
 
     @staticmethod
