@@ -686,7 +686,7 @@ class IN(Scraper):
 
 class KY(Scraper):
 
-    def scrape(self) -> None:
+    async def scrape(self) -> None:
         self.broken_links_map = {
             'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg': '',
             'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM': '',
@@ -694,18 +694,17 @@ class KY(Scraper):
             'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0': ''
         }
 
-        self.artifact_dict = {}
         self.runner.scrape()
-        self.build_artifacts_index()
-        self.cache.write_json('artifacts.json', self.artifact_dict, indent=2)
+        index = self.build_artifacts_index()
+        self.cache.write_json('artifacts.json', index, indent=2)
 
     def list_page_files(self) -> list[Path]:
         return sorted(self.cache.glob('*'), reverse=True)
 
     def build_artifacts_index(self) -> dict:
         """Build the artifacts index from the downloaded CSV."""
-        # ********** TEST CSV
-        csv_file_path = self.cache.topath('ky2.csv')
+        artifact_dict = {}
+        csv_file_path = self.cache.topath('ky.csv')
         chromedriver_path = shutil.which("chromedriver")
         service = webdriver.ChromeService(executable_path=chromedriver_path)
 
@@ -739,7 +738,7 @@ class KY(Scraper):
             try:
                 if url == '' or url == None:
                     # add empty value for broken/missing links
-                    self.artifact_dict[key] = ['', '']
+                    artifact_dict[key] = ['', '']
                 else:
                     # Navigate to the URL
                     driver.get(url)
@@ -757,15 +756,13 @@ class KY(Scraper):
                     
                     if url == '' or url == None:
                         # add empty value for broken/missing links
-                        self.artifact_dict[key] = ['', '']
+                        artifact_dict[key] = ['', '']
                     else:
                         title = self.find_title(page_source)
                         filename = self.build_url(doc_type, title)
-                        if filename == 'TEST':
-                            print(url)
 
                         # Add entry to artifacts dictionary
-                        self.artifact_dict[key] = ['records/' + filename, url]
+                        artifact_dict[key] = ['records/' + filename, url]
                         artifact_files = self.cache.glob('records/*')
                         doc_files = []
                         for file in artifact_files:
@@ -787,7 +784,7 @@ class KY(Scraper):
                 driver.quit()     
 
         read_csv()
-        return self.artifact_dict
+        return artifact_dict
 
     def find_title(self, text):
         start_str = "Page 1 of "
