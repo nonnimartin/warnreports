@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated, Any, ClassVar, Literal, TypeAlias
 from uuid import UUID
 from zoneinfo import ZoneInfo
