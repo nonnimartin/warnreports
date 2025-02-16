@@ -686,68 +686,60 @@ class IN(Scraper):
 
 class KY(Scraper):
 
-    async def scrape(self) -> None:
-
+    def scrape(self) -> None:
         self.broken_links_map = {
-            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg' : '',
-            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM' : '',
-            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0' : '',
-            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0' : ''
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg': '',
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM': '',
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0': '',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0': ''
         }
-        
+
         self.artifact_dict = {}
         self.runner.scrape()
-        await self.build_artifacts_index()
+        self.build_artifacts_index()
         self.cache.write_json('artifacts.json', self.artifact_dict, indent=2)
-        for key, url in self.artifact_dict.values():
-            await self.cache_download(key, url, missing_only=True)
-            self.artifacts.add(key, self.cache.topath(key))
 
     def list_page_files(self) -> list[Path]:
         return sorted(self.cache.glob('*'), reverse=True)
-    
-    async def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
-        "Build the artifacts index from the downloaded csv"
-        csv_file_path = self.cache.topath('ky.csv')
+
+    def build_artifacts_index(self) -> dict:
+        """Build the artifacts index from the downloaded CSV."""
+        # ********** TEST CSV
+        csv_file_path = self.cache.topath('ky2.csv')
         chromedriver_path = shutil.which("chromedriver")
         service = webdriver.ChromeService(executable_path=chromedriver_path)
 
-
-        async def read_csv():
-            # Initialize the CSV reader
+        def read_csv():
             with open(csv_file_path, mode='r') as file:
                 csv_reader = csv.DictReader(file)
-
-                # Loop through each row in the CSV
                 for row in csv_reader:
-                    # Extract data from the row (e.g., a URL or other parameters)
                     url = row['Notice URL']
-                    if url == 'https://kydev.my.salesforce.com':
+                    key = ''
+                    if url == 'https://kydev.my.salesforce.com' or url in self.broken_links_map:
                         url = ''
-                    if url in self.broken_links_map.keys():
-                        url = ''
-                    await process_url(url)
-    
-        async def process_url(url):
-            # Render the page
+                    for i in row.values():
+                        key += i
+                    process_artifacts(key, url)
+
+        def process_artifacts(key, url):
             options = webdriver.ChromeOptions()
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument("--disable-gpu")
+            options.add_argument('--remote-debugging-pipe')
             options.add_experimental_option("prefs", {
-            "download.default_directory": r"/code/build/scrape/ky/records",
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True
+                "download.default_directory": r"/code/build/scrape/ky/records",
+                "download.prompt_for_download": False,
+                "download.directory_upgrade": True
             })
 
-            # Initialize the Chrome driver
             driver = webdriver.Chrome(service=service, options=options)
+            
             try:
-
                 if url == '' or url == None:
                     # add empty value for broken/missing links
-                    self.artifact_dict[url] = ''
+                    self.artifact_dict[key] = ['', '']
                 else:
                     # Navigate to the URL
                     driver.get(url)
@@ -765,17 +757,15 @@ class KY(Scraper):
                     
                     if url == '' or url == None:
                         # add empty value for broken/missing links
-                        self.artifact_dict[url] = ''
+                        self.artifact_dict[key] = ['', '']
                     else:
                         title = self.find_title(page_source)
-                        print(url)
-                        print(doc_type)
                         filename = self.build_url(doc_type, title)
                         if filename == 'TEST':
                             print(url)
 
                         # Add entry to artifacts dictionary
-                        self.artifact_dict[url] = ['records/' + filename]
+                        self.artifact_dict[key] = ['records/' + filename, url]
                         artifact_files = self.cache.glob('records/*')
                         doc_files = []
                         for file in artifact_files:
@@ -792,53 +782,27 @@ class KY(Scraper):
                                 if 'data-key="download"' in button.get_attribute('innerHTML'):
                                     button.click()
                                     time.sleep(1)
-
             finally:
                 # Close the browser
-                print('CLOSED THE BROWSER ***********')
-                driver.quit()      
+                driver.quit()     
 
-        try:
-            # Check if an event loop is already running
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # If no event loop is running, create one
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        read_csv()
+        return self.artifact_dict
 
-        # Run the main function
-        if loop.is_running():
-            # If the loop is already running, schedule the task
-            loop.create_task(read_csv())
-            print(self.artifact_dict)
-            return self.artifact_dict
-        else:
-            # Otherwise, run the loop
-            loop.run_until_complete(read_csv())
-        
     def find_title(self, text):
-        # Define the starting string
         start_str = "Page 1 of "
-        # Find the starting index of the starting string
         start_index = text.find(start_str)
-        # If the starting string is not found, return ''
         if start_index == -1:
             return ''
-        # Adjust the start index to begin after the starting string
         start_index += len(start_str)
-        # Find the index of the next double quote after the starting string
         end_index = text.find('"', start_index)
-        # If no next double quote is found, return ''
         if end_index == -1:
             return ''
-        # remove beginning
         filename = text[start_index:end_index].split(', ')[1]
-        # Extract and return the text between the starting string and the next double quote
         return filename
-    
+
     def build_url(self, file_type, file_name):
         if file_type is None or file_name is None:
-            #test
             return 'TEST'
         extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
         return file_name + extension
