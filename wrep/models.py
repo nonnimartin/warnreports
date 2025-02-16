@@ -328,3 +328,20 @@ class PipelineLog(DataModel):
                 failed=run.failed,
                 nochange=run.result and run.result.get('nochange')))
         return body
+
+    def get_short(self) -> dict[str, Any]:
+        mapping = dict(
+            id=str(self.id),
+            stages=''.join(s[0].upper() for s in self.stages),
+            states=len(self.states),
+            runs=len(self.runs),
+            elapsed=self.elapsed)
+        if self.errors:
+            mapping.update(errors=len(self.errors))
+        for key, value in self.batch_opts.items():
+            if value is True:
+                mapping[key] = value
+        for key, value in self.context.items():
+            if value:
+                mapping[f'context.{key}'] = value
+        return mapping

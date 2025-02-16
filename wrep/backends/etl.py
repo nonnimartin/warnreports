@@ -456,10 +456,12 @@ class LogCmdMixin(EtlCmdMixin):
 class LogShowCommand(utils.BaseCommand, LogCmdMixin):
     'Show pipeline log'
     summary_methods: ClassVar[dict[str, str]] = {
+        'short': 'get_short',
         'runs': 'get_runs',
         'load-changes': 'get_load_changes',
         'scrape-stats': 'get_scrape_stats'}
-    summary_fields: ClassVar[dict[str, tuple[str, ...]]] = {
+    summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
+        'short': dict(key=0, value=1),
         'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
         'load-changes': ('state', 'created', 'updated'),
         'scrape-stats': ('state', 'elapsed')}
@@ -477,6 +479,10 @@ class LogShowCommand(utils.BaseCommand, LogCmdMixin):
             '--output', '-o',
             choices=['json', 'yaml', 'table'],
             help=f'Output format')
+        arg(
+            '--tablefmt',
+            default='simple',
+            help=f'Table format')
         cls.dbname_arg(parser)
         arg(
             'id',
@@ -498,16 +504,19 @@ class LogShowCommand(utils.BaseCommand, LogCmdMixin):
         else:
             log = await self.backend.fetch_latest()
         if self.summary:
-            fields = self.summary_fields[self.summary]
             body = getattr(log, self.summary_methods[self.summary])()
-            head = dict(zip(fields, fields))
         else:
             body = log.model_dump(mode='json')
             body['runs'] = len(body['runs'])
             body['states'] = len(body['states'])
         if self.output == 'table':
+            head = self.summary_fields[self.summary]
+            if not isinstance(head, Mapping):
+                head = dict(zip(head, head))
+            if isinstance(body, Mapping):
+                body = list(body.items())
             from tabulate import tabulate
-            text = tabulate(body, head)
+            text = tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
         elif self.output == 'yaml':
             text = yaml.safe_dump(body, sort_keys=False)
         else:
