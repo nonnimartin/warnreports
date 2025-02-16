@@ -464,6 +464,7 @@ class PipelineRunner:
         for stage in self.stages:
             grouping[self.GROUPING[stage]].append(stage)
         it = iter(grouping)
+        self.states_active = dict.fromkeys(self.states)
         self.log.start = utils.utcnow()
         if await self._save_log():
             logger.info(f'start id={self.log.id}')
@@ -481,17 +482,19 @@ class PipelineRunner:
                 raise grp.exceptions[0] from None
             raise
         finally:
+            del self.states_active
             self.log.end = utils.utcnow()
             if await self._save_log():
                 logger.info(f'end id={self.log.id}')
 
     async def run_consecutively(self, *stages: Stage) -> None:
-        for state in self.states:
+        for state in tuple(self.states_active):
             await self.run_stages(state, *stages)
             await self._save_log()
 
     async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
-        if not (stages and self.concurrent and self.num_workers > 1):
+        self.num_workers = min(self.num_workers, len(self.states_active))
+        if not (self.states_active and stages and self.concurrent and self.num_workers > 1):
             return await self.run_consecutively(*stages)
         style = 'threads' if threads else 'workers'
         logger.info(f'concurrent {style}={self.num_workers} stages=[{', '.join(map(str, stages))}]')
@@ -502,7 +505,7 @@ class PipelineRunner:
         await self._save_log()
 
     async def _run_thread_concurrently(self, *stages: Stage) -> None:
-        args = (deque(self.states), excs := [], *stages)
+        args = (deque(self.states_active), excs := [], *stages)
         workers = [
             Thread(name=str(i + 1), target=self.thread_worker, args=args)
             for i in range(self.num_workers)]
@@ -516,7 +519,7 @@ class PipelineRunner:
             raise ExceptionGroup(f'Encountered multiple exceptions', excs)
 
     async def _run_loop_concurrently(self, *stages: Stage) -> None:
-        queue = deque(self.states)
+        queue = deque(self.states_active)
         try:
             async with asyncio.TaskGroup() as group:
                 for i in range(self.num_workers):
@@ -530,6 +533,10 @@ class PipelineRunner:
     async def run_stages(self, state: StateCode, *stages: Stage) -> None:
         for stage in stages:
             await self.run_stage(state, stage)
+            if (reason := self._skip_reason(state)):
+                logger.info(f'{state}:skip {reason}: {stage}')
+                self.states_active.pop(state, None)
+                break
 
     async def run_stage(self, state: StateCode, stage: Stage) -> None:
         if (reason := self._skip_reason(state)):
@@ -566,7 +573,10 @@ class PipelineRunner:
 
     async def loop_worker(self, queue: deque[str], *stages: Stage) -> None:
         while queue and not (self.log.errors and self.fail):
-            await self.run_stages(queue.popleft(), *stages)
+            state = queue.popleft()
+            if state not in self.states_active:
+                continue
+            await self.run_stages(state, *stages)
 
     def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
         while queue and not (self.log.errors and self.fail) and not excs:
@@ -574,6 +584,8 @@ class PipelineRunner:
                 state = queue.popleft()
             except IndexError:
                 break
+            if state not in self.states_active:
+                continue
             try:
                 asyncio.run(self.run_stages(state, *stages))
             except Exception as err:
