@@ -716,6 +716,8 @@ class KY(Scraper):
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument('--disable-gpu')
             options.add_argument('--remote-debugging-pipe')
+            options.add_argument('--dns-prefetch-disable')
+            options.page_load_strategy = 'normal'
             options.add_experimental_option('prefs', {
                 'download.default_directory': str(self.cache.topath('download')),
                 'download.prompt_for_download': False,
