@@ -280,7 +280,6 @@ class PipelineLog(DataModel):
     end: datetime|None = None
     elapsed: float = 0
     errors: list[PipelineRunError] = Field(default_factory=list)
-    error: PipelineRunError|None = None
     runs: list[PipelineRunDetail] = Field(default_factory=list)
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
@@ -288,8 +287,6 @@ class PipelineLog(DataModel):
         if self.start:
             until = self.end or utils.utcnow()
             self.elapsed = (until - self.start).total_seconds()
-        if self.errors:
-            self.error = self.errors[-1]
 
     def get_load_changes(self) -> list[dict[str, Any]]:
         body = []
@@ -319,4 +316,15 @@ class PipelineLog(DataModel):
                 state=run.state,
                 elapsed=elapsed))
         body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
+        return body
+
+    def get_runs(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.runs:
+            body.append(dict(
+                stage=run.stage[0].upper(),
+                state=run.state,
+                elapsed=run.elapsed,
+                failed=run.failed,
+                nochange=run.result and run.result.get('nochange')))
         return body

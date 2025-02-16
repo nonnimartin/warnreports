@@ -456,9 +456,11 @@ class LogCmdMixin(EtlCmdMixin):
 class LogShowCommand(utils.BaseCommand, LogCmdMixin):
     'Show pipeline log'
     summary_methods: ClassVar[dict[str, str]] = {
+        'runs': 'get_runs',
         'load-changes': 'get_load_changes',
         'scrape-stats': 'get_scrape_stats'}
     summary_fields: ClassVar[dict[str, tuple[str, ...]]] = {
+        'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
         'load-changes': ('state', 'created', 'updated'),
         'scrape-stats': ('state', 'elapsed')}
 
@@ -501,6 +503,8 @@ class LogShowCommand(utils.BaseCommand, LogCmdMixin):
             head = dict(zip(fields, fields))
         else:
             body = log.model_dump(mode='json')
+            body['runs'] = len(body['runs'])
+            body['states'] = len(body['states'])
         if self.output == 'table':
             from tabulate import tabulate
             text = tabulate(body, head)
