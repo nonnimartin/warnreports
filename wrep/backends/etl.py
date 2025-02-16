@@ -52,7 +52,10 @@ class PipelineLogBackend(ContextMixin):
     engine: ClassVar[str]
 
     @abstractmethod
-    async def save(self, doc: Doc) -> None: ...
+    async def save(self, log: PipelineLog) -> None: ...
+
+    @abstractmethod
+    async def fetch(self, id: UUID) -> PipelineLog: ...
 
     def __init_subclass__(cls):
         super().__init_subclass__()
@@ -123,13 +126,20 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
     mongo = client
     _indexes_created = False
 
-    async def save(self, doc):
+    async def save(self, log):
+        doc = log.as_doc()
         coll = await self.collection()
         if not self._indexes_created:
             await coll.create_indexes(self.indexes)
             self._indexes_created = True
-        doc['_id'] = doc.pop('id')
         res = await coll.replace_one({'_id': doc['_id']}, doc, True)
+
+    async def fetch(self, id):
+        coll = await self.collection()
+        doc = await coll.find_one({'_id': id})
+        if not doc:
+            raise ValueError(f'Pipeline log not found {id=}')
+        return PipelineLog.model_validate(doc)
 
     indexes = [
         IndexModel({'stages': 1}),
@@ -382,9 +392,67 @@ class LdoneCommand(OneBaseCommand):
             session.rollback()
         self.printobj(dict(save=save, report=report))
 
+class LogShowCommand(utils.BaseCommand):
+    'WIP'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        super().add_arguments(parser)
+        arg = parser.add_argument
+        arg(
+            '--summary', '-s',
+            help=(f'The summary type to show'))
+        arg(
+            '--output', '-o',
+            choices=['json', 'yaml', 'table'],
+            help=f'Output format')
+        arg('--etl-dbname', '-b',
+            default=None,
+            help=f'Alternate mongo etl db name')
+        arg(
+            'id',
+            type=UUID,
+            help='The pipeline log ID')
+
+    def setup(self, opts):
+        self.context = {client.dbname_key: opts.etl_dbname}
+        self.backend = MongoPipelineLog(context=self.context)
+
+    async def run(self):
+        log = await self.backend.fetch(self.opts.id)
+        if self.opts.summary:
+            if self.opts.summary == 'load-changes':
+                head = ('state', 'created', 'updated')
+                body = log.load_change_rows()
+            else:
+                raise ValueError(f'Invalid summary: {self.opts.summary}')
+            if self.opts.output == 'table':
+                obj = [head] + body
+            else:
+                obj = list(
+                    dict(zip(head, values))
+                    for values in body)
+        else:
+            if self.opts.output == 'table':
+                raise ValueError(f'Table output only supported with summary')
+            obj = log.model_dump(mode='json')
+        if self.opts.output == 'table':
+            from tabulate import tabulate
+            text = tabulate(obj[1:], obj[0])
+        elif self.opts.output == 'yaml':
+            text = yaml.safe_dump(obj, sort_keys=False)
+        else:
+            text = json.dumps(obj, indent=2)
+        print(text)
+
+class LogCommand(utils.BaseCommand):
+    'Pipeline log commands'
+    commands = dict(show=LogShowCommand)
+
 class Command(utils.BaseCommand):
     'Misc ETL pipeline commands'
     commands = dict(
+        log=LogCommand,
         trone=TroneCommand,
         ldone=LdoneCommand,
         control=ClientControlCommand(client))

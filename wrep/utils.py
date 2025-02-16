@@ -52,6 +52,9 @@ def now(**kw) -> datetime:
         dt += timedelta(**kw)
     return dt
 
+def utcnow(**kw) -> datetime:
+    return now(tz=timezone.utc, **kw)
+
 def deltaparse(value: Delta, default_unit: str|None = None) -> timedelta:
     if isinstance(value, timedelta):
         return value

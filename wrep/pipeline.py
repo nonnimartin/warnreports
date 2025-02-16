@@ -82,7 +82,9 @@ class Pipeline:
         from .translators import translators
         return translators[self.state]()
 
-    def backend(self, stage: Stage) -> StageBackend:
+    def backend[B: StageBackend](self, stage: Stage|type[B]) -> StageBackend|B:
+        if isinstance(stage, type):
+            stage = stage.stage
         try:
             backend = self.backends[stage]
         except KeyError:
@@ -107,7 +109,7 @@ class Pipeline:
             return await self.scraper.stat()
         if stage is stage.Load:
             stat: dict[str, int] = {}
-            backend: SearchIndexBackend = self.backend(stage.Index)
+            backend = self.backend(SearchIndexBackend)
             filters = self.get_orm_select_filters()
             with ensure_session(self.session) as session:
                 for name, defn in backend.collections.items():
@@ -163,7 +165,7 @@ class Pipeline:
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
-        backend: ExtractionBackend = self.backend(stage)
+        backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
@@ -176,8 +178,8 @@ class Pipeline:
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
-        backend: TranslationBackend = self.backend(stage)
-        source: ExtractionBackend = self.backend(stage.Extract)
+        backend = self.backend(TranslationBackend)
+        source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
@@ -197,7 +199,7 @@ class Pipeline:
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
-        source: TranslationBackend = self.backend(Stage.Translate)
+        source = self.backend(TranslationBackend)
         async with source.reader() as reader:
             with SessionLocal() as session:
                 self.session = session
@@ -220,7 +222,7 @@ class Pipeline:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: SearchIndexBackend = self.backend(stage)
+        backend = self.backend(SearchIndexBackend)
         filters = self.get_orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
@@ -398,7 +400,7 @@ class Pipeline:
         if isinstance(value, datetime) and not value.tzinfo:
             value = value.replace(tzinfo=timezone.utc)
         return value
-
+   
 class PipelineRunner:
     GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({
         Stage.Scrape: 0,
@@ -427,7 +429,6 @@ class PipelineRunner:
             raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
         if context is None:
             context = {}
-        self.id = uuid.uuid4()
         self.clean = clean
         self.clean_only = clean_only
         self.stat_only = stat_only
@@ -437,18 +438,13 @@ class PipelineRunner:
         self.fail = fail
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
-        self.errors: list[dict[str, str]] = []
-        self.runs: dict[StateCode, list[dict]] = defaultdict(list)
-        self.grouping: tuple[list[Stage], ...] = tuple(
-            [] for _ in set(self.GROUPING.values()))
-        for stage in self.stages:
-            self.grouping[self.GROUPING[stage]].append(stage)
+        self.runs: dict[StateCode, list[PipelineRunDetail]] = defaultdict(list)
         self.num_workers = min(self.max_workers, len(self.states))
         self.context = context
         self.logbackend = PipelineLogBackend.registry['mongo'](context=self.context)
         self.pipeline_opts = pipeline_opts
-        self.info = dict(
-            id=self.id,
+        self.log = PipelineLog(
+            id=uuid.uuid4(),
             stages=self.stages,
             states=self.states,
             batch_opts=dict(
@@ -458,27 +454,36 @@ class PipelineRunner:
                 fail=self.fail,
                 clean_only=self.clean_only,
                 max_workers=self.max_workers),
-            context=self.context,
-            pipeline_opts=self.pipeline_opts,
-            runs=[])
-        self.start: datetime|None = None
-        self.end: datetime|None = None
+            pipeline_opts=self.pipeline_opts)
+        self.log.context = self.context
 
     async def run(self) -> None:
         self.run = None
-        it = iter(self.grouping)
-        self.start = utils.now()
+        grouping: tuple[list[Stage], ...] = tuple(
+            [] for _ in set(self.GROUPING.values()))
+        for stage in self.stages:
+            grouping[self.GROUPING[stage]].append(stage)
+        it = iter(grouping)
+        self.log.start = utils.utcnow()
         if await self._save_log():
-            logger.info(f'start id={self.id}')
+            logger.info(f'start id={self.log.id}')
         try:
             await self.run_concurrently(True, *next(it))
             await self.run_concurrently(False, *next(it))
             await self.run_consecutively(*next(it))
             await self.run_concurrently(False, *next(it))
+        except* Exception as grp:
+            if not self.log.errors:
+                exc = grp.exceptions[-1]
+                error = PipelineRunError(type=type(exc).__name__, message=str(exc))
+                self.log.errors.append(error)
+            if len(grp.exceptions) == 1:
+                raise grp.exceptions[0] from None
+            raise
         finally:
-            self.end = utils.now()
+            self.log.end = utils.utcnow()
             if await self._save_log():
-                logger.info(f'end id={self.id}')
+                logger.info(f'end id={self.log.id}')
 
     async def run_consecutively(self, *stages: Stage) -> None:
         for state in self.states:
@@ -515,9 +520,8 @@ class PipelineRunner:
         try:
             async with asyncio.TaskGroup() as group:
                 for i in range(self.num_workers):
-                    group.create_task(
-                        self.loop_worker(queue, *stages),
-                        name=str(i + 1))
+                    coro = self.loop_worker(queue, *stages)
+                    group.create_task(coro, name=str(i + 1))
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -531,52 +535,41 @@ class PipelineRunner:
         if (reason := self._skip_reason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
             return
-        start = utils.now()
-        res = dict(state=state, stage=stage, start=start, end=None)
+        run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
+        self.runs[state].append(run)
+        self.log.runs.append(run)
         try:
             pipeline = Pipeline(state, context=self.context, **self.pipeline_opts)
             if self.stat_only:
                 stat = await pipeline.stat(stage)
                 logger.info(f'{state}:{stage}:stat {stat}')
-                return
-            res.update(seq=len(self.info['runs']))
-            self.runs[state].append(res)
-            self.info['runs'].append(res)
-            if self.clean_only:
-                res.update(clean_only=True)
+            elif self.clean_only:
                 await pipeline.clean(stage)
             else:
-                res.update(await pipeline.run(stage, clean=self.clean))
+                run.result = await pipeline.run(stage, clean=self.clean)
         except Exception as err:
-            error = dict(type=type(err).__name__, msg=str(err))
-            res.update(failed=True, error=error)
-            self.errors.append(dict(state=state, stage=stage)|error)
-            logger.exception(f'{state}:{stage}:fail {error=}', exc_info=not self.fail)
+            run.error = PipelineRunError(
+                type=type(err).__name__,
+                message=str(err),
+                state=state,
+                stage=stage)
+            run.failed = True
+            self.log.errors.append(run.error)
             if self.fail:
                 raise
+            logger.exception(
+                f'{state}:{stage}:fail error={run.error.model_dump(mode='json')}')
             capture_exception()
         finally:
-            end = utils.now()
-            res.update(end=end, elapsed=(end - start).total_seconds())
-
-    def getlog(self) -> dict[str, Any]:
-        doc = dict(self.info)
-        runs = list(doc.pop('runs'))
-        until = self.end or utils.now()
-        doc.update(start=self.start, end=self.end, elapsed=(until - self.start).total_seconds())
-        if self.errors:
-            doc.update(errors=self.errors)
-            if self.fail:
-                doc.update(error=self.errors[-1])
-        doc.update(runs_count=len(runs), runs=runs)
-        return doc
+            run.end = utils.utcnow()
+            run.elapsed = (run.end - run.start).total_seconds()
 
     async def loop_worker(self, queue: deque[str], *stages: Stage) -> None:
-        while queue and not(self.errors and self.fail):
+        while queue and not (self.log.errors and self.fail):
             await self.run_stages(queue.popleft(), *stages)
 
     def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
-        while queue and not(self.errors and self.fail) and not excs:
+        while queue and not (self.log.errors and self.fail) and not excs:
             try:
                 state = queue.popleft()
             except IndexError:
@@ -589,18 +582,21 @@ class PipelineRunner:
                 break
 
     async def _save_log(self) -> bool:
+        self.log.sync()
         if self.stat_only:
             return False
-        await self.logbackend.save(self.getlog())
+        await self.logbackend.save(self.log)
         return True
 
     def _skip_reason(self, state: StateCode) -> str|None:
         if (runs := self.runs[state]):
-            res = runs[-1]
-            if res.get('failed'):
+            run = runs[-1]
+            if run.failed:
                 return 'Previous stage failed'
-            if self.incremental and res.get('nochange'):
-                return 'No change'
+            if self.incremental:
+                if run.result:
+                    if run.result.get('nochange'):
+                        return 'No change'
 
 
 class Command(utils.BaseCommand):
@@ -713,8 +709,8 @@ class Command(utils.BaseCommand):
             help='Write the pipeline log ID to the given file')
 
     def setup(self, opts):
-        from .backends import etl
         from . import search
+        from .backends import etl
         from .scrapers import scrapers
         opts.states = opts.states or sorted(scrapers)
         runner_opts = dict(vars(opts))
@@ -727,7 +723,7 @@ class Command(utils.BaseCommand):
     async def run(self):
         if self.idfile:
             logger.info(f'Writing pipeline log ID to {self.idfile}')
-            self.idfile.write_text(str(self.runner.id))
+            self.idfile.write_text(str(self.runner.log.id))
         await self.runner.run()
 
     @staticmethod
