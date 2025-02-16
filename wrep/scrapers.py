@@ -799,8 +799,6 @@ class KY(Scraper):
         return filename
 
     def build_url(self, file_type, file_name):
-        if file_type is None or file_name is None:
-            return 'TEST'
         extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
         return file_name + extension
 
