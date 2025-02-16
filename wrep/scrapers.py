@@ -727,6 +727,8 @@ class KY(Scraper):
             options.add_argument('--disable-dev-shm-usage')
             options.add_argument("--disable-gpu")
             options.add_argument('--remote-debugging-pipe')
+            options.add_argument("--dns-prefetch-disable");
+            options.page_load_strategy = 'normal'
             options.add_experimental_option("prefs", {
                 "download.default_directory": r"/code/build/scrape/ky/records",
                 "download.prompt_for_download": False,
@@ -743,7 +745,7 @@ class KY(Scraper):
                     # Navigate to the URL
                     driver.get(url)
                     # Wait for the page to fully render
-                    time.sleep(7)
+                    time.sleep(9)
                     page_source = driver.page_source
                     wait = WebDriverWait(driver, 10)
                     # Get element with file format info
