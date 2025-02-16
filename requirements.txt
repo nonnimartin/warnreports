@@ -16,6 +16,7 @@ python-dateutil
 requests
 sentry-sdk[fastapi]
 sqlalchemy
+tabulate
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper

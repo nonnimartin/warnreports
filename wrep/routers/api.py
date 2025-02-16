@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
                      Response, status)
@@ -106,14 +106,18 @@ async def state_get(id: StateCode) -> StateDetail:
 @router.get('/_db', include_in_schema=False)
 async def dbstats() -> dict:
     db = await search.client.get_database()
+    dbid = uuid5(settings.NAMESPACE, f'dbid:{db.name}')
     tasks = {name: defn.stats(db=db) for name, defn in search.collection_defns.items()}
-    return dict(collections={name: await task for name, task in tasks.items()})
+    return dict(
+        dbid=dbid,
+        collections={name: await task for name, task in tasks.items()})
 
 @router.head('/_ok', include_in_schema=False)
 @router.get('/_ok', include_in_schema=False)
 async def checkok() -> Response:
-    await search.client.get_database()
-    return Response(None, status.HTTP_204_NO_CONTENT)
+    db = await search.client.get_database()
+    dbid = uuid5(settings.NAMESPACE, f'dbid:{db.name}')
+    return Response(None, status.HTTP_204_NO_CONTENT, dict(dbid=str(dbid)))
 
 async def search_response[DM: DataModel](req: Request, rep: Response, model: type[DM], params: dict, opts: SearchOpts) -> list[DM]|Response:
     params = dict(params)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import operator
 import uuid
@@ -8,7 +9,9 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
-from typing import Any, Iterable
+from threading import Thread
+from types import MappingProxyType as MapProxy
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
@@ -17,13 +20,15 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
-from .scrapers import scrapers
-from .translators import translators
+
+if TYPE_CHECKING:
+    from .scrapers import Scraper
+    from .translators import Translator
 
 logger = utils.get_logger('pipeline')
 
 class Pipeline:
-    fields = [
+    fields: ClassVar[tuple[str, ...]] = (
         'id',
         'company',
         'location',
@@ -34,9 +39,11 @@ class Pipeline:
         'url',
         'naics',
         'industry',
-        'artifacts']
-    required_fields = {'company', 'reported'}
-    write_fields = [
+        'artifacts')
+    required_fields: ClassVar[tuple[str, ...]] = (
+        'company',
+        'reported')
+    write_fields: ClassVar[tuple[str, ...]] = (
         'company',
         'location',
         'reported',
@@ -44,35 +51,46 @@ class Pipeline:
         'employees',
         'action',
         'url',
-        'company_norm_id']
-    json_types = {
+        'company_norm_id')
+    json_types: ClassVar[Mapping[str, Callable[[Any], Any]]] = MapProxy({
         'id': uuid.UUID,
         'reported': datetime.fromisoformat,
-        'starting': datetime.fromisoformat}
-    BACKENDS = {
-        Stage.Extract: MongoExtraction,
-        Stage.Translate: MongoTranslation,
-        Stage.Index: MongoSearchIndex}
+        'starting': datetime.fromisoformat})
+    BACKENDS: ClassVar[Mapping[Stage, type[StageBackend]]] = MapProxy(
+        StageBackend.registry['mongo'])
 
-    def __init__(self, state: str, **opts) -> None:
+    @dataclasses.dataclass
+    class Opts:
+        lazy: bool = True
+
+    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, **opts) -> None:
+        if context is None:
+            context = {}
         self.state = state.upper()
-        self.scraper = scrapers[self.state]()
-        self.translator = translators[self.state]()
-        beopts = _pfxopts(opts, 'etl', 'search')
-        self.backend_opts = {
-            Stage.Extract: beopts['etl'],
-            Stage.Translate: beopts['etl'],
-            Stage.Index: beopts['search']}
+        self.context = context
         self.backends: dict[Stage, StageBackend] = {}
-        self.opts = opts
+        self.opts = self.Opts(**opts)
         self.session: orm.Session|None = None
 
-    def backend(self, stage: Stage) -> StageBackend:
+    @utils.lazyprop
+    def scraper(self) -> Scraper:
+        from .scrapers import scrapers
+        return scrapers[self.state]()
+
+    @utils.lazyprop
+    def translator(self) -> Translator:
+        from .translators import translators
+        return translators[self.state]()
+
+    def backend[B: StageBackend](self, stage: Stage|type[B]) -> StageBackend|B:
+        if isinstance(stage, type):
+            stage = stage.stage
         try:
             backend = self.backends[stage]
         except KeyError:
-            opts = self.backend_opts[stage]
-            backend = self.BACKENDS[stage](self.state, **opts)
+            backend = self.BACKENDS[stage](
+                self.state,
+                context=self.context)
             self.backends[stage] = backend
         return backend
 
@@ -91,16 +109,16 @@ class Pipeline:
             return await self.scraper.stat()
         if stage is stage.Load:
             stat: dict[str, int] = {}
-            backend: MongoSearchIndex = self.backend(stage.Index)
+            backend = self.backend(SearchIndexBackend)
             filters = self.get_orm_select_filters()
-            with SessionLocal() as session:
+            with ensure_session(self.session) as session:
                 for name, defn in backend.collections.items():
                     if name in ('naics', 'states'):
                         continue
                     it = defn.orm_model.map_reduce_exec(
                         session,
                         *filters[defn.orm_model],
-                        lazy=bool(self.opts.get('lazy', True)))
+                        lazy=bool(self.opts.lazy))
                     stat[name] = sum(1 for _ in it)
             return stat
         raise ValueError(stage)
@@ -119,13 +137,10 @@ class Pipeline:
             stmts = (
                 orm.delete(model).where(*filters)
                 for model, filters in filters.items())
-            if self.session:
+            with ensure_session(self.session) as session:
                 for stmt in stmts:
-                    self.session.execute(stmt)
-            else:
-                with SessionLocal() as session:
-                    for stmt in stmts:
-                        session.execute(stmt)
+                    session.execute(stmt)
+                if not self.session:
                     session.commit()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
@@ -150,7 +165,7 @@ class Pipeline:
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
-        backend: ExtractionBackend = self.backend(stage)
+        backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
@@ -163,8 +178,8 @@ class Pipeline:
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
-        backend: TranslationBackend = self.backend(stage)
-        source: ExtractionBackend = self.backend(stage.Extract)
+        backend = self.backend(TranslationBackend)
+        source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
         logger.info(f'{self.state}:{stage}:stat {prev}')
         if clean:
@@ -172,7 +187,8 @@ class Pipeline:
         async with source.reader() as reader:
             with SessionLocal() as session:
                 self.translator.session = session
-                it = utils.amap(self.translator.entry, reader)
+                it = utils.amap(self.translator.entries, reader)
+                it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
             self.translator.session = None
         cur = await self.stat(stage)
@@ -183,14 +199,14 @@ class Pipeline:
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
-        source: TranslationBackend = self.backend(Stage.Translate)
+        source = self.backend(TranslationBackend)
         async with source.reader() as reader:
             with SessionLocal() as session:
                 self.session = session
                 if clean:
                     await self.clean(Stage.Load)
                 async for entry in reader:
-                    counts[self.save(entry)] += 1
+                    counts[self.save(entry)[1]] += 1
                 stat = session.get(StateStat, self.state)
                 stat = stat or StateStat(id=self.state)
                 stat.self_update(session)
@@ -206,7 +222,7 @@ class Pipeline:
         stage = Stage.Index
         if clean:
             await self.clean(stage)
-        backend: MongoSearchIndex = self.backend(stage)
+        backend = self.backend(SearchIndexBackend)
         filters = self.get_orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
@@ -214,7 +230,7 @@ class Pipeline:
                 it = defn.orm_model.map_reduce_exec(
                     session,
                     *filters[defn.orm_model],
-                    lazy=bool(self.opts.get('lazy', True)))
+                    lazy=bool(self.opts.lazy))
                 results[name] = await backend.update(name, it)
         nochange = True
         counts: dict[str, dict[str, int]] = {}
@@ -225,25 +241,17 @@ class Pipeline:
             totals['created'] += created
             totals['updated'] += updated
             totals['nochange'] += count - created - updated
-        return dict(counts=counts, totals=dict(totals), nochange=nochange)
+        return dict(nochange=nochange, counts=counts, totals=dict(totals))
 
-    STMT_REPORT_GET = (orm
-        .select(Report, Artifact, Naics)
-        .join(Report.artifacts, isouter=True)
-        .join(Report.naics, isouter=True)
-        .options(
-            orm.joinedload(Report.naics),
-            orm.joinedload(Report.artifacts)))
-
-    def save(self, entry: dict) -> SaveType:
+    def save(self, entry: dict) -> tuple[Report|None, SaveType]:
         save = SaveType.Nochange
         record = {
             field: self.from_json(field, entry[field])
             for field in self.fields if field in entry}
         if not all(map(record.get, self.required_fields)):
-            return save.Skip
+            return None, save.Skip
         uid = record.pop('id')
-        stmt = self.STMT_REPORT_GET.where(Report.id == uid)
+        stmt = orm.STMT_REPORT_GET.where(Report.id == uid)
         report = self.session.scalars(stmt).unique().one_or_none()
         if report is None:
             report = Report(id=uid, state=self.state)
@@ -267,20 +275,12 @@ class Pipeline:
         naics_save = self.save_naics(report, naics, industry)
         artifacts_save = self.save_artifacts(report, artifacts)
         if save is save.Nochange:
-            values = (company_save, naics_save, artifacts_save)
-            if any(value is not save.Nochange for value in values):
+            if naics_save is not save.Nochange or artifacts_save is not save.Nochange:
                 save = save.Update
-        return save
-
-    def truncate_fields(self, record: dict[str, Any]) -> dict[str, int]:
-        trims = {}
-        for field in ('action', 'location', 'company', 'url'):
-            value = record.get(field)
-            limit = Report.__table__._columns[field].type.length
-            if value and len(value) > limit:
-                trims[field] = len(value) - limit
-                record[field] = value[:limit]
-        return trims
+                self.session.add(report)
+            elif company_save is not save.Nochange:
+                save = save.Update
+        return report, save
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
         save = SaveType.Nochange
@@ -334,7 +334,7 @@ class Pipeline:
         oldmap = {a.id: a for a in report.artifacts}
         artifacts: list[Artifact] = []
         for path, url in index.items():
-            uid = uuid.uuid5(settings.NAMESPACE, f'artifact:{path}')
+            uid = Artifact.path_to_id(path)
             artifact = oldmap.pop(uid, None) or self.session.get(Artifact, uid)
             if artifact is None:
                 artifact = Artifact(id=uid, path=path, url=url)
@@ -355,48 +355,59 @@ class Pipeline:
             save = save.Update
         return save
 
-    def get_orm_clean_filters(self) -> dict[type[orm.MapReduceBase], list]:
+    def get_orm_clean_filters(self) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
         return {
             Report: [Report.state == self.state],
             Company: [self.get_companies_delete_pred()],
             Artifact: [self.get_artifacts_pred()],
             StateStat: [StateStat.id == self.state]}
 
-    def get_orm_select_filters(self) -> dict[type[orm.MapReduceBase], list]:
+    def get_orm_select_filters(self) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
         return self.get_orm_clean_filters() | {
             Company: [self.get_companies_update_pred()],
             Naics: []}
 
-    def get_artifacts_pred(self):
+    def get_artifacts_pred(self) -> orm.BinaryExpression:
         return Artifact.path.startswith(f'{self.state.lower()}/')
 
-    def get_companies_delete_pred(self):
+    def get_companies_delete_pred(self) -> orm.BinaryExpression:
         return Company.id.not_in(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
             .where(Report.state != self.state))
 
-    def get_companies_update_pred(self):
+    def get_companies_update_pred(self) -> orm.BinaryExpression:
         return Company.id.in_(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
             .where(Report.state == self.state))
 
-    def from_json(self, field: str, value: Any) -> Any:
-        if isinstance(value, str) and field in self.json_types:
-            value = self.json_types[field](value)
+    @staticmethod
+    def truncate_fields(record: dict[str, Any]) -> dict[str, int]:
+        trims = {}
+        for field in ('action', 'location', 'company', 'url'):
+            value = record.get(field)
+            limit = Report.__table__._columns[field].type.length
+            if value and len(value) > limit:
+                trims[field] = len(value) - limit
+                record[field] = value[:limit]
+        return trims
+
+    @classmethod
+    def from_json(cls, field: str, value: Any) -> Any:
+        if isinstance(value, str) and field in cls.json_types:
+            value = cls.json_types[field](value)
         if isinstance(value, datetime) and not value.tzinfo:
             value = value.replace(tzinfo=timezone.utc)
         return value
-
+   
 class PipelineRunner:
-
-    GROUPING = {
+    GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({
         Stage.Scrape: 0,
-        Stage.Extract: 0,
-        Stage.Translate: 0,
-        Stage.Load: 1,
-        Stage.Index: 2}
+        Stage.Extract: 1,
+        Stage.Translate: 1,
+        Stage.Load: 2,
+        Stage.Index: 3})
 
     def __init__(
         self,
@@ -409,13 +420,15 @@ class PipelineRunner:
         incremental: bool = False,
         concurrent: bool = False,
         max_workers: int = settings.ETL_DEFAULT_WORKERS,
+        context: dict[str, Any]|None = None,
         **pipeline_opts,
-    ):
+    ) -> None:
         if clean_only and (clean or incremental or stat_only):
             raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
         if stat_only and (clean or incremental or clean_only):
             raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
-        self.id = uuid.uuid4()
+        if context is None:
+            context = {}
         self.clean = clean
         self.clean_only = clean_only
         self.stat_only = stat_only
@@ -425,15 +438,13 @@ class PipelineRunner:
         self.fail = fail
         self.stages = list(utils.unique(map(Stage, stages)))
         self.states = list(utils.unique(map(str.upper, states)))
-        self.errors: list[dict[str, str]] = []
-        self.runs: dict[StateCode, list[dict]] = defaultdict(list)
-        self.grouping: tuple[list[Stage], ...] = [], [], []
-        for stage in self.stages:
-            self.grouping[self.GROUPING[stage]].append(stage)
-        self.logbackend = MongoPipelineLog(**_pfxopts(pipeline_opts, 'etl')['etl'])
+        self.runs: dict[StateCode, list[PipelineRunDetail]] = defaultdict(list)
+        self.num_workers = min(self.max_workers, len(self.states))
+        self.context = context
+        self.logbackend = PipelineLogBackend.registry['mongo'](context=self.context)
         self.pipeline_opts = pipeline_opts
-        self.info = dict(
-            id=self.id,
+        self.log = PipelineLog(
+            id=uuid.uuid4(),
             stages=self.stages,
             states=self.states,
             batch_opts=dict(
@@ -443,46 +454,77 @@ class PipelineRunner:
                 fail=self.fail,
                 clean_only=self.clean_only,
                 max_workers=self.max_workers),
-            pipeline_opts=self.pipeline_opts,
-            runs=[])
-        self.start: datetime|None = None
-        self.end: datetime|None = None
+            pipeline_opts=self.pipeline_opts)
+        self.log.context = self.context
 
     async def run(self) -> None:
         self.run = None
-        it = iter(self.grouping)
-        self.start = utils.now()
+        grouping: tuple[list[Stage], ...] = tuple(
+            [] for _ in set(self.GROUPING.values()))
+        for stage in self.stages:
+            grouping[self.GROUPING[stage]].append(stage)
+        it = iter(grouping)
+        self.states_active = dict.fromkeys(self.states)
+        self.log.start = utils.utcnow()
         if await self._save_log():
-            logger.info(f'start id={self.id}')
+            logger.info(f'start id={self.log.id}')
         try:
-            await self.run_concurrently(*next(it))
+            await self.run_concurrently(True, *next(it))
+            await self.run_concurrently(False, *next(it))
             await self.run_consecutively(*next(it))
-            await self.run_concurrently(*next(it))
+            await self.run_concurrently(False, *next(it))
+        except* Exception as grp:
+            if not self.log.errors:
+                exc = grp.exceptions[-1]
+                error = PipelineRunError(type=type(exc).__name__, message=str(exc))
+                self.log.errors.append(error)
+            if len(grp.exceptions) == 1:
+                raise grp.exceptions[0] from None
+            raise
         finally:
-            self.end = utils.now()
+            del self.states_active
+            self.log.end = utils.utcnow()
             if await self._save_log():
-                logger.info(f'end id={self.id}')
+                logger.info(f'end id={self.log.id}')
 
     async def run_consecutively(self, *stages: Stage) -> None:
-        for state in self.states:
+        for state in tuple(self.states_active):
             await self.run_stages(state, *stages)
+            await self._save_log()
 
-    async def run_concurrently(self, *stages: Stage) -> None:
-        if not stages:
-            return
-        if not self.concurrent:
-            await self.run_consecutively(*stages)
-            return
-        queue = deque(self.states)
-        async def start_worker():
-            while queue and not(self.errors and self.fail):
-                await self.run_stages(queue.popleft(), *stages)
-        num_workers = min(self.max_workers, len(queue))
-        logger.info(f'concurrent {num_workers=} stages=[{', '.join(map(str, stages))}]')
+    async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
+        self.num_workers = min(self.num_workers, len(self.states_active))
+        if not (self.states_active and stages and self.concurrent and self.num_workers > 1):
+            return await self.run_consecutively(*stages)
+        style = 'threads' if threads else 'workers'
+        logger.info(f'concurrent {style}={self.num_workers} stages=[{', '.join(map(str, stages))}]')
+        if threads:
+            await self._run_thread_concurrently(*stages)
+        else:
+            await self._run_loop_concurrently(*stages)
+        await self._save_log()
+
+    async def _run_thread_concurrently(self, *stages: Stage) -> None:
+        args = (deque(self.states_active), excs := [], *stages)
+        workers = [
+            Thread(name=str(i + 1), target=self.thread_worker, args=args)
+            for i in range(self.num_workers)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        if excs:
+            if len(excs) == 1:
+                raise excs[0] from None
+            raise ExceptionGroup(f'Encountered multiple exceptions', excs)
+
+    async def _run_loop_concurrently(self, *stages: Stage) -> None:
+        queue = deque(self.states_active)
         try:
             async with asyncio.TaskGroup() as group:
-                for _ in range(num_workers):
-                    group.create_task(start_worker())
+                for i in range(self.num_workers):
+                    coro = self.loop_worker(queue, *stages)
+                    group.create_task(coro, name=str(i + 1))
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -491,71 +533,83 @@ class PipelineRunner:
     async def run_stages(self, state: StateCode, *stages: Stage) -> None:
         for stage in stages:
             await self.run_stage(state, stage)
+            if (reason := self._skip_reason(state)):
+                logger.info(f'{state}:skip {reason}: {stage}')
+                self.states_active.pop(state, None)
+                break
 
     async def run_stage(self, state: StateCode, stage: Stage) -> None:
         if (reason := self._skip_reason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
             return
-        pipeline = Pipeline(state, **self.pipeline_opts)
-        if self.stat_only:
-            stat = await pipeline.stat(stage)
-            logger.info(f'{state}:{stage}:stat {stat}')
-            return
-        start = utils.now()
-        res = dict(state=state, stage=stage, seq=len(self.info['runs']), start=start, end=None)
-        self.runs[state].append(res)
-        self.info['runs'].append(res)
+        run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
+        self.runs[state].append(run)
+        self.log.runs.append(run)
         try:
-            if self.clean_only:
-                res.update(clean_only=True)
+            pipeline = Pipeline(state, context=self.context, **self.pipeline_opts)
+            if self.stat_only:
+                stat = await pipeline.stat(stage)
+                logger.info(f'{state}:{stage}:stat {stat}')
+            elif self.clean_only:
                 await pipeline.clean(stage)
             else:
-                res.update(await pipeline.run(stage, clean=self.clean))
+                run.result = await pipeline.run(stage, clean=self.clean)
         except Exception as err:
-            error = dict(type=type(err).__name__, msg=str(err))
-            res.update(failed=True, error=error)
-            self.errors.append(dict(state=state, stage=stage)|error)
-            logger.exception(f'{state}:{stage}:fail {error=}', exc_info=not self.fail)
+            run.error = PipelineRunError(
+                type=type(err).__name__,
+                message=str(err),
+                state=state,
+                stage=stage)
+            run.failed = True
+            self.log.errors.append(run.error)
             if self.fail:
                 raise
+            logger.exception(
+                f'{state}:{stage}:fail error={run.error.model_dump(mode='json')}')
             capture_exception()
         finally:
-            end = utils.now()
-            res.update(end=end, elapsed=(end - start).total_seconds())
-            await self._save_log()
+            run.end = utils.utcnow()
+            run.elapsed = (run.end - run.start).total_seconds()
 
-    def getlog(self) -> dict[str, Any]:
-        doc = dict(self.info)
-        runs = list(doc.pop('runs'))
-        until = self.end or utils.now()
-        doc.update(start=self.start, end=self.end, elapsed=(until - self.start).total_seconds())
-        if self.errors:
-            doc.update(errors=self.errors)
-            if self.fail:
-                doc.update(error=self.errors[-1])
-        doc.update(runs_count=len(runs), runs=runs)
-        return doc
+    async def loop_worker(self, queue: deque[str], *stages: Stage) -> None:
+        while queue and not (self.log.errors and self.fail):
+            state = queue.popleft()
+            if state not in self.states_active:
+                continue
+            await self.run_stages(state, *stages)
+
+    def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
+        while queue and not (self.log.errors and self.fail) and not excs:
+            try:
+                state = queue.popleft()
+            except IndexError:
+                break
+            if state not in self.states_active:
+                continue
+            try:
+                asyncio.run(self.run_stages(state, *stages))
+            except Exception as err:
+                excs.append(err)
+                logger.error(f'Exiting thread due to error')
+                break
 
     async def _save_log(self) -> bool:
+        self.log.sync()
         if self.stat_only:
             return False
-        await self.logbackend.save(self.getlog())
+        await self.logbackend.save(self.log)
         return True
 
     def _skip_reason(self, state: StateCode) -> str|None:
         if (runs := self.runs[state]):
-            res = runs[-1]
-            if res.get('failed'):
+            run = runs[-1]
+            if run.failed:
                 return 'Previous stage failed'
-            if self.incremental and res.get('nochange'):
-                return 'No change'
+            if self.incremental:
+                if run.result:
+                    if run.result.get('nochange'):
+                        return 'No change'
 
-def _pfxopts(opts: dict[str, Any], *prefixes: str):
-    return {
-        prefix: {
-            key.removeprefix(f'{prefix}_'): opts[key]
-            for key in opts if key.startswith(f'{prefix}_')}
-        for prefix in prefixes}
 
 class Command(utils.BaseCommand):
     description = """
@@ -595,9 +649,16 @@ class Command(utils.BaseCommand):
 
     Available States
     ----------------
-    """ + ' '.join(sorted(scrapers))
+    {states}"""
 
     usage = '{prog} [OPTIONS] <stages> [state ...]'
+
+
+    @classmethod
+    def parser_fmtargs(cls, parser):
+        from .scrapers import scrapers
+        return super().parser_fmtargs(parser) | dict(
+            states=' '.join(sorted(scrapers)))
 
     @classmethod
     def add_arguments(cls, parser):
@@ -605,38 +666,38 @@ class Command(utils.BaseCommand):
         arg('stages',
             metavar='<stages>',
             type=cls.stages_opt,
-            help='Stage name(s) (various formats) or "all".')
+            help='Stage name(s) (various formats) or "all"')
         arg('states',
             nargs='*',
             metavar='state',
             help=(
                 'Optionally specify states as additional arguments. '
-                'If not specified, include all states.'))
+                'If not specified, include all states'))
         arg('--clean', '-c',
             action='store_true',
-            help='Clean each stage before running.')
+            help='Clean each stage before running')
         arg('--incremental', '-i',
             action='store_true',
             help=(
                 'If a stage indicates no change after running, '
-                'skip subsequent stages for the state.'))
+                'skip subsequent stages for the state'))
         arg('--concurrent', '-t',
             action='store_true',
             help=(
                 'Use multiple async workers when applicable. '
-                'The load stage is always synchronized with one worker.'))
+                'The load stage is always synchronized with one worker'))
         arg('--nofail', '-n',
             action='store_false',
             dest='fail',
             help=(
                 'Do not fail on error. Instead, log an exception, '
-                'and skip subsequent stages for the state.'))
+                'and skip subsequent stages for the state'))
         arg('--clean-only', '-x',
             action='store_true',
-            help='Only clean, do not run.')
+            help='Only clean, do not run')
         arg('--stat-only', '-s',
             action='store_true',
-            help='Only show stats, do not run.')
+            help='Only show stats, do not run')
         arg('--search-dbname', '-d',
             default=None,
             help=f'Alternate mongo search db name')
@@ -653,14 +714,28 @@ class Command(utils.BaseCommand):
         arg('--eager', '-e',
             action='store_false',
             dest='lazy',
-            help='Use eager loading of SQL result sets. Uses more memory.')
+            help='Use eager loading of SQL result sets. Uses more memory')
+        arg('--idfile',
+            default=None,
+            type=Path,
+            help='Write the pipeline log ID to the given file')
 
     def setup(self, opts):
+        from . import search
+        from .backends import etl
+        from .scrapers import scrapers
         opts.states = opts.states or sorted(scrapers)
-        runner_opts = vars(opts)
+        runner_opts = dict(vars(opts))
+        self.idfile: Path|None = runner_opts.pop('idfile')
+        runner_opts['context'] = {
+            etl.client.dbname_key: runner_opts.pop('etl_dbname'),
+            search.client.dbname_key: runner_opts.pop('search_dbname')}
         self.runner = PipelineRunner(**runner_opts)
 
     async def run(self):
+        if self.idfile:
+            logger.info(f'Writing pipeline log ID to {self.idfile}')
+            self.idfile.write_text(str(self.runner.log.id))
         await self.runner.run()
 
     @staticmethod
@@ -672,7 +747,3 @@ class Command(utils.BaseCommand):
             value = value.replace(stage[0].upper(), f' {stage.value} ')
         trans = {stage[0]: stage for stage in Stage}
         return [Stage(trans.get(value, value)) for value in value.split()]
-
-
-if __name__ == '__main__':
-    Command.main()

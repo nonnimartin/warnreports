@@ -6,6 +6,7 @@ import io
 import json
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar, Iterable, Iterator
@@ -20,6 +21,7 @@ from sqlalchemy.orm import joinedload as joinedload
 from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
 from sqlalchemy.sql import func
+from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 
 from . import settings, utils
 from .models import (ArtifactData, ArtifactDetail, CompanyDetail, DataModel,
@@ -33,7 +35,8 @@ __all__ = [
     'Report',
     'ReportMod',
     'SessionLocal',
-    'StateStat']
+    'StateStat',
+    'ensure_session']
 
 type ReportRowType = tuple[Report, Report, Naics|None, Artifact|None]
 type StateStatRowType = tuple[StateStat]
@@ -44,7 +47,14 @@ DEFAULT_YIELD_PER = 1000
 logger = utils.get_logger('orm')
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
-mrmodels: dict[str, type[MapReduceBase]] = {}
+
+@contextmanager
+def ensure_session(session: Session|None = None):
+    if session:
+        yield session
+    else:
+        with SessionLocal() as session:
+            yield session
 
 class Base(DeclarativeBase):
 
@@ -110,7 +120,6 @@ class MapReduceBase[DM: DataModel, RT](Base):
         super().__init_subclass__(**kw)
         if not cls.__abstract__:
             cls.data_model = cls.__orig_bases__[0].__args__[0]
-            mrmodels[cls.__name__.lower()] = cls
 
 NaicsReport = Table(
     'naicsreport',
@@ -127,6 +136,7 @@ ArtifactReport = Table(
 nowopts = dict(server_default=func.now(), default=utils.now)
 
 class Report(MapReduceBase[ReportData, ReportRowType]):
+    NS: ClassVar[uuid.UUID] = uuid.uuid5(settings.NAMESPACE, 'Report')
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm_id: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
@@ -191,7 +201,7 @@ class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
             self.last_reported = latest
 
 class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
-    NS = uuid.uuid5(settings.NAMESPACE, 'Company')
+    NS: ClassVar[uuid.UUID] = uuid.uuid5(settings.NAMESPACE, 'Company')
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     name: Mapped[str] = mapped_column(String(512), unique=True)
     name_norm: Mapped[str] = mapped_column(String(512), index=True)
@@ -336,8 +346,12 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     reports: Mapped[list[Report]] = relationship(secondary=ArtifactReport, back_populates='artifacts')
 
     @property
-    def name(self):
+    def name(self) -> str:
         return Path(self.path).name
+
+    @staticmethod
+    def path_to_id(value: str) -> uuid.UUID:
+        return uuid.uuid5(settings.NAMESPACE, f'artifact:{value}')
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True):
@@ -377,6 +391,14 @@ class ReportMod(Base):
     ns: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
     first_scraped: Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+STMT_REPORT_GET: Select[tuple[Report, Artifact, Naics]] = (
+    select(Report, Artifact, Naics)
+    .join(Report.artifacts, isouter=True)
+    .join(Report.naics, isouter=True)
+    .options(
+        joinedload(Report.naics),
+        joinedload(Report.artifacts)))
+
 def lazify[RT](stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None) -> Select[RT]:
     if lazy:
         joinfunc = selectinload
@@ -413,14 +435,18 @@ def load_naics() -> None:
             for entry in entries)
         session.commit()
 
-def dump_csv(table: Table, f: io.TextIOWrapper, session: Session) -> None:
+def dump_csv(table: Table|str, f: io.TextIOWrapper, session: Session) -> None:
+    if isinstance(table, str):
+        table = Base.metadata.tables[table.lower()]
     stmt = table.select().order_by(*table.primary_key.columns)
     writer = csv.writer(f)
     writer.writerow(c.name for c in table.columns)
     writer.writerows(session.execute(lazify(stmt)).tuples())
 
-def dump_update(table: Table, file: Path|None = None) -> None:
+def dump_update(table: Table|str, file: Path|None = None) -> None:
     'Dump table CSV'
+    if isinstance(table, str):
+        table = Base.metadata.tables[table.lower()]
     if not file:
         file = settings.BUILD_DIR/'dump'/f'{table.name}.csv'
     if file.exists():
@@ -430,7 +456,7 @@ def dump_update(table: Table, file: Path|None = None) -> None:
         hash_old = None
         file.parent.mkdir(parents=True, exist_ok=True)
     tmp = Path(f'{file}.tmp')
-    logger.info(f'Dumping table {table.name}')
+    logger.info(f'Dumping table {table.name} to {file}')
     try:
         with SessionLocal() as session:
             with tmp.open('w') as f:
@@ -441,7 +467,6 @@ def dump_update(table: Table, file: Path|None = None) -> None:
             logger.info(f'No change')
             tmp.unlink()
         else:
-            logger.info(f'Writing {file}')
             tmp.rename(file)
     finally:
         tmp.unlink(missing_ok=True)
@@ -453,27 +478,92 @@ class DumpCommand(utils.FuncCommand(dump_update)):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('table', type=lambda x: Base.metadata.tables[x.lower()])
-        parser.add_argument('file', nargs='?', type=Path)
+        arg = parser.add_argument
+        arg(
+            'table',
+            metavar='table',
+            choices=Base.metadata.tables,
+            help=f'The table ({'|'.join(sorted(Base.metadata.tables))})')
+        arg(
+            'file',
+            nargs='?',
+            type=Path,
+            help=('The output file, default BUILD_DIR/dump/[table].csv'))
 
 class MroneCommand(utils.BaseCommand):
-    'Run map-reduce for a single object and print json'
+    description = """
+    Run map-reduce for a single object and print the resulting data model object
+
+    Examples
+    --------
+
+    Report
+    $ {prog} 9445518b-3192-5eb2-b5ce-710c18f24368
+
+    Company
+    $ {prog} -m company 3224e161-3705-5f5e-9661-abcfe0e3f24e
+    $ {prog} -m company Safeway
+    $ {prog} -m company 'Safeway, Inc.'
+
+    State
+    $ {prog} -m state CA
+
+    Naics
+    $ {prog} -m naics 44511
+
+    Artifact
+    $ {prog} -m artifact 0ab65afb-2d9f-5754-b1ad-e03d99cac511
+    $ {prog} -m artifact ca/warn_report1.xlsx
+    ------------------------------------------------------------
+    """
+    mrclasses = [
+        cls for cls in MapReduceBase.__subclasses__()
+        if not cls.__abstract__]
+    mrclasses.sort(key=lambda x: x.__name__)
+
+    @classmethod
+    def modelopt(cls, value: str) -> type[MapReduceBase]:
+        if value.lower() == 'state':
+            value = 'StateStat'
+        for model in cls.mrclasses:
+            if model.__name__.lower() == value.lower():
+                return model
+        raise ValueError
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('--model', '-m', choices=mrmodels, default='report', help='Model name, default report')
-        parser.add_argument('--yaml', action='store_true', help='Output yaml')
-        parser.add_argument('id', help='The object primary key. For company this is name_norm_id')
+        arg = parser.add_argument
+        arg(
+            '--model', '-m',
+            type=cls.modelopt,
+            default=Report,
+            help=(f'The ORM model name, default Report '
+                  f'({'|'.join(x.__name__ for x in cls.mrclasses)})'))
+        arg(
+            '--yaml',
+            action='store_true',
+            help='Output yaml')
+        arg(
+            'id',
+            help='The object primary key (see examples)')
 
     def setup(self, opts):
         super().setup(opts)
-        self.model = mrmodels[opts.model]
+        self.model: type[MapReduceBase] = opts.model
         if self.model is Company:
             field = 'name_norm_id'
         else:
             field = 'id'
         value = opts.id
-        if self.model is StateStat:
+        if self.model is Company:
+            try:
+                value = uuid.UUID(value)
+            except ValueError:
+                from .ref.normls import company_name_norm
+                value = uuid.uuid5(Company.NS, company_name_norm(value))
+        elif self.model is Artifact and '/' in value:
+            value = Artifact.path_to_id(value)
+        elif self.model is StateStat:
             value = str(value).upper()
         elif self.model is Naics:
             value = int(value)
@@ -484,7 +574,7 @@ class MroneCommand(utils.BaseCommand):
 
     def run(self):
         with SessionLocal() as session:
-            res = tuple(self.model.map_reduce_exec(session, self.filter))
+            res = tuple(self.model.map_reduce_exec(session, self.filter, lazy=False))
         if not res:
             raise ValueError(f'Not found: {self.filterkw}')
         obj, = res
@@ -493,7 +583,7 @@ class MroneCommand(utils.BaseCommand):
         print(text)
 
     def dumpobj(self, obj: DataModel) -> dict[str, Any]:
-        return json.loads(obj.model_dump_json())
+        return obj.model_dump(mode='json')
 
     def dictstr(self, objdict: dict[str, Any]) -> str:
         if self.opts.yaml:

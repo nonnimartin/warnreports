@@ -153,12 +153,23 @@ function plainObjParams(params) {
 }
 
 export async function populateStateSelects(form) {
-    const stateOpt = id => $('<option/>').attr({value: id}).text(String(id))
+    const opt = id => $('<option/>').attr({value: id}).text(String(id))
     let states
     for (const select of $('select[name="state"]', form).toArray()) {
         states = states || await cache.fetch('states')
         for (const state of states) {
-            stateOpt(state.id).appendTo(select)
+            opt(state.id).appendTo(select)
+        }
+    }
+}
+
+export async function populateNaicsRootSelects(form) {
+    const opt = ({id, title}) => $('<option/>').attr({value: id}).text(`${id} - ${title}`)
+    let naics
+    for (const select of $('select[name="naics"]', form).toArray()) {
+        naics = naics || await cache.fetch('naicsRoots')
+        for (const naic of naics) {
+            opt(naic).appendTo(select)
         }
     }
 }

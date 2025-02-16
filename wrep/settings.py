@@ -42,4 +42,3 @@ FEED_ENTRY_LIMIT = int(getenv('FEED_ENTRY_LIMIT', 100))
 SENTRY_ENABLED = getenv('SENTRY_ENABLED', '').lower() == 'true'
 SENTRY_DSN = getenv('SENTRY_DSN', '')
 SENTRY_ENVIRONMENT = getenv('SENTRY_ENVIRONMENT', 'dev')
-UVICORN_RELOAD = getenv('UVICORN_RELOAD', '').lower() == 'true'

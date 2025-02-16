@@ -63,7 +63,6 @@ class FeedComponent {
                 offset: 0,
             },
             opts: {
-                // paging: false,
                 ordering: false,
                 lengthChange: false,
                 filter: false,
@@ -132,8 +131,9 @@ class FeedComponent {
     async updateFeedInfo() {
         if (!this.feedId) {
             this.feedInfo.html('')
-            this.feedMarkups.rss.empty().closest('.feed-markup-wrapper').hide()
-            this.feedMarkups.atom.empty().closest('.feed-markup-wrapper').hide()
+            for (const mkp of Object.values(this.feedMarkups)) {
+                mkp.empty().closest('.feed-markup-wrapper').hide()
+            }
             return
         }
         const description = feedDescription(this.feedId)
