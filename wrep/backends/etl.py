@@ -57,6 +57,18 @@ class PipelineLogBackend(ContextMixin):
     @abstractmethod
     async def fetch(self, id: UUID) -> PipelineLog: ...
 
+    @abstractmethod
+    async def fetch_latest(self) -> PipelineLog: ...
+
+    @abstractmethod
+    async def findall(self, limit: Limit|None = None, offset: Offset = 0) -> AsyncIterable[PipelineLog]: ...
+
+    @abstractmethod
+    async def update(self, source: EitherIterable[PipelineLog]) -> tuple[int, int, int]: ...
+
+    @abstractmethod
+    async def prune(self, maxage: utils.Delta) -> int: ...
+
     def __init_subclass__(cls):
         super().__init_subclass__()
         if hasattr(cls, 'engine'):
@@ -126,12 +138,14 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
     mongo = client
     _indexes_created = False
 
+    @staticmethod
+    def as_inst(doc: Doc) -> PipelineLog:
+        return PipelineLog.model_validate(doc)
+
     async def save(self, log):
         doc = log.as_doc()
+        await self.create_indexes()
         coll = await self.collection()
-        if not self._indexes_created:
-            await coll.create_indexes(self.indexes)
-            self._indexes_created = True
         res = await coll.replace_one({'_id': doc['_id']}, doc, True)
 
     async def fetch(self, id):
@@ -139,7 +153,40 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
         doc = await coll.find_one({'_id': id})
         if not doc:
             raise ValueError(f'Pipeline log not found {id=}')
-        return PipelineLog.model_validate(doc)
+        return self.as_inst(doc)
+
+    async def fetch_latest(self):
+        async for log in await self.findall(limit=1):
+            return log
+        raise ValueError(f'No pipeline log found')
+
+    async def findall(self, limit = None, offset = 0):
+        coll = await self.collection()
+        cur = coll.find()
+        cur = cur.sort('start', -1)
+        if limit is not None:
+            cur = cur.limit(limit)
+        cur = cur.skip(offset)
+        return utils.amap(self.as_inst, cur)
+
+    async def update(self, source):
+        it = (x.as_doc() async for x in utils.as_aiter(source))
+        await self.create_indexes()
+        return await update_collection(await self.collection(), it)
+
+    async def prune(self, maxage: utils.Delta) -> int:
+        age = utils.deltaparse(maxage, default_unit='days')
+        expiry = utils.utcnow() - age
+        filt = {'start': {'$lt': expiry}}
+        coll = await self.collection()
+        res = await coll.delete_many(filt)
+        return res.deleted_count
+
+    async def create_indexes(self) -> None:
+        if not self._indexes_created:
+            coll = await self.collection()
+            await coll.create_indexes(self.indexes)
+            self._indexes_created = True
 
     indexes = [
         IndexModel({'stages': 1}),
@@ -287,10 +334,13 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
 
-async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc], get_filter: Callable[[Doc], Doc]) -> tuple[int, int, int]:
+async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc], get_filter: Callable[[Doc], Doc]|None = None) -> tuple[int, int, int]:
     count, created, updated = 0, 0, 0
     async for doc in utils.as_aiter(it):
-        filt = get_filter(doc)
+        if get_filter:
+            filt = get_filter(doc)
+        else:
+            filt = {'_id': doc['_id']}
         if '_id' not in filt:
             old = await coll.find_one(filt)
             if old:
@@ -318,15 +368,21 @@ async def docs_stat(it: EitherIterable[Doc]) -> Doc:
         size=size,
         hash=h.hexdigest() if count else None)
 
-
-class OneBaseCommand(utils.BaseCommand):
+class EtlCmdMixin:
 
     @classmethod
-    def add_arguments(cls, parser: utils.AP):
+    def dbname_arg(cls, parser: utils.AP) -> None:
         arg = parser.add_argument
         arg('--etl-dbname', '-b',
             default=None,
             help=f'Alternate mongo etl db name')
+
+class OneBaseCommand(utils.BaseCommand, EtlCmdMixin):
+
+    @classmethod
+    def add_arguments(cls, parser: utils.AP):
+        arg = parser.add_argument
+        cls.dbname_arg(parser)
         arg('--yaml', action='store_true', help='Output yaml')
 
     def setup(self, opts):
@@ -392,8 +448,19 @@ class LdoneCommand(OneBaseCommand):
             session.rollback()
         self.printobj(dict(save=save, report=report))
 
-class LogShowCommand(utils.BaseCommand):
-    'WIP'
+class LogCmdMixin(EtlCmdMixin):
+
+    def get_backend(self, dbname: str|None) -> MongoPipelineLog:
+        return MongoPipelineLog(context={client.dbname_key: dbname})
+
+class LogShowCommand(utils.BaseCommand, LogCmdMixin):
+    'Show pipeline log'
+    summary_methods: ClassVar[dict[str, str]] = {
+        'load-changes': 'get_load_changes',
+        'scrape-stats': 'get_scrape_stats'}
+    summary_fields: ClassVar[dict[str, tuple[str, ...]]] = {
+        'load-changes': ('state', 'created', 'updated'),
+        'scrape-stats': ('state', 'elapsed')}
 
     @classmethod
     def add_arguments(cls, parser):
@@ -401,53 +468,96 @@ class LogShowCommand(utils.BaseCommand):
         arg = parser.add_argument
         arg(
             '--summary', '-s',
+            choices=cls.summary_methods,
+            default=None,
             help=(f'The summary type to show'))
         arg(
             '--output', '-o',
             choices=['json', 'yaml', 'table'],
             help=f'Output format')
-        arg('--etl-dbname', '-b',
-            default=None,
-            help=f'Alternate mongo etl db name')
+        cls.dbname_arg(parser)
         arg(
             'id',
             type=UUID,
-            help='The pipeline log ID')
+            nargs='?',
+            default=None,
+            help='The pipeline log ID, default latest')
 
     def setup(self, opts):
-        self.context = {client.dbname_key: opts.etl_dbname}
-        self.backend = MongoPipelineLog(context=self.context)
+        self.summary: str|None = self.opts.summary
+        self.output: str = self.opts.output
+        if not self.summary and self.output == 'table':
+            self.parser.error(f'Table output only supported with summary')
+        self.backend = self.get_backend(opts.etl_dbname)
 
     async def run(self):
-        log = await self.backend.fetch(self.opts.id)
-        summary: str|None = self.opts.summary
-        output: str = self.opts.output
-        if summary:
-            if summary == 'load-changes':
-                fields = ('state', 'created', 'updated')
-                body = log.get_load_changes()
-            elif summary == 'scrape-stats':
-                fields = ('state', 'elapsed')
-                body = log.get_scrape_stats()
-            else:
-                raise ValueError(f'Invalid summary: {summary}')
+        if self.opts.id:
+            log = await self.backend.fetch(self.opts.id)
+        else:
+            log = await self.backend.fetch_latest()
+        if self.summary:
+            fields = self.summary_fields[self.summary]
+            body = getattr(log, self.summary_methods[self.summary])()
             head = dict(zip(fields, fields))
         else:
-            if output == 'table':
-                raise ValueError(f'Table output only supported with summary')
             body = log.model_dump(mode='json')
-        if output == 'table':
+        if self.output == 'table':
             from tabulate import tabulate
             text = tabulate(body, head)
-        elif output == 'yaml':
+        elif self.output == 'yaml':
             text = yaml.safe_dump(body, sort_keys=False)
         else:
             text = json.dumps(body, indent=2)
         print(text)
 
+class LogCopyCommand(utils.BaseCommand, LogCmdMixin):
+    'Copy pipeline logs to another db'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        cls.dbname_arg(parser)
+        parser.add_argument('dest', help='The destination db name')
+
+    def setup(self, opts):
+        self.src = self.get_backend(opts.etl_dbname)
+        self.dst = self.get_backend(opts.dest)
+
+    async def run(self):
+        src_db = await self.src.db()
+        dst_db = await self.dst.db()
+        if src_db.name == dst_db.name:
+            raise ValueError(f'Source and dest db cannot be the same')
+        logger.info(f'Copying from {src_db.name} to {dst_db.name}')
+        res = await self.dst.update(await self.src.findall())
+        counts = dict(zip(('count', 'created', 'updated'), res))
+        print(counts)
+
+class LogPruneCommand(utils.BaseCommand, LogCmdMixin):
+    'Prune old pipeline logs'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument(
+            '--maxage', '-m',
+            type=utils.deltaopt('days'),
+            default='30d',
+            help='Max age, default 30d')
+        cls.dbname_arg(parser)
+
+    def setup(self, opts):
+        self.backend = self.get_backend(opts.etl_dbname)
+
+    async def run(self):
+        res = await self.backend.prune(self.opts.maxage)
+        counts = dict(deleted=res)
+        print(counts)
+
 class LogCommand(utils.BaseCommand):
     'Pipeline log commands'
-    commands = dict(show=LogShowCommand)
+    commands = dict(
+        show=LogShowCommand,
+        copy=LogCopyCommand,
+        prune=LogPruneCommand)
 
 class Command(utils.BaseCommand):
     'Misc ETL pipeline commands'
