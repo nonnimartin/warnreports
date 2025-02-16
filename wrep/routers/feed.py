@@ -75,7 +75,8 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     feed.description(title)
     feed.generator('')
     params = dict(params, order='-reported')
-    result = search.Search(ReportData, params, settings.FEED_ENTRY_LIMIT)
+    filter = search.filters[ReportData].model_validate(params)
+    result = search.Search(filter, settings.FEED_ENTRY_LIMIT)
     async for report in result.objs():
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))

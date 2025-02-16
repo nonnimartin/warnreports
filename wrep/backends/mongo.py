@@ -4,13 +4,18 @@ import dataclasses
 import json
 import uuid
 from datetime import timedelta, timezone
-from typing import Any, Self
+from typing import Any, AsyncIterator, ClassVar, Iterable, Self
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
+                                 AsyncIOMotorDatabase)
+from pydantic import Field
+from pymongo.operations import IndexModel
 
 from .. import settings, utils
+from ..models import DataModel, FilterModel, Limit, Offset
 
 logger = utils.get_logger('backends.mongo')
+filters: dict[type[DataModel], type[MongoFilter|FilterModel]] = {}
 
 @dataclasses.dataclass
 class MongoClient:
@@ -116,6 +121,132 @@ class MongoClient:
 class MissingControlDoc(Exception):
     pass
 
+class AbstractCollection:
+    name: str
+    data_model: type[DataModel]
+
+class AbstractMongoCollection(AbstractCollection):
+    indexes: list[IndexModel]
+    client: MongoClient
+
+    async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, str|int]:
+        'Get collection stats'
+        db = await self.client.get_database(db)
+        stat = await db.command('collstats', self.name)
+        return dict(name=self.name, count=stat['count'], size=stat['size'])
+
+    async def init(self, db: str|AsyncIOMotorDatabase|None = None) -> None:
+        'Init collection'
+        db = await self.client.get_database(db)
+        logger.info(f'Initializing {self.name}')
+        await db.get_collection(self.name).create_indexes(self.indexes)
+
+    async def clean(self, db: str|AsyncIOMotorDatabase|None = None) -> None:
+        'Clean collection'
+        db = await self.client.get_database(db)
+        stat = await self.stats(db=db)
+        logger.info(f'Cleaning {self.name} {stat=}')
+        await db.get_collection(self.name).drop()
+
+@dataclasses.dataclass
+class MongoCollection(AbstractMongoCollection):
+    client: MongoClient
+    name: str
+    data_model: type[DataModel]|None = None
+    indexes: list[IndexModel] = dataclasses.field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.indexes = list(map(IndexModel, self.indexes))
+
+class MongoFilter:
+    collection: ClassVar[AbstractMongoCollection]
+
+    def get_query(self) -> dict[str, Any]:
+        filts = tuple(self.get_filters())
+        return {'$and': filts} if filts else {}
+
+    def get_filters(self) -> Iterable[dict[str, Any]]:
+        yield from ()
+
+    def __init_subclass__(cls, **kw) -> None:
+        super().__init_subclass__(**kw)
+        if (model := getattr(cls, 'result_model', None)):
+            if issubclass(model, DataModel):
+                filters[model] = cls
+
+class MongoQueryFilter(MongoFilter):
+    q: dict[str, Any] = Field(default_factory=dict)
+
+    def get_filters(self):
+        if self.q:
+            yield self.q
+
+@dataclasses.dataclass
+class Search[DM: DataModel, FM: FilterModel[DM]|MongoFilter]:
+    filter: FM
+    limit: Limit|None = None
+    offset: Offset = 0
+    dbname: str|None = None
+
+    @property
+    def model(self) -> type[DM]:
+        return self.filter.result_model
+
+    @property
+    def collection(self) -> AbstractMongoCollection:
+        return self.filter.collection
+
+    @property
+    def client(self) -> MongoClient:
+        return self.collection.client
+
+    @utils.lazyprop
+    def q(self) -> dict[str, Any]:
+        return self.filter.get_query()
+
+    def __post_init__(self) -> None:
+        if self.limit == 0:
+            self.orders = []
+        else:
+            self.orders = list(self.filter.get_ordering())
+            if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
+                self.orders.append(('_id', 1))
+        self._db = None
+
+    async def db(self) -> AsyncIOMotorDatabase:
+        if self._db is None:
+            self._db = await self.client.get_database(self.dbname)
+        return self._db
+
+    async def get_collection(self) -> AsyncIOMotorCollection:
+        return (await self.db()).get_collection(self.collection.name)
+
+    async def count(self) -> int:
+        if settings.QUERY_LOGGING:
+            logger.info(f'COUNT q={self.q}')
+        return await (await self.get_collection()).count_documents(self.q)
+
+    async def tolist(self) -> list[DM]:
+        return [obj async for obj in self.objs()]
+
+    async def objs(self) -> AsyncIterator[DM]:
+        to_model = self.model.model_validate
+        async for doc in await self.docs():
+            yield to_model(doc)
+
+    async def docs(self) -> AsyncIterator[dict[str, Any]]:
+        if self.limit == 0:
+            return utils.as_aiter(())
+        if settings.QUERY_LOGGING:
+            logger.info(f'FIND q={self.q}')
+        cur = (await self.get_collection()).find(self.q)
+        if self.orders:
+            cur = cur.sort(self.orders)
+        if self.offset:
+            cur = cur.skip(self.offset)
+        if self.limit is not None:
+            cur = cur.limit(self.limit)
+        return cur
 
 class ControlBaseCommand(utils.BaseCommand):
     mongo: MongoClient

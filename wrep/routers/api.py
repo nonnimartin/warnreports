@@ -107,7 +107,7 @@ async def state_get(id: StateCode) -> StateDetail:
 async def dbstats() -> dict:
     db = await search.client.get_database()
     dbid = uuid5(settings.NAMESPACE, f'dbid:{db.name}')
-    tasks = {name: defn.stats(db=db) for name, defn in search.collection_defns.items()}
+    tasks = {name: defn.stats(db=db) for name, defn in search.mapped_collections.items()}
     return dict(
         dbid=dbid,
         collections={name: await task for name, task in tasks.items()})
@@ -127,7 +127,8 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     if req.method == 'HEAD':
         opts['limit'] = 0
         rep.status_code = status.HTTP_204_NO_CONTENT
-    result = search.Search(model, params, **opts)
+    filter = search.filters[model].model_validate(params)
+    result = search.Search(filter, **opts)
     total = await result.count()
     rep.headers['count'] = str(total)
     if (nexturl := get_next_url(req.url, total, opts['offset'], limit)):
@@ -137,7 +138,8 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     return await result.tolist()
 
 async def retrieve404[DM: DataModel](model: type[DM], **params) -> DM:
-    result = search.Search(model, params, limit=1)
+    filter = search.filters[model].model_validate(params)
+    result = search.Search(filter, limit=1)
     if await result.count():
         return await anext(result.objs())
     raise HTTPException(status.HTTP_404_NOT_FOUND)
