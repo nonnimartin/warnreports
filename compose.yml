@@ -25,6 +25,7 @@ services:
     image: localhost/warnreports:dev
     build:
       context: .
+      target: ${APP_IMAGE_TARGET:-}
     volumes:
       - ./build:/build
       - ./build/artifacts:/srv/artifacts
