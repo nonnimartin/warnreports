@@ -690,23 +690,28 @@ class KY(Scraper):
 
         self.broken_links_map = {
             'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg' : '',
-            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM' : ''
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM' : '',
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0' : '',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0' : ''
         }
-
+        
+        self.artifact_dict = {}
         self.runner.scrape()
-        index = dict(await self.build_artifacts_index())
-        self.cache.write_json('artifacts.json', index, indent=2)
-        # for key, url in index.values():
-        #     await self.cache_download(key, url, missing_only=True)
-        #     self.artifacts.add(key, self.cache.topath(key))
+        await self.build_artifacts_index()
+        self.cache.write_json('artifacts.json', self.artifact_dict, indent=2)
+        for key, url in self.artifact_dict.values():
+            await self.cache_download(key, url, missing_only=True)
+            self.artifacts.add(key, self.cache.topath(key))
 
+    def list_page_files(self) -> list[Path]:
+        return sorted(self.cache.glob('*'), reverse=True)
     
     async def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
         "Build the artifacts index from the downloaded csv"
         csv_file_path = self.cache.topath('ky.csv')
         chromedriver_path = shutil.which("chromedriver")
         service = webdriver.ChromeService(executable_path=chromedriver_path)
-        artifact_dict = {}
+
 
         async def read_csv():
             # Initialize the CSV reader
@@ -721,17 +726,17 @@ class KY(Scraper):
                         url = ''
                     if url in self.broken_links_map.keys():
                         url = ''
-                    if type(url) == str:
-                        if len(url) != 0:
-                            await process_url(url)
+                    await process_url(url)
     
         async def process_url(url):
             # Render the page
             options = webdriver.ChromeOptions()
             options.add_argument('--headless')
             options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument("--disable-gpu")
             options.add_experimental_option("prefs", {
-            "download.default_directory": r"/code/build/artifacts/ky/records",
+            "download.default_directory": r"/code/build/scrape/ky/records",
             "download.prompt_for_download": False,
             "download.directory_upgrade": True
             })
@@ -739,39 +744,58 @@ class KY(Scraper):
             # Initialize the Chrome driver
             driver = webdriver.Chrome(service=service, options=options)
             try:
-                # Navigate to the URL
-                driver.get(url)
-                # Wait for the page to fully render
-                time.sleep(8)
-                page_source = driver.page_source
-                wait = WebDriverWait(driver, 10)
-                # Get element with file format info
-                try:
-                    element = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//*[contains(text(), 'Word document') or contains(text(), 'Adobe PDF')]")))[0]
-                    doc_type = element.get_attribute('innerHTML')
-                except:
-                    doc_type = 'XXXXXXXX'
+
+                if url == '' or url == None:
+                    # add empty value for broken/missing links
+                    self.artifact_dict[url] = ''
+                else:
+                    # Navigate to the URL
+                    driver.get(url)
+                    # Wait for the page to fully render
+                    time.sleep(7)
+                    page_source = driver.page_source
+                    wait = WebDriverWait(driver, 10)
+                    # Get element with file format info
+                    try:
+                        element = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//*[contains(text(), 'Word document') or contains(text(), 'Adobe PDF')]")))[0]
+                        doc_type = element.get_attribute('innerHTML')
+                    except:
+                        print('Failed to fetch: ' + url)
+                        url = ''
                     
-                title = self.find_title(page_source)
-                print('title: ' + str(title))
-                filename = self.build_url(doc_type, title)
+                    if url == '' or url == None:
+                        # add empty value for broken/missing links
+                        self.artifact_dict[url] = ''
+                    else:
+                        title = self.find_title(page_source)
+                        print(url)
+                        print(doc_type)
+                        filename = self.build_url(doc_type, title)
+                        if filename == 'TEST':
+                            print(url)
 
-                # Add entry to artifacts dictionary
-                print('*****************')
-                print(url)
-                artifact_dict[url] = ['records/' + filename]
-                print(artifact_dict)
+                        # Add entry to artifacts dictionary
+                        self.artifact_dict[url] = ['records/' + filename]
+                        artifact_files = self.cache.glob('records/*')
+                        doc_files = []
+                        for file in artifact_files:
+                            if '.pdf' or '.docx' in file:
+                                doc_files.append(str(file))
 
+                        if '/build/scrape/ky/records/' + filename in doc_files:
+                            print('Skipping download: ' + filename + ' already downloaded')
+                        else:
 
-                # Click on button to download
-                buttons = driver.find_elements(By.CSS_SELECTOR, 'button')
-                for button in buttons:
-                    if 'data-key="download"' in button.get_attribute('innerHTML'):
-                        button.click()
-                        time.sleep(10)
+                            # Click on button to download
+                            buttons = driver.find_elements(By.CSS_SELECTOR, 'button')
+                            for button in buttons:
+                                if 'data-key="download"' in button.get_attribute('innerHTML'):
+                                    button.click()
+                                    time.sleep(1)
 
             finally:
                 # Close the browser
+                print('CLOSED THE BROWSER ***********')
                 driver.quit()      
 
         try:
@@ -786,33 +810,36 @@ class KY(Scraper):
         if loop.is_running():
             # If the loop is already running, schedule the task
             loop.create_task(read_csv())
+            print(self.artifact_dict)
+            return self.artifact_dict
         else:
             # Otherwise, run the loop
             loop.run_until_complete(read_csv())
-        print(artifact_dict)
-        return artifact_dict
         
     def find_title(self, text):
         # Define the starting string
         start_str = "Page 1 of "
         # Find the starting index of the starting string
         start_index = text.find(start_str)
-        # If the starting string is not found, return None
+        # If the starting string is not found, return ''
         if start_index == -1:
-            return None
+            return ''
         # Adjust the start index to begin after the starting string
         start_index += len(start_str)
         # Find the index of the next double quote after the starting string
         end_index = text.find('"', start_index)
-        # If no next double quote is found, return None
+        # If no next double quote is found, return ''
         if end_index == -1:
-            return None
+            return ''
         # remove beginning
         filename = text[start_index:end_index].split(', ')[1]
         # Extract and return the text between the starting string and the next double quote
         return filename
     
     def build_url(self, file_type, file_name):
+        if file_type is None or file_name is None:
+            #test
+            return 'TEST'
         extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
         return file_name + extension
 
