@@ -28,6 +28,7 @@ from bs4.element import PageElement, ResultSet, Tag
 from openpyxl.worksheet.worksheet import Worksheet
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
+from starlette.datastructures import URL
 from typing_extensions import Buffer
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -857,7 +858,7 @@ class MD(Scraper):
     # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
     latest_url = '/warn.shtml'
-    retry = dict(total=5)
+    retry = dict(total=10)
 
     async def scrape(self):
         page = bs(await self.fetch('latest.html', self.latest_url))
@@ -1541,7 +1542,7 @@ class TX(Scraper):
         page = bs(await self.fetch('latest.html', self.latest_url))
         for a in page.find_all('a', href=self.href_pat):
             href = a['href']
-            key = Path(href).name
+            key = Path(URL(self.absurl(href)).path).name
             year = int(self.year_pat.match(key)[1])
             is_recent = year >= utils.now().year - 1
             await self.download(key, href, missing_only=not is_recent)
@@ -1673,6 +1674,7 @@ class Artifacts:
         key = key.strip('/')
         file = file or self.src/key
         dest = self.dir/key
+        digfile = Path(f'{dest}.sha1')
         sta = file.stat()
         if dest.exists():
             stb = dest.stat()
@@ -1680,14 +1682,31 @@ class Artifacts:
             b = (int(stb.st_mtime), stb.st_size)
             if a == b:
                 save = SaveType.Nochange
+            elif a[1] == b[1]:
+                with file.open('rb') as f:
+                    diga = hashlib.file_digest(f, 'sha1').hexdigest()
+                if digfile.exists():
+                    digb = digfile.read_text().strip()
+                else:
+                    with dest.open('rb') as f:
+                        digb = hashlib.file_digest(f, 'sha1').hexdigest()
+                    digfile.write_text(digb)
+                if diga == digb:
+                    save = SaveType.Nochange
+                else:
+                    save = SaveType.Update
             else:
                 save = SaveType.Update
         else:
             save = SaveType.Create
             dest.parent.mkdir(parents=True, exist_ok=True)
         if save is not save.Nochange:
+            digfile.unlink(missing_ok=True)
             shutil.copyfile(file, dest)
             shutil.copystat(file, dest)
+            with dest.open('rb') as f:
+                digest = hashlib.file_digest(f, 'sha1').hexdigest()
+            digfile.write_text(digest)
             self.metrics['bytes_written'] += sta.st_size
         self.metrics[str(save)] += 1
         self.metrics['total'] += 1
@@ -1779,16 +1798,8 @@ def clean_filename[T](value: str, default: T = None) -> str|T:
         return clean
     return default
 
-def create_scraper(state: str) -> type[Scraper]:
-    class DefaultScraper(Scraper):
-        pass
-    state = state.upper()
-    DefaultScraper.state = state
-    DefaultScraper.__name__ = state
-    return DefaultScraper
-
 scrapers.update({
-    state: create_scraper(state)
+    state: type(state, (Scraper,), {})
     for state in map(str.upper, warn.utils.get_all_scrapers())
     if state not in scrapers})
 

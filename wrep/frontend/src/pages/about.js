@@ -28,7 +28,7 @@ class AboutComponent {
                 title: 'State Stats',
                 columns: [
                     {title: 'State', name: 'id', render: renderState},
-                    {title: 'Reports', name: 'reports_count', type: 'num'},
+                    {title: 'Reports', name: 'reports_count'},
                     {title: 'Last Reported', name: 'last_reported', type: 'date'},
                 ],
                 data: () => cache.fetch('states')

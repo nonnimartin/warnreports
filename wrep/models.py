@@ -1,22 +1,20 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
-from typing import (Annotated, Any, ClassVar, Generic, Literal, TypeAlias,
-                    TypeVar)
+from datetime import datetime, timezone
+from typing import Annotated, Any, ClassVar, Literal, TypeAlias
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from annotated_types import Le
 from pydantic import BaseModel as DataModel
-from pydantic import (ConfigDict, Field, NonNegativeInt, PositiveInt,
-                      StringConstraints, field_serializer)
+from pydantic import (ConfigDict, Field, NonNegativeInt, StringConstraints,
+                      field_serializer)
 from pydantic_core import ValidationError as ValidationError
 
-from . import utils
+from . import Stage, utils
 from .ref.tz import zoneinfos
 
-DM = TypeVar('DM', bound='DataModel')
 logger = utils.get_logger('models')
 
 __all__ = [
@@ -26,12 +24,10 @@ __all__ = [
     'CompanyDetail',
     'CompanyName',
     'DataModel',
-    'DM',
     'Limit',
     'NaicsData',
     'NaicsDetail',
     'Offset',
-    'PageNumber',
     'ReportData',
     'StateCode',
     'StateDetail',
@@ -39,7 +35,6 @@ __all__ = [
 
 Limit = Annotated[NonNegativeInt, Le(1000)]
 Offset: TypeAlias = NonNegativeInt
-PageNumber: TypeAlias = PositiveInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
 StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
 
@@ -250,3 +245,103 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
     result_model: ClassVar = ArtifactDetail
     order_fields: ClassVar = {'name'}
     default_ordering: ClassVar = [('name', 1)]
+
+# ----------------------------
+
+__all__ += [
+    'PipelineLog',
+    'PipelineRunError',
+    'PipelineRunDetail']
+
+class PipelineRunDetail(DataModel):
+    state: StateCode
+    stage: Stage
+    start: datetime|None = None
+    end: datetime|None = None
+    elapsed: float = 0
+    failed: bool = False
+    error: PipelineRunError|None = None
+    result: dict[str, Any]|None = None
+
+class PipelineRunError(DataModel):
+    type: str
+    message: str
+    state: StateCode|None = None
+    stage: Stage|None = None
+
+class PipelineLog(DataModel):
+    id: UUID = Field(alias='_id')
+    stages: list[Stage] = Field(default_factory=list)
+    states: list[StateCode] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    batch_opts: dict[str, Any] = Field(default_factory=dict)
+    pipeline_opts: dict[str, Any] = Field(default_factory=dict)
+    start: datetime|None = None
+    end: datetime|None = None
+    elapsed: float = 0
+    errors: list[PipelineRunError] = Field(default_factory=list)
+    runs: list[PipelineRunDetail] = Field(default_factory=list)
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    def sync(self) -> None:
+        if self.start:
+            until = self.end or utils.utcnow()
+            self.elapsed = (until - self.start).total_seconds()
+
+    def get_load_changes(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.runs:
+            if run.stage is not run.stage.Load:
+                continue
+            if not run.result or run.result['nochange']:
+                continue
+            counts = run.result['counts']
+            body.append(dict(
+                state=run.state,
+                created=counts['create'],
+                updated=counts['update']))
+        body.sort(key=lambda x: x['state'])
+        return body
+
+    def get_scrape_stats(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.runs:
+            if run.stage is not run.stage.Scrape:
+                continue
+            if run.end:
+                elapsed = run.elapsed
+            else:
+                elapsed = None
+            body.append(dict(
+                state=run.state,
+                elapsed=elapsed))
+        body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
+        return body
+
+    def get_runs(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.runs:
+            body.append(dict(
+                stage=run.stage[0].upper(),
+                state=run.state,
+                elapsed=run.elapsed,
+                failed=run.failed,
+                nochange=run.result and run.result.get('nochange')))
+        return body
+
+    def get_short(self) -> dict[str, Any]:
+        mapping = dict(
+            id=str(self.id),
+            stages=''.join(s[0].upper() for s in self.stages),
+            states=len(self.states),
+            runs=len(self.runs),
+            elapsed=self.elapsed)
+        if self.errors:
+            mapping.update(errors=len(self.errors))
+        for key, value in self.batch_opts.items():
+            if value is True:
+                mapping[key] = value
+        for key, value in self.context.items():
+            if value:
+                mapping[f'context.{key}'] = value
+        return mapping

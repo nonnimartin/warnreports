@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
-from typing import Any, AsyncIterator, Iterable, Iterator, Sequence
+from typing import Any, AsyncIterator, Iterable, Iterator, Literal, Sequence
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
-from .backends.mongo import MongoClient
+from .backends.mongo import ClientControlCommand, MongoClient
 from .models import *
 
 __all__ = ['filters', 'Search']
@@ -26,18 +27,24 @@ collection_defns: dict[str, CollectionDefn] = {}
 collections_map: dict[type[DataModel], str] = {}
 filters: dict[type[DataModel], type[MongoFilter|FilterModel]] = {}
 
-class CollectionDefn:
-
-    def __init__(self, name: str, orm_model: type[orm.MapReduceBase], indexes: Iterable[dict]) -> None:
-        self.name = name
-        self.orm_model = orm_model
-        self.indexes = list(map(IndexModel, indexes))
-        collection_defns[self.name] = self
-        collections_map[self.data_model] = self.name
+class AbstractCollectionDefn:
+    name: str
+    orm_model: type[orm.MapReduceBase]
 
     @property
     def data_model(self) -> type[DataModel]:
         return self.orm_model.data_model
+
+@dataclasses.dataclass
+class CollectionDefn(AbstractCollectionDefn):
+    name: str
+    orm_model: type[orm.MapReduceBase]
+    indexes: list[IndexModel]
+
+    def __post_init__(self) -> None:
+        self.indexes = list(map(IndexModel, self.indexes))
+        collection_defns[self.name] = self
+        collections_map[self.data_model] = self.name
 
     @property
     def filter_class(self) -> type[MongoFilter]:
@@ -164,7 +171,7 @@ class MongoFilter:
         return re.compile(f'^{re.escape(text)}.*', flags)
 
     @classmethod
-    def get_naics_filter(cls, naics: list[int], prefix: str = 'naics'):
+    def get_naics_filter(cls, naics: list[int], prefix: str = 'naics') -> dict[Literal['$or'], list[dict[str, Any]]]:
         if prefix:
             prefix = prefix.removesuffix('.') + '.'
         rxs = (
@@ -273,7 +280,6 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoFilter):
                 yield {field: value}
         yield from super().get_filters()
 
-
 class Search[DM: DataModel]:
 
     def __init__(
@@ -311,6 +317,8 @@ class Search[DM: DataModel]:
         return (await self.db()).get_collection(self.collection_name)
 
     async def count(self) -> int:
+        if settings.QUERY_LOGGING:
+            logger.info(f'COUNT q={self.q}')
         return await (await self.collection()).count_documents(self.q)
 
     async def tolist(self) -> list[DM]:
@@ -323,6 +331,8 @@ class Search[DM: DataModel]:
     async def docs(self) -> AsyncIterator[dict[str, Any]]:
         if self.limit == 0:
             return utils.as_aiter(())
+        if settings.QUERY_LOGGING:
+            logger.info(f'FIND q={self.q}')
         cur = (await self.collection()).find(self.q)
         if self.orders:
             cur = cur.sort(self.orders)
@@ -357,6 +367,8 @@ class CollectionCmdBase(utils.BaseCommand):
             self.funckw.update(lazy=opts.lazy)
 
     async def run(self):
+        if self.opts.dbname:
+            logger.info(f'Using search dbname={self.opts.dbname}')
         db = await client.get_database(self.opts.dbname)
         names = self.opts.names or collection_defns
         results: dict[str, Any] = {}
@@ -366,45 +378,12 @@ class CollectionCmdBase(utils.BaseCommand):
             if res is not None:
                 results[name] = res
         if res:
-            print(json.dumps(res, indent=2))
+            print(json.dumps(results, indent=2))
 
 def CollectionCmd(method: str) -> type[CollectionCmdBase]:
-    class Cmd(CollectionCmdBase): pass
-    Cmd.method = method
-    Cmd.description = getattr(CollectionDefn, method).__doc__
-    return Cmd
-
-class ControlGetCommand(utils.BaseCommand):
-    'Get the search mongo DB name'
-
-    async def run(self):
-        doc = await client.get_doc()
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlSetCommand(utils.BaseCommand):
-    'Set the search mongo DB name'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            '--ttl',
-            type=utils.deltaopt('seconds'),
-            default=None,
-            help='Override the TTL')
-        arg(
-            'name',
-            help='The database name')
-
-    async def run(self):
-        doc = await client.set_dbname(self.opts.name, ttl=self.opts.ttl)
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlCommand(utils.BaseCommand):
-    'Mongo DB name control commands'
-    commands = dict(
-        get=ControlGetCommand,
-        set=ControlSetCommand)
+    return type(f'{method}_Command', (CollectionCmdBase,), dict(
+        method=method,
+        description=getattr(CollectionDefn, method).__doc__))
 
 class Command(utils.BaseCommand):
     'Search collection commands'
@@ -413,4 +392,4 @@ class Command(utils.BaseCommand):
         init=CollectionCmd('init'),
         build=CollectionCmd('build'),
         clean=CollectionCmd('clean'),
-        control=ControlCommand)
+        control=ClientControlCommand(client))

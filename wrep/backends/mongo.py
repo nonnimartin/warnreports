@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
-from datetime import timedelta
-from typing import Any
+from datetime import timedelta, timezone
+from typing import Any, Self
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -27,7 +28,7 @@ class MongoClient:
     This causes nodes to check the control document before each request. Wait for all nodes
     to pick up the TTL, according to the prior TTL value. Then update the control document.
 
-    See command `wrep search control`.
+    See commands `wrep search control` and `wrep etl control`.
     """
     url: str
     control_dbname: str
@@ -49,7 +50,7 @@ class MongoClient:
         return self.client.get_database(db)
 
     async def get_default_database_name(self) -> str:
-        now = utils.now()
+        now = utils.now(tz=timezone.utc)
         if self.dbname_cache['name'] and self.dbname_cache['expiry'] > now:
             return self.dbname_cache['name']
         doc = await self.get_doc()
@@ -75,11 +76,12 @@ class MongoClient:
 
     async def set_dbname(self, dbname: str, ttl: utils.Delta|None = None) -> dict[str, Any]:
         'Set the control dbname'
-        now = utils.now()
+        now = utils.now(tz=timezone.utc)
         doc = dict(
             _id=self.doc_id,
             key=self.dbname_key,
             value=dbname,
+            dbid=uuid.uuid5(settings.NAMESPACE, f'dbid:{dbname}'),
             updated=now)
         if ttl is None:
             ttl = self.dbname_ttl
@@ -98,5 +100,79 @@ class MongoClient:
         self.dbname_cache['expiry'] = now + ttl
         return doc
 
+    async def set_ttl(self, ttl: utils.Delta) -> dict[str, Any]:
+        'Set the control TTL only'
+        ttl = utils.deltaparse(ttl, default_unit='seconds')
+        now = utils.now(tz=timezone.utc)
+        doc = await self.get_doc()
+        doc.update(
+            ttl=f'{int(ttl.total_seconds())}s',
+            dbid=uuid.uuid5(settings.NAMESPACE, f'dbid:{doc['value']}'),
+            updated=now)
+        await self.control_db.settings.replace_one({'_id': self.doc_id}, doc)
+        self.dbname_cache['expiry'] = now + ttl
+        return doc
+
 class MissingControlDoc(Exception):
     pass
+
+
+class ControlBaseCommand(utils.BaseCommand):
+    mongo: MongoClient
+
+    @classmethod
+    def parser_fmtargs(cls, parser):
+        return super().parser_fmtargs(parser) | dict(client=cls.mongo)
+
+    @classmethod
+    def fromclient(cls, client: MongoClient) -> type[Self]:
+        return type(cls.__name__, (cls,), dict(mongo=client))
+
+class ControlGetCommand(ControlBaseCommand):
+    'Get the mongo control doc for {client.dbname_key}'
+
+    async def run(self):
+        doc = await self.mongo.get_doc()
+        print(json.dumps(doc, indent=2, default=str))
+
+class ControlSetCommand(ControlBaseCommand):
+    'Update the mongo control doc for {client.dbname_key}'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        arg = parser.add_argument
+        arg(
+            '--ttl',
+            type=utils.deltaopt('seconds'),
+            default=None,
+            help='Override the TTL')
+        arg(
+            'name',
+            help='The database name')
+
+    async def run(self):
+        doc = await self.mongo.set_dbname(self.opts.name, ttl=self.opts.ttl)
+        print(json.dumps(doc, indent=2, default=str))
+
+class ControlTtlCommand(ControlBaseCommand):
+    'Update the mongo control doc TTL only for {client.dbname_key}'
+
+    @classmethod
+    def add_arguments(cls, parser):
+        arg = parser.add_argument
+        arg(
+            'ttl',
+            type=utils.deltaopt('seconds'),
+            help='The TTL')
+
+    async def run(self):
+        doc = await self.mongo.set_ttl(self.opts.ttl)
+        print(json.dumps(doc, indent=2, default=str))
+
+def ClientControlCommand(client: MongoClient) -> type[utils.BaseCommand]:
+    return type('MongoClientControlCommand', (utils.BaseCommand,), dict(
+        __doc__=f'Mongo control doc commands for {client.dbname_key}',
+        commands=dict(
+            get=ControlGetCommand.fromclient(client),
+            set=ControlSetCommand.fromclient(client),
+            ttl=ControlTtlCommand.fromclient(client))))

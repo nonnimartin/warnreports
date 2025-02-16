@@ -6,34 +6,49 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode
 
 from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from feedgen.feed import FeedGenerator
 from pydantic import ValidationError
 from starlette.datastructures import URL
 
 from .. import search, settings, utils
 from ..models import *
-from .common import FeedSearchParams, clean_feed_params, feed_id_encode, site_absurl
+from .common import (FeedSearchParams, clean_feed_params, feed_id_encode,
+                     site_absurl)
 
 logger = utils.get_logger('feed')
 router = APIRouter()
 
-
 @router.get('/rss')
-async def rss_query(params: FeedSearchParams) -> HTMLResponse:
-    return await feed_query('rss', params)
-
-@router.get('/rss/{id}')
-async def rss_permalink(id: str) -> HTMLResponse:
-    return await feed_permalink('rss', id)
+async def rss_default() -> HTMLResponse:
+    return await feed_query('rss', {})
 
 @router.get('/atom')
-async def atom_query(params: FeedSearchParams) -> HTMLResponse:
-    return await feed_query('atom', params)
+async def atom_default() -> HTMLResponse:
+    return await feed_query('atom', {})
+
+@router.head('/rss')
+@router.head('/atom')
+async def default_head(rep: Response) -> Response:
+    rep.status_code = status.HTTP_204_NO_CONTENT
+    return rep
+
+@router.get('/rss/{id}')
+async def rss_permalink(rep: Response, id: str) -> HTMLResponse:
+    feed_id_header(rep, id)
+    return await feed_permalink('rss', id)
 
 @router.get('/atom/{id}')
-async def atom_permalink(id: str) -> HTMLResponse:
+async def atom_permalink(rep: Response, id: str) -> HTMLResponse:
+    feed_id_header(rep, id)
     return await feed_permalink('atom', id)
+
+@router.head('/rss/{id}')
+@router.head('/atom/{id}')
+async def permalink_head(rep: Response, id: str) -> Response:
+    feed_id_header(rep, id)
+    rep.status_code = status.HTTP_204_NO_CONTENT
+    return rep
 
 async def feed_query(fmt: str, params: FeedSearchParams) -> HTMLResponse:
     return HTMLResponse(content=await build_feed(fmt, params), media_type='text/xml')
@@ -76,7 +91,7 @@ def entry_description(report: ReportData) -> str:
     if report.employees:
         descs.append(f'{report.employees} employees')
     if report.starting:
-        descs.append(f'starting {report.starting.date()}')
+        descs.append(f'on {report.starting.date()}')
     if report.action:
         descs.append(report.action)
     if report.location:
@@ -116,6 +131,17 @@ def id_permalink(id: str, fmt: str) -> URL:
     if id:
         path = f'{path}/{id}'
     return site_absurl(path)
+
+def feed_id_header(rep: Response, id: str) -> Response:
+    try:
+        id = feed_id_encode(id_decode(id))
+    except ValidationError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    if id:
+        rep.headers['feed-id'] = id
+    return rep
 
 def report_link(report: ReportData) -> URL:
     return site_absurl(f'/r/{report.id}')

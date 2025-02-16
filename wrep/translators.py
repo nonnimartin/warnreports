@@ -4,7 +4,6 @@ import inspect
 import json
 import re
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from html import unescape as html_unescape
 from pathlib import Path
@@ -13,12 +12,11 @@ from typing import Any, ClassVar, Iterable
 
 from pydantic import HttpUrl
 
-from . import orm, settings, utils
+from . import orm, utils
 from .models import ValidationError
-from .orm import ReportMod
+from .orm import Report, ReportMod
 from .ref.tz import zoneinfos
 
-NAMESPACE = uuid.uuid5(settings.NAMESPACE, 'Report')
 PAT_NONALPHANUM = _r(r'[^a-z0-9]+', re.I)
 PAT_NONDIGITS = _r(r'[^\d]+')
 PAT_NAICSSPLIT = _r(r'[\s,:/]+')
@@ -41,7 +39,6 @@ type Entry = dict[str, Any]
 type Row = dict[str, str]
 
 class Translator:
-
     tz: ClassVar = timezone.utc
     headermap: ClassVar[dict[str, str|list[str]]] = {}
     default_url: ClassVar[str|None] = None
@@ -55,20 +52,10 @@ class Translator:
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
         ]
     )
-    _session: orm.Session|None = None
+    session: orm.Session|None = None
 
-    @property
-    @contextmanager
-    def session(self):
-        if self._session:
-            yield self._session
-        else:
-            with orm.SessionLocal() as session:
-                yield session
-
-    @session.setter
-    def session(self, value: orm.Session|None) -> None:
-        self._session = value
+    def entries(self, row: Row) -> Iterable[Entry]:
+        yield self.entry(row)
 
     def entry(self, row: Row) -> Entry:
         'Translate a source row to an entry'
@@ -152,6 +139,7 @@ class Translator:
                 data = {}
         artifacts = {}
         for path, url in data.items():
+            path = path.strip('/')
             try:
                 HttpUrl(url)
                 Path(path)
@@ -200,7 +188,7 @@ class Translator:
         scrape_time: datetime|None = entry.pop('scrape_time', None)
         if scrape_time:
             stmt = orm.select(ReportMod).where(ReportMod.id == entry['id'])
-            with self.session as session:
+            with orm.ensure_session(self.session) as session:
                 repmod = session.scalar(stmt)
                 if not repmod:
                     repmod = ReportMod(id=entry['id'], ns=self.namespace)
@@ -255,7 +243,7 @@ class Translator:
         if len(state := cls.__name__.upper()) == 2:
             cls.state = state
             cls.tz = zoneinfos[state]
-            cls.namespace = uuid.uuid5(NAMESPACE, state)
+            cls.namespace = uuid.uuid5(Report.NS, state)
             translators[state] = cls
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
@@ -897,6 +885,11 @@ class MI(Translator):
         'Incident Type': 'action',
         'Number of Layoffs': 'employees'
     }
+    rewrites=dict(
+        company=[
+            (_r(r'\u00ef\u00bf\u00bd'), 'e'),
+        ],
+    )
 
 class MO(Translator):
     default_url = 'https://jobs.mo.gov/warn/'
