@@ -420,29 +420,29 @@ class LogShowCommand(utils.BaseCommand):
 
     async def run(self):
         log = await self.backend.fetch(self.opts.id)
-        if self.opts.summary:
-            if self.opts.summary == 'load-changes':
-                head = ('state', 'created', 'updated')
-                body = log.load_change_rows()
+        summary: str|None = self.opts.summary
+        output: str = self.opts.output
+        if summary:
+            if summary == 'load-changes':
+                fields = ('state', 'created', 'updated')
+                body = log.get_load_changes()
+            elif summary == 'scrape-stats':
+                fields = ('state', 'elapsed')
+                body = log.get_scrape_stats()
             else:
-                raise ValueError(f'Invalid summary: {self.opts.summary}')
-            if self.opts.output == 'table':
-                obj = [head] + body
-            else:
-                obj = list(
-                    dict(zip(head, values))
-                    for values in body)
+                raise ValueError(f'Invalid summary: {summary}')
+            head = dict(zip(fields, fields))
         else:
-            if self.opts.output == 'table':
+            if output == 'table':
                 raise ValueError(f'Table output only supported with summary')
-            obj = log.model_dump(mode='json')
-        if self.opts.output == 'table':
+            body = log.model_dump(mode='json')
+        if output == 'table':
             from tabulate import tabulate
-            text = tabulate(obj[1:], obj[0])
-        elif self.opts.output == 'yaml':
-            text = yaml.safe_dump(obj, sort_keys=False)
+            text = tabulate(body, head)
+        elif output == 'yaml':
+            text = yaml.safe_dump(body, sort_keys=False)
         else:
-            text = json.dumps(obj, indent=2)
+            text = json.dumps(body, indent=2)
         print(text)
 
 class LogCommand(utils.BaseCommand):

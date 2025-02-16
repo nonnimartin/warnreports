@@ -291,7 +291,7 @@ class PipelineLog(DataModel):
         if self.errors:
             self.error = self.errors[-1]
 
-    def load_change_rows(self) -> list[tuple[str, ...]]:
+    def get_load_changes(self) -> list[dict[str, Any]]:
         body = []
         for run in self.runs:
             if run.stage is not run.stage.Load:
@@ -299,6 +299,24 @@ class PipelineLog(DataModel):
             if not run.result or run.result['nochange']:
                 continue
             counts = run.result['counts']
-            body.append((run.state, counts['create'], counts['update']))
-        body.sort()
+            body.append(dict(
+                state=run.state,
+                created=counts['create'],
+                updated=counts['update']))
+        body.sort(key=lambda x: x['state'])
+        return body
+
+    def get_scrape_stats(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.runs:
+            if run.stage is not run.stage.Scrape:
+                continue
+            if run.end:
+                elapsed = run.elapsed
+            else:
+                elapsed = None
+            body.append(dict(
+                state=run.state,
+                elapsed=elapsed))
+        body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
         return body
