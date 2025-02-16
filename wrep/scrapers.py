@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import shutil
+import uuid
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -677,6 +678,152 @@ class IN(Scraper):
         if a:
             return self.absurl(a['href'])
         return cell.text.strip()
+
+class KY(Scraper):
+    broken_links = {
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM',
+        'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
+        'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004t96n/5P7Er8jyZDBXBGs92hEZzvmN8hJRRiUjVC3V9bSY5Z0',
+        'https://kydev.my.salesforce.com'}
+
+    async def scrape(self) -> None:
+        self.runner.scrape()
+        if settings.SELENIUM_ENABLED:
+            await self.build_artifacts_index()
+
+    async def build_artifacts_index(self) -> dict[str, str]:
+        """Build the artifacts index from the downloaded CSV."""
+        import functools
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+
+        artifacts: dict[str, str] = {}
+        if self.cache.exists('artifacts.json'):
+            artifacts.update(self.cache.read_json('artifacts.json'))
+
+        @functools.cache
+        def get_driver():
+            chromedriver_path = shutil.which("chromedriver")
+            service = webdriver.ChromeService(executable_path=chromedriver_path)
+            options = webdriver.ChromeOptions()
+            options.add_argument('--headless')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--remote-debugging-pipe')
+            options.add_argument('--dns-prefetch-disable')
+            options.page_load_strategy = 'normal'
+            options.add_experimental_option('prefs', {
+                'download.default_directory': str(self.cache.topath('download')),
+                'download.prompt_for_download': False,
+                'download.directory_upgrade': True})
+            return webdriver.Chrome(service=service, options=options)
+
+        async def read_csv():
+            with self.runner.file.open() as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    url = row['Notice URL']
+                    if url and url not in self.broken_links:
+                        if (recvd := row.get('Date Received')):
+                            prefix = recvd.split()[0]
+                            await process_artifacts(url, prefix)
+
+        # Get element with file format info
+        element_condition = EC.presence_of_all_elements_located((
+            By.XPATH,
+            "//*[contains(text(), 'Word document') or contains(text(), 'Adobe PDF')]"))
+
+        async def process_artifacts(url: str, prefix: str) -> None:
+            if url in artifacts:
+                key = artifacts[url]
+                if not key:
+                    logger.info(f'Skipping {url=}')
+                    return
+                if self.cache.exists(key):
+                    logger.info(f'Skipping {key} already exists')
+                    return
+            driver = get_driver()
+            driver.get(url)
+            wait = WebDriverWait(driver, 10)
+            try:
+                element = wait.until(element_condition)[0]
+                doc_type = element.get_attribute('innerHTML')
+            except Exception as err:
+                logger.warning(f'Failed to fetch {url=} {err=}')
+                return
+            title = find_title(driver.page_source)
+            if not title:
+                logger.warning(f'Skipping empty title for {url=}')
+                return
+            filename = build_filename(doc_type, title)
+            urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
+            key = f'records/{clean_filename(f'{prefix}-{urlid}-{filename}')}'
+            dest = self.cache.topath(key)
+            # Add entry to artifacts index & save
+            artifacts[url] = key
+            self.cache.write_json('artifacts.json', artifacts, indent=2)
+            if self.cache.exists(key):
+                logger.info(f'Skipping download {key} already downloaded')
+                return
+            # Find download buttons
+            buttons = driver.find_elements(By.CSS_SELECTOR, 'button')
+            if not buttons:
+                return
+            # Wait for the page to fully render
+            logger.info(f'Waiting 4s for render')
+            await asyncio.sleep(4)
+            for button in buttons:
+                # Click on button to download
+                if 'data-key="download"' in button.get_attribute('innerHTML'):
+                    try:
+                        button.click()
+                        await asyncio.sleep(1)
+                    except:
+                        logger.warning(f'Click to download failed', exc_info=True)
+                        return
+                    break
+            # Move downloaded file
+            downloads = list(self.cache.glob('download/*'))
+            if downloads:
+                dload = downloads.pop()
+                logger.info(f'Moving download to {key}')
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dload.rename(dest)
+                for orphan in downloads:
+                    logger.warning(f'Removing {orphan=}')
+                    orphan.unlink()
+            else:
+                logger.warning(f'No download found for {url=}')
+
+        def find_title(text: str) -> str:
+            start_str = 'Page 1 of '
+            start_index = text.find(start_str)
+            if start_index == -1:
+                return ''
+            start_index += len(start_str)
+            end_index = text.find('"', start_index)
+            if end_index == -1:
+                return ''
+            filename = text[start_index:end_index].split(', ')[1]
+            return filename
+
+        def build_filename(file_type: str, file_name: str) -> str:
+            extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
+            return file_name + extension
+
+        try:
+            await read_csv()
+        finally:
+            if get_driver.cache_info().currsize:
+                get_driver().quit()
+        self.cache.write_json('artifacts.json', artifacts, indent=2)
+        return artifacts
 
 class LA(Scraper):
     base_url = 'https://www.laworks.net'
