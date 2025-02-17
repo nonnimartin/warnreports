@@ -17,12 +17,14 @@ RUN ./scripts/download-warn-scraper.sh &&\
 COPY ./requirements.txt ./
 RUN pip install -qqq --no-cache-dir --no-input -r requirements.txt
 CMD ["python", "-m", "wrep.main"]
-COPY . .
-RUN wrep frontend build
 
 FROM base AS selenium
 ENV SELENIUM_ENABLED=true
 RUN apk --no-cache -q add chromium-chromedriver &&\
     pip install -qqq --no-cache-dir --no-input selenium
+COPY . .
+RUN wrep frontend build
 
 FROM base
+COPY . .
+RUN wrep frontend build

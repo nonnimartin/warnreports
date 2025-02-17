@@ -22,7 +22,7 @@ services:
     command: postgres -F -c logging_collector=off -c listen_addresses='*'
 
   app:
-    image: localhost/warnreports:dev
+    image: localhost/warnreports:${APP_IMAGE_TARGET:-dev}
     build:
       context: .
       target: ${APP_IMAGE_TARGET:-}

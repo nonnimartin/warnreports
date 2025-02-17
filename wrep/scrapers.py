@@ -687,12 +687,25 @@ class KY(Scraper):
         'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
         'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
         'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004t96n/5P7Er8jyZDBXBGs92hEZzvmN8hJRRiUjVC3V9bSY5Z0',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Lkhh/16ZxfoY4UYNVp8NSCL2i.Im.Q7k0xxjpNn_725NxzFQ',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005AaYZ/nOhlGCeHWJakUVLtYFLpq2QXY.WDel0jlYO6gs7mer8',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aajf/_s09zrUsBYJdgPCh.PqdjhGXOuSG1CnCX_R06f6cUpw',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aabo/V_hfVFWEIfnIQH57FqfbR9BdouHsTK6yDVavS3W.yC4',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aaxr/KwrVbJWv9bt4iW0MMP6gybrw6S28RfEL_VJ2mbxlYXI',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004qHeU/0nnBdn1OOgCrcBTm_OtK6KFJkSq1YTPT7tRoYjrnotg',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004aMmU/2LSDXkaovRtmd5nUogcW..Erku6gsF1YNYPlI_KxcHY',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004da4X/G33GzuFN4ACJ1KELoiWmtP3zh0wyOZeC7OlMHbl05tY',
+        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000cRLn/GnIT25v05rLrhgFiEW6tjXg7K0wq1O3CgIqQARI5SxM',
         'https://kydev.my.salesforce.com'}
 
     async def scrape(self) -> None:
         self.runner.scrape()
         if settings.SELENIUM_ENABLED:
             await self.build_artifacts_index()
+
+    async def clean(self):
+        await super().clean()
+        self.cache.delete('download/*', glob=True)
 
     async def build_artifacts_index(self) -> dict[str, str]:
         """Build the artifacts index from the downloaded CSV."""
@@ -778,6 +791,7 @@ class KY(Scraper):
             # Wait for the page to fully render
             logger.info(f'Waiting 4s for render')
             await asyncio.sleep(4)
+            self.cache.delete('download/*', glob=True)
             for button in buttons:
                 # Click on button to download
                 if 'data-key="download"' in button.get_attribute('innerHTML'):
@@ -792,12 +806,20 @@ class KY(Scraper):
             downloads = list(self.cache.glob('download/*'))
             if downloads:
                 dload = downloads.pop()
+                if dload.name.endswith('.crdownload'):
+                    dload = Path(str(dload).removesuffix('.crdownload'))
+                    i = 0
+                    while i < 5 and not dload.exists():
+                        logger.info(f'Waiting for download to complete')
+                        await asyncio.sleep(1)
+                        i += 1
                 logger.info(f'Moving download to {key}')
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dload.rename(dest)
                 for orphan in downloads:
-                    logger.warning(f'Removing {orphan=}')
-                    orphan.unlink()
+                    if orphan.exists():
+                        logger.warning(f'Removing {orphan=}')
+                        orphan.unlink(missing_ok=True)
             else:
                 logger.warning(f'No download found for {url=}')
 
@@ -817,6 +839,7 @@ class KY(Scraper):
             extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
             return file_name + extension
 
+        self.cache.delete('download/*', glob=True)
         try:
             await read_csv()
         finally:

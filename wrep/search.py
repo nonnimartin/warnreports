@@ -3,13 +3,15 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-from typing import Any, AsyncIterator, Iterable, Iterator, Literal, Sequence
+from typing import Any, Iterable, Iterator, Literal, Sequence
 
-from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
+from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
-from .backends.mongo import ClientControlCommand, MongoClient
+from .backends.mongo import (AbstractCollection, AbstractMongoCollection,
+                             ClientControlCommand, MongoClient, MongoFilter,
+                             Search, filters)
 from .models import *
 
 __all__ = ['filters', 'Search']
@@ -23,144 +25,112 @@ client = MongoClient(
     dbname_ttl=settings.SEARCH_MONGODB_DBNAME_TTL,
     dbname_default=settings.SEARCH_MONGODB_DBNAME)
 
-collection_defns: dict[str, CollectionDefn] = {}
-collections_map: dict[type[DataModel], str] = {}
-filters: dict[type[DataModel], type[MongoFilter|FilterModel]] = {}
-
-class AbstractCollectionDefn:
-    name: str
+class AbstractMappedCollection(AbstractCollection):
     orm_model: type[orm.MapReduceBase]
-
-    @property
-    def data_model(self) -> type[DataModel]:
-        return self.orm_model.data_model
 
 @dataclasses.dataclass
-class CollectionDefn(AbstractCollectionDefn):
+class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
+    client: MongoClient
     name: str
     orm_model: type[orm.MapReduceBase]
-    indexes: list[IndexModel]
+    data_model: type[DataModel] = None
+    indexes: list[IndexModel] = dataclasses.field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.data_model = self.data_model or self.orm_model.data_model
         self.indexes = list(map(IndexModel, self.indexes))
-        collection_defns[self.name] = self
-        collections_map[self.data_model] = self.name
-
-    @property
-    def filter_class(self) -> type[MongoFilter]:
-        return filters[self.data_model]
-
-    async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, str|int]:
-        'Get collection stats'
-        db = await client.get_database(db)
-        stat = await db.command('collstats', self.name)
-        return dict(name=self.name, count=stat['count'], size=stat['size'])
-
-    async def init(self, db: str|AsyncIOMotorDatabase|None = None) -> None:
-        'Init collection'
-        db = await client.get_database(db)
-        logger.info(f'Initializing {self.name}')
-        await db.get_collection(self.name).create_indexes(self.indexes)
-
-    async def clean(self, db: str|AsyncIOMotorDatabase|None = None) -> None:
-        'Clean collection'
-        db = await client.get_database(db)
-        stat = await self.stats(db=db)
-        logger.info(f'Cleaning {self.name} {stat=}')
-        await db.get_collection(self.name).drop()
 
     async def build(self, db: str|AsyncIOMotorDatabase|None = None, lazy: bool = True) -> None:
         'Build collection'
-        db = await client.get_database(db)
+        db = await self.client.get_database(db)
         await self.clean(db=db)
         await self.init(db=db)
         with orm.SessionLocal() as session:
             logger.info(f'Building {self.name}')
             it = self.orm_model.map_reduce_exec(session, lazy=lazy)
+            if self.data_model is not self.orm_model.data_model:
+                it = map(self.data_model.model_validate, it)
             it = map(self.data_model.as_doc, it)
             await db.get_collection(self.name).insert_many(it)
         stat = await self.stats(db=db)
         logger.info(f'Built {self.name} {stat=}')
 
-CollectionDefn(
-    name='reports',
-    orm_model=orm.Report,
-    indexes=[
-        {'company': 'text'},
-        {'company_id': 1},
-        {'reported': 1},
-        {'reported': -1},
-        {'employees': 1},
-        {'employees': -1},
-        {'naics.code': 1},
-        {'naics.id': 1},
-        {'state': 1}])
+mapped_collections: dict[str, MappedCollection] = dict(
+    reports=MappedCollection(
+        client=client,
+        name='reports',
+        orm_model=orm.Report,
+        indexes=[
+            {'company': 'text'},
+            {'company_id': 1},
+            {'reported': 1},
+            {'reported': -1},
+            {'employees': 1},
+            {'employees': -1},
+            {'naics.code': 1},
+            {'naics.id': 1},
+            {'state': 1}]),
+    companies=MappedCollection(
+        client=client,
+        name='companies',
+        orm_model=orm.Company,
+        indexes=[
+            {'aliases': 'text'},
+            {'name': 1},
+            {'aliases': 1},
+            {'states': 1},
+            {'naics.code': 1},
+            {'naics.id': 1},
+            {'last_reported': 1},
+            {'last_reported': -1},
+            {'reports_count': 1},
+            {'reports_count': -1},
+            {'states_count': 1},
+            {'states_count': -1},
+            {'employees_sum': -1}]),
+    naics=MappedCollection(
+        client=client,
+        name='naics',
+        orm_model=orm.Naics,
+        indexes=[
+            {'id': 1},
+            {'code': 1},
+            {'title': 1},
+            {'root': 1},
+            {'parent': 1},
+            {'depth': 1},
+            {'states': 1},
+            {'is_leaf': 1},
+            {'companies_count': 1},
+            {'last_reported': 1},
+            {'last_reported': -1},
+            {'reports_count': 1},
+            {'reports_count': -1},
+            {'states_count': 1},
+            {'states_count': -1},
+            {'employees_sum': -1}]),
+    artifacts=MappedCollection(
+        client=client,
+        name='artifacts',
+        orm_model=orm.Artifact,
+        indexes=[
+            {'name': 1},
+            {'path': 1}]),
+    states=MappedCollection(
+        client=client,
+        name='states',
+        orm_model=orm.StateStat,
+        indexes=[
+            {'id': 1},
+            {'last_reported': -1},
+            {'reports_count': -1}]))
 
-CollectionDefn(
-    name='companies',
-    orm_model=orm.Company,
-    indexes=[
-        {'aliases': 'text'},
-        {'name': 1},
-        {'aliases': 1},
-        {'states': 1},
-        {'naics.code': 1},
-        {'naics.id': 1},
-        {'last_reported': 1},
-        {'last_reported': -1},
-        {'reports_count': 1},
-        {'reports_count': -1},
-        {'states_count': 1},
-        {'states_count': -1},
-        {'employees_sum': -1}])
-
-CollectionDefn(
-    name='naics',
-    orm_model=orm.Naics,
-    indexes=[
-        {'id': 1},
-        {'code': 1},
-        {'title': 1},
-        {'root': 1},
-        {'parent': 1},
-        {'depth': 1},
-        {'states': 1},
-        {'is_leaf': 1},
-        {'companies_count': 1},
-        {'last_reported': 1},
-        {'last_reported': -1},
-        {'reports_count': 1},
-        {'reports_count': -1},
-        {'states_count': 1},
-        {'states_count': -1},
-        {'employees_sum': -1}])
-
-CollectionDefn(
-    name='artifacts',
-    orm_model=orm.Artifact,
-    indexes=[
-        {'name': 1},
-        {'path': 1}])
-
-CollectionDefn(
-    name='states',
-    orm_model=orm.StateStat,
-    indexes=[
-        {'id': 1},
-        {'last_reported': -1},
-        {'reports_count': -1}])
-
-
-class MongoFilter:
+class DefaultMongoFilter(MongoFilter):
     minmax_fields: ClassVar[Sequence[str]] = ()
     MINMAX_OPERS: ClassVar[dict[str, str]] = dict(min='$gte', max='$lte')
 
     def get_filters(self) -> Iterable[dict[str, Any]]:
         yield from self.get_minmax_filters(*self.minmax_fields)
-
-    def get_query(self) -> dict[str, Any]:
-        filts = tuple(self.get_filters())
-        return {'$and': filts} if filts else {}
 
     @staticmethod
     def wc_contains(text: str, flags: re.RegexFlag = re.I) -> re.Pattern:
@@ -185,14 +155,8 @@ class MongoFilter:
                 if (value := getattr(self, f'{field}_{suffix}')) is not None:
                     yield {field: {oper: value}}
 
-    def __init_subclass__(cls, **kw) -> None:
-        super().__init_subclass__(**kw)
-        for base in cls.__bases__:
-            if issubclass(base, FilterModel):
-                filters[base.result_model] = cls
-                break
-
-class MongoReportsFilter(ReportsFilter, MongoFilter):
+class MongoReportsFilter(ReportsFilter, DefaultMongoFilter):
+    collection: ClassVar = mapped_collections['reports']
     minmax_fields: ClassVar = ('reported', 'starting', 'employees')
 
     def get_filters(self):
@@ -212,7 +176,8 @@ class MongoReportsFilter(ReportsFilter, MongoFilter):
             yield {'$text': {'$search': self.text}}
         yield from super().get_filters()
 
-class MongoStatesFilter(StatesFilter, MongoFilter):
+class MongoStatesFilter(StatesFilter, DefaultMongoFilter):
+    collection: ClassVar = mapped_collections['states']
     minmax_fields: ClassVar = ('reports_count', 'last_reported')
 
     def get_filters(self):
@@ -220,7 +185,8 @@ class MongoStatesFilter(StatesFilter, MongoFilter):
             yield {'id': {'$in': sorted(set(map(str.upper, self.id)))}}
         yield from super().get_filters()
 
-class MongoCompaniesFilter(CompaniesFilter, MongoFilter):
+class MongoCompaniesFilter(CompaniesFilter, DefaultMongoFilter):
+    collection: ClassVar = mapped_collections['companies']
     minmax_fields: ClassVar = MongoStatesFilter.minmax_fields + ('states_count', 'employees_sum')
 
     def get_filters(self):
@@ -236,7 +202,8 @@ class MongoCompaniesFilter(CompaniesFilter, MongoFilter):
             yield {'$text': {'$search': self.text}}
         yield from super().get_filters()
 
-class MongoNaicsFilter(NaicsFilter, MongoFilter):
+class MongoNaicsFilter(NaicsFilter, DefaultMongoFilter):
+    collection: ClassVar = mapped_collections['naics']
     minmax_fields: ClassVar = MongoCompaniesFilter.minmax_fields + ('depth', 'companies_count')
 
     def get_filters(self):
@@ -264,7 +231,8 @@ class MongoNaicsFilter(NaicsFilter, MongoFilter):
             yield {'id': {'$in': sorted(incs)}}
         yield from super().get_filters()
 
-class MongoArtifactsFilter(ArtifactsFilter, MongoFilter):
+class MongoArtifactsFilter(ArtifactsFilter, DefaultMongoFilter):
+    collection: ClassVar = mapped_collections['artifacts']
 
     def get_filters(self):
         if self.id:
@@ -279,68 +247,6 @@ class MongoArtifactsFilter(ArtifactsFilter, MongoFilter):
             if value:
                 yield {field: value}
         yield from super().get_filters()
-
-class Search[DM: DataModel]:
-
-    def __init__(
-        self,
-        model: type[DM],
-        params: dict[str, Any]|None = None,
-        limit: Limit|None = None,
-        offset: Offset = 0,
-        dbname: str|None = None
-    ) -> None:        
-        self.model = model
-        self.dbname = dbname
-        self.filter = filters[model](**params or {})
-        self.q = self.filter.get_query()
-        self.limit = limit
-        self.offset = offset
-        if limit == 0:
-            self.orders = []
-        else:
-            self.orders = list(self.filter.get_ordering())
-            if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
-                self.orders.append(('_id', 1))
-        self._db = None
-
-    @property
-    def collection_name(self) -> str:
-        return collections_map[self.model]
-
-    async def db(self) -> AsyncIOMotorDatabase:
-        if self._db is None:
-            self._db = await client.get_database(self.dbname)
-        return self._db
-
-    async def collection(self) -> AsyncIOMotorCollection:
-        return (await self.db()).get_collection(self.collection_name)
-
-    async def count(self) -> int:
-        if settings.QUERY_LOGGING:
-            logger.info(f'COUNT q={self.q}')
-        return await (await self.collection()).count_documents(self.q)
-
-    async def tolist(self) -> list[DM]:
-        return [obj async for obj in self.objs()]
-
-    async def objs(self) -> AsyncIterator[DM]:
-        async for doc in await self.docs():
-            yield self.model.model_validate(doc)
-
-    async def docs(self) -> AsyncIterator[dict[str, Any]]:
-        if self.limit == 0:
-            return utils.as_aiter(())
-        if settings.QUERY_LOGGING:
-            logger.info(f'FIND q={self.q}')
-        cur = (await self.collection()).find(self.q)
-        if self.orders:
-            cur = cur.sort(self.orders)
-        if self.offset:
-            cur = cur.skip(self.offset)
-        if self.limit is not None:
-            cur = cur.limit(self.limit)
-        return cur
 
 class CollectionCmdBase(utils.BaseCommand):
     method: ClassVar[str]
@@ -358,10 +264,11 @@ class CollectionCmdBase(utils.BaseCommand):
                 help='Use eager loading of SQL result sets. Uses more memory.')
         arg('names',
             nargs='*',
-            choices=collection_defns,
+            choices=mapped_collections,
             help='Collection names, default all')
 
     def setup(self, opts):
+        self.names = self.opts.names or mapped_collections
         self.funckw = {}
         if hasattr(opts, 'lazy'):
             self.funckw.update(lazy=opts.lazy)
@@ -370,10 +277,9 @@ class CollectionCmdBase(utils.BaseCommand):
         if self.opts.dbname:
             logger.info(f'Using search dbname={self.opts.dbname}')
         db = await client.get_database(self.opts.dbname)
-        names = self.opts.names or collection_defns
         results: dict[str, Any] = {}
-        for name in names:
-            defn = collection_defns[name]
+        for name in self.names:
+            defn = mapped_collections[name]
             res = await getattr(defn, self.method)(db=db, **self.funckw)
             if res is not None:
                 results[name] = res
@@ -383,7 +289,7 @@ class CollectionCmdBase(utils.BaseCommand):
 def CollectionCmd(method: str) -> type[CollectionCmdBase]:
     return type(f'{method}_Command', (CollectionCmdBase,), dict(
         method=method,
-        description=getattr(CollectionDefn, method).__doc__))
+        description=getattr(MappedCollection, method).__doc__))
 
 class Command(utils.BaseCommand):
     'Search collection commands'
