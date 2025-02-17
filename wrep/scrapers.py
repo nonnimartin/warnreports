@@ -791,6 +791,7 @@ class KY(Scraper):
             # Wait for the page to fully render
             logger.info(f'Waiting 4s for render')
             await asyncio.sleep(4)
+            self.cache.delete('download/*', glob=True)
             for button in buttons:
                 # Click on button to download
                 if 'data-key="download"' in button.get_attribute('innerHTML'):
@@ -816,8 +817,9 @@ class KY(Scraper):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dload.rename(dest)
                 for orphan in downloads:
-                    logger.warning(f'Removing {orphan=}')
-                    orphan.unlink()
+                    if orphan.exists():
+                        logger.warning(f'Removing {orphan=}')
+                        orphan.unlink(missing_ok=True)
             else:
                 logger.warning(f'No download found for {url=}')
 
