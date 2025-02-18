@@ -1,0 +1,12 @@
+alembic
+beautifulsoup4
+openpyxl
+pdfplumber
+psycopg2-binary
+tabulate
+
+# https://github.com/biglocalnews/warn-scraper
+html5lib
+pyopenssl
+tenacity
+retry

@@ -43,3 +43,4 @@ SENTRY_ENABLED = getenv('SENTRY_ENABLED', '').lower() == 'true'
 SENTRY_DSN = getenv('SENTRY_DSN', '')
 SENTRY_ENVIRONMENT = getenv('SENTRY_ENVIRONMENT', 'dev')
 SELENIUM_ENABLED = getenv('SELENIUM_ENABLED', '').lower() == 'true'
+SELENIUM_MAX_PROCS = int(getenv('SELENIUM_MAX_PROCS', 3))

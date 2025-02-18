@@ -772,8 +772,10 @@ class KY(Translator):
         'Closure or Layoff?': 'action',
         'Projected Date': 'starting',
         'Notice URL': 'url',
-        'NAICS Code': 'naics'
+        'NAICS Code': 'naics',
+        'artifacts_json': 'artifacts',
     }
+    values_hash_exclude = ['artifacts_json']
     rewrites = dict(
         company=[
             (_r(r'\(EXTENSION OF CONDITIONAL WARN\)'), ''),

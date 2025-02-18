@@ -1,31 +1,20 @@
-alembic
-beautifulsoup4
-boto3
+# boto3
 click
 fastapi
 feedgen
 jinja2
 libsass
 motor
-openpyxl
-pdfplumber
-psycopg2-binary
 pydantic[email]
 python_dotenv
 python-dateutil
 requests
 sentry-sdk[fastapi]
 sqlalchemy
-tabulate
 uvicorn[standard]
 
 # https://github.com/biglocalnews/warn-scraper
-html5lib
-pyopenssl
-tenacity
 # xlrd
-retry
-# selenium
 # xvfbwrapper
 # webdriver-manager
 
