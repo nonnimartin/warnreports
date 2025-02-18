@@ -7,7 +7,7 @@ import json
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Iterable, Iterator
 
@@ -20,6 +20,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, aliased
 from sqlalchemy.orm import joinedload as joinedload
 from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
+from sqlalchemy.orm.exc import NoResultFound as NoResultFound
 from sqlalchemy.sql import func
 from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 
@@ -372,13 +373,16 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     def self_update(self) -> bool:
         file = Path(f'{settings.ARTIFACTS_DIR}/{self.path}')
         with file.open('rb') as f:
-            digest = hashlib.file_digest(f, 'sha1')
+            digest = hashlib.file_digest(f, 'sha1').hexdigest()
+        digfile = file.parent/f'.{file.name}.sha1'
+        if not digfile.exists() or digfile.read_text() != digest:
+            digfile.write_text(digest)
         stat = file.stat()
         data = dict(
             size=stat.st_size,
-            modified=datetime.fromtimestamp(stat.st_mtime),
+            modified=datetime.fromtimestamp(int(stat.st_mtime), tz=timezone.utc),
             media_type=utils.get_mimetype(file),
-            sha1=digest.hexdigest())
+            sha1=digest)
         change = False
         for field, value in data.items():
             if getattr(self, field) != value:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 from abc import abstractmethod
@@ -586,10 +587,86 @@ class LogCommand(utils.BaseCommand):
         copy=LogCopyCommand,
         prune=LogPruneCommand)
 
+class ArtifactsBaseCommand(utils.BaseCommand):
+
+
+    @classmethod
+    def add_arguments(cls, parser):
+        arg = parser.add_argument
+        arg(
+            '--check-only', '-c',
+            action='store_false',
+            dest='change',
+            help='Check only, do not make changes')
+
+    def setup(self, opts):
+        super().setup(opts)
+        self.root = settings.ARTIFACTS_DIR
+
+class ArtifactsPruneCommand(ArtifactsBaseCommand):
+    'Delete orphan artifacts from file system'
+
+    async def run(self):
+        from .. import orm
+        with orm.SessionLocal() as session:
+            for path, id in self.get_pathids():
+                file = self.root.joinpath(path)
+                if path.endswith('.sha1'):
+                    logger.info(f'Cruft {path=}')
+                    if self.opts.change:
+                        file.unlink()
+                    continue
+                try:
+                    session.get(orm.Artifact, id)
+                except orm.NoResultFound:
+                    logger.info(f'Orphan {path=} {id=}')
+                    if self.opts.change:
+                        file.unlink()
+                        digfile = file.parent/f'.{file.name}.sha1'
+                        digfile.unlink(missing_ok=True)
+                else:
+                    logger.debug(f'Found {path=} {id=}')
+
+    def get_pathids(self):
+        from .. import orm
+        it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
+        for path in it:
+            yield path, orm.Artifact.path_to_id(path)
+
+
+class ArtifactsCheckCommand(ArtifactsBaseCommand):
+    'Check for missing artifact files'
+
+    async def run(self):
+        from .. import orm
+        stmt = orm.select(orm.Artifact)
+        with orm.SessionLocal() as session:
+            for art in session.scalars(stmt):
+                file = self.root/art.path
+                if file.exists():
+                    logger.debug(f'Found path={art.path} id={art.id}')
+                    if art.self_update():
+                        logger.info(f'Updated path={art.path} id={art.id}')
+                        session.add(art)
+                else:
+                    logger.warning(f'Missing path={art.path} id={art.id}')
+            if self.opts.change:
+                session.commit()
+            else:
+                session.rollback()
+
+
+class ArtifactsCommand(utils.BaseCommand):
+    'Artifacts maintenance'
+    commands = dict(
+        check=ArtifactsCheckCommand,
+        prune=ArtifactsPruneCommand)
+
 class Command(utils.BaseCommand):
     'Misc ETL pipeline commands'
     commands = dict(
         log=LogCommand,
+        artifacts=ArtifactsCommand,
         trone=TroneCommand,
         ldone=LdoneCommand,
         control=ClientControlCommand(client))

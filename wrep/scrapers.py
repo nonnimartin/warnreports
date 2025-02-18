@@ -1838,7 +1838,7 @@ class Artifacts:
         key = key.strip('/')
         file = file or self.src/key
         dest = self.dir/key
-        digfile = Path(f'{dest}.sha1')
+        digfile = dest.parent/f'.{dest.name}.sha1'
         sta = file.stat()
         if dest.exists():
             stb = dest.stat()
