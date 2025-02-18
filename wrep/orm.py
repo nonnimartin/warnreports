@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import shutil
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
@@ -372,12 +373,18 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
 
     def self_update(self) -> bool:
         file = Path(f'{settings.ARTIFACTS_DIR}/{self.path}')
-        with file.open('rb') as f:
-            digest = hashlib.file_digest(f, 'sha1').hexdigest()
-        digfile = file.parent/f'.{file.name}.sha1'
-        if not digfile.exists() or digfile.read_text() != digest:
-            digfile.write_text(digest)
         stat = file.stat()
+        digfile = utils.digestfile(file)
+        digest = None
+        if digfile.exists():
+            digstat = digfile.stat()
+            if int(stat.st_mtime) == int(digstat.st_mtime):
+                digest = digfile.read_text()
+        if not digest:
+            with file.open('rb') as f:
+                digest = hashlib.file_digest(f, 'sha1').hexdigest()
+            digfile.write_text(digest)
+            shutil.copystat(file, digfile)
         data = dict(
             size=stat.st_size,
             modified=datetime.fromtimestamp(int(stat.st_mtime), tz=timezone.utc),

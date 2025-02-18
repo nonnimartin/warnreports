@@ -589,7 +589,6 @@ class LogCommand(utils.BaseCommand):
 
 class ArtifactsBaseCommand(utils.BaseCommand):
 
-
     @classmethod
     def add_arguments(cls, parser):
         arg = parser.add_argument
@@ -608,31 +607,25 @@ class ArtifactsPruneCommand(ArtifactsBaseCommand):
 
     async def run(self):
         from .. import orm
+        it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
         with orm.SessionLocal() as session:
-            for path, id in self.get_pathids():
-                file = self.root.joinpath(path)
+            for path in it:
+                file = self.root/path
                 if path.endswith('.sha1'):
                     logger.info(f'Cruft {path=}')
                     if self.opts.change:
                         file.unlink()
                     continue
+                id = orm.Artifact.path_to_id(path)
                 try:
                     session.get(orm.Artifact, id)
                 except orm.NoResultFound:
                     logger.info(f'Orphan {path=} {id=}')
                     if self.opts.change:
                         file.unlink()
-                        digfile = file.parent/f'.{file.name}.sha1'
-                        digfile.unlink(missing_ok=True)
+                        utils.digestfile(file).unlink(missing_ok=True)
                 else:
                     logger.debug(f'Found {path=} {id=}')
-
-    def get_pathids(self):
-        from .. import orm
-        it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
-        for path in it:
-            yield path, orm.Artifact.path_to_id(path)
-
 
 class ArtifactsCheckCommand(ArtifactsBaseCommand):
     'Check for missing artifact files'

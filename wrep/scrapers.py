@@ -1838,7 +1838,7 @@ class Artifacts:
         key = key.strip('/')
         file = file or self.src/key
         dest = self.dir/key
-        digfile = dest.parent/f'.{dest.name}.sha1'
+        digfile = utils.digestfile(dest)
         sta = file.stat()
         if dest.exists():
             stb = dest.stat()
@@ -1855,6 +1855,7 @@ class Artifacts:
                     with dest.open('rb') as f:
                         digb = hashlib.file_digest(f, 'sha1').hexdigest()
                     digfile.write_text(digb)
+                    shutil.copystat(file, digfile)
                 if diga == digb:
                     save = SaveType.Nochange
                 else:
@@ -1871,6 +1872,7 @@ class Artifacts:
             with dest.open('rb') as f:
                 digest = hashlib.file_digest(f, 'sha1').hexdigest()
             digfile.write_text(digest)
+            shutil.copystat(file, digfile)
             self.metrics['bytes_written'] += sta.st_size
         self.metrics[str(save)] += 1
         self.metrics['total'] += 1

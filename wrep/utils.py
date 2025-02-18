@@ -141,6 +141,9 @@ def json_default(value: Any) -> Any:
         return value.hex
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
 
+def digestfile(file: Path) -> Path:
+    return file.parent/f'.{file.name}.sha1'
+
 def init_logging() -> None:
     from . import settings
     levelname = settings.LOG_LEVEL.upper()
