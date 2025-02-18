@@ -271,7 +271,7 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
     collection = collections['extractions']
     ordering = ['_i']
     clean_keys = ['_id', '_i', 'state']
-    stat_clean_keys = ['scrape_time']
+    stat_clean_keys = ['scrape_time', 'NAICS Codes']
     lookup_id_key = '_id'
 
     async def update(self, source):
@@ -300,6 +300,7 @@ class MongoTranslation(MongoETBase, TranslationBackend):
     collection = collections['translations']
     ordering = ['id']
     clean_keys = ['_id', 'row']
+    stat_clean_keys = ['row']
     lookup_id_key = 'id'
 
     async def update(self, source):

@@ -674,8 +674,8 @@ class IL(Translator):
         'Reason': 'action',
         'NAICS Codes': 'naics',
         'IEBS Id': 'report_id',
-        'artifacts_json': 'artifacts',
     }
+    values_hash_exclude = ['NAICS Codes']
     rewrites = dict(
         company=[
             (_r(r'\*'), ''),
