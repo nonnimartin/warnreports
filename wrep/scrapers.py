@@ -1028,6 +1028,33 @@ class MO(Scraper):
     }
 
     async def scrape(self) -> None:
+        if settings.SELENIUM_ENABLED:
+            await self.driver_scrape()
+        else:
+            await self.archive_scrape()
+
+    async def driver_scrape(self) -> None:
+        def find_content():
+            return driver.find_element('css selector', 'div.view-warn-notices')
+        wait = utils.Wait(timeout=10)
+        now = utils.utcnow()
+        async with webdrivers.selenium() as driver:
+            for year in range(self.start_year, now.year + 1):
+                is_recent = year >= now.year - 1
+                key = f'pages/{year}.html'
+                if not is_recent and self.cache.exists(key):
+                    continue
+                url = self.absurl(f'/{year}')
+                driver.get(url)
+                try:
+                    await wait.until(find_content)
+                except TimeoutError:
+                    self.logger.warning(f'Failed to find content for {url=}')
+                    return
+                self.logger.info(f'Scraped {key}')
+                self.cache.write(key, driver.page_source)
+
+    async def archive_scrape(self) -> None:
         now = utils.utcnow()
         for year in range(self.start_year, now.year + 1):
             key = f'pages/{year}.html'
@@ -1744,6 +1771,7 @@ class Cache(warn.cache.Cache):
         data_dir = settings.BUILD_DIR/Stage(stage)
         super().__init__(data_dir/state.lower())
         self.dir = Path(self.path)
+        self.path = str(self.dir)
 
     def delete(self, *keys: str, glob: bool = False) -> None:
         for key in keys:

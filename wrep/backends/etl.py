@@ -317,8 +317,8 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
 
     async def clean(self) -> None:
         db = await self.db()
-        for name in self.collections:
-            coll = db.get_collection(name)
+        for name, collection in self.collections.items():
+            coll = db.get_collection(collection.name)
             if name == 'naics':
                 coro = coll.drop()
             elif name == 'artifacts':
@@ -335,12 +335,15 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
             await coro
 
     async def stat(self):
-        it = (await self.db()).reports.find(dict(state=self.state)).sort('id')
+        collection = self.collections['reports']
+        coll = (await self.db()).get_collection(collection.name)
+        it = coll.find(dict(state=self.state)).sort('id')
         return await docs_stat(it)
 
     async def update(self, name, source):
-        coll = (await self.db()).get_collection(name)
-        await coll.create_indexes(self.collections[name].indexes)
+        collection = self.collections[name]
+        coll = (await self.db()).get_collection(collection.name)
+        await coll.create_indexes(collection.indexes)
         it = (inst.as_doc() async for inst in utils.as_aiter(source))
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
