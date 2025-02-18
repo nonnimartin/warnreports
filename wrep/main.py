@@ -57,6 +57,10 @@ class Apps:
         app.include_router(routers.backend)
         return app
 
+    @wapp
+    def noop(self):
+        return FastAPI(lifespan=self.default_lifespan)
+
     del(wapp)
 
     def create_app(self, **kw) -> FastAPI:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import functools
+import dataclasses
 import hashlib
 import json
+import operator
 import re
 import shutil
 import uuid
@@ -15,7 +16,8 @@ from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
 from re import compile as _r
-from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator, Self
+from typing import (TYPE_CHECKING, Any, ClassVar, Generator, Iterable,
+                    Iterator, Self)
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import openpyxl
@@ -37,6 +39,7 @@ import warn.utils
 
 from . import SaveType, Stage, settings, utils
 from .backends import webdrivers
+from .models import ScraperOpts
 
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
@@ -49,7 +52,8 @@ class Scraper:
     ssl_verify = True
     retry = dict(total=3, backoff_factor=2)
 
-    def __init__(self):
+    def __init__(self, *, opts: ScraperOpts|dict|None = None):
+        self.opts = ScraperOpts.model_validate(opts or {})
         self.runner = Runner(self.state)
         self.session = requests.session()
         retry = Retry(**self.retry)
@@ -682,35 +686,17 @@ class IN(Scraper):
         return cell.text.strip()
 
 class KY(Scraper):
-    broken_links = {
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM',
-        'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
-        'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004t96n/5P7Er8jyZDBXBGs92hEZzvmN8hJRRiUjVC3V9bSY5Z0',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Lkhh/16ZxfoY4UYNVp8NSCL2i.Im.Q7k0xxjpNn_725NxzFQ',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005AaYZ/nOhlGCeHWJakUVLtYFLpq2QXY.WDel0jlYO6gs7mer8',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aajf/_s09zrUsBYJdgPCh.PqdjhGXOuSG1CnCX_R06f6cUpw',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aabo/V_hfVFWEIfnIQH57FqfbR9BdouHsTK6yDVavS3W.yC4',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aaxr/KwrVbJWv9bt4iW0MMP6gybrw6S28RfEL_VJ2mbxlYXI',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004qHeU/0nnBdn1OOgCrcBTm_OtK6KFJkSq1YTPT7tRoYjrnotg',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004aMmU/2LSDXkaovRtmd5nUogcW..Erku6gsF1YNYPlI_KxcHY',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004da4X/G33GzuFN4ACJ1KELoiWmtP3zh0wyOZeC7OlMHbl05tY',
-        'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000cRLn/GnIT25v05rLrhgFiEW6tjXg7K0wq1O3CgIqQARI5SxM',
-        'https://kydev.my.salesforce.com'}
 
     async def scrape(self) -> None:
         self.runner.scrape()
+        index = self.load_index()
         if settings.SELENIUM_ENABLED:
-            await self.build_artifacts_index()
-        if self.cache.exists('artifacts.json'):
-            artifacts: dict[str, str] = self.cache.read_json('artifacts.json')
-            for key in artifacts.values():
-                if self.cache.exists(key):
-                    self.artifacts.add(key)
+            await self.ArtifactDownloader(self, index).run()
+        for key in index.values():
+            if self.cache.exists(key):
+                self.artifacts.add(key)
 
-    async def clean(self):
+    async def clean(self) -> None:
         await super().clean()
         self.cache.delete('download/*', glob=True)
 
@@ -720,184 +706,212 @@ class KY(Scraper):
 
     @contextmanager
     def extract(self):
-        artifacts: dict[str, str] = {}
-        if self.cache.exists('artifacts.json'):
-            artifacts.update(self.cache.read_json('artifacts.json'))
+        index = self.load_index()
         def extend(row: dict) -> dict:
-            if (key := artifacts.get(url := row['Notice URL'])):
+            if (key := index.get(url := row['Notice URL'])):
                 if self.cache.exists(key):
                     row.update(artifacts_json=json.dumps({key: url}))
             return row
         with super().extract() as it:
             yield map(extend, it)
 
-    async def build_artifacts_index(self) -> dict[str, str]:
-        """Build the artifacts index from the downloaded CSV."""
-
-        artifacts: dict[str, str] = {}
+    def load_index(self) -> dict[str, str]:
         if self.cache.exists('artifacts.json'):
-            artifacts.update(self.cache.read_json('artifacts.json'))
+            return self.cache.read_json('artifacts.json')
+        return {}
 
-        def write_index():
-            self.cache.write_json('artifacts.json', artifacts, indent=2)
+    @dataclasses.dataclass
+    class ArtifactDownloader:
+        scraper: KY
+        index: dict[str, str]
+        broken_links: ClassVar = {
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005grO4/Vc6tHw.pgfZltA4R7RPb6MS7UY060XBDCzz3WNj9vVg',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM',
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/8y000005NnQa/qEmJQv7aNct3EcgWUyr2QdpPW4csItqqtY1R7UFUEoM',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
+            'https://kydev.my.salesforce.com/sfc/p/#t00000004X3h/a/t0000000WdMn/g2M_onZ71eICyV5MHAmrcI9xj.DWop9fES47Qz6TOY0',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004t96n/5P7Er8jyZDBXBGs92hEZzvmN8hJRRiUjVC3V9bSY5Z0',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Lkhh/16ZxfoY4UYNVp8NSCL2i.Im.Q7k0xxjpNn_725NxzFQ',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005AaYZ/nOhlGCeHWJakUVLtYFLpq2QXY.WDel0jlYO6gs7mer8',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aajf/_s09zrUsBYJdgPCh.PqdjhGXOuSG1CnCX_R06f6cUpw',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aabo/V_hfVFWEIfnIQH57FqfbR9BdouHsTK6yDVavS3W.yC4',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000005Aaxr/KwrVbJWv9bt4iW0MMP6gybrw6S28RfEL_VJ2mbxlYXI',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004qHeU/0nnBdn1OOgCrcBTm_OtK6KFJkSq1YTPT7tRoYjrnotg',
+            'https://kydev.my.salesforce.com/sfc/p/t00000004X3h/a/8y000004aMmU/2LSDXkaovRtmd5nUogcW..Erku6gsF1YNYPlI_KxcHY',
+            'https://kydev.my.salesforce.com'}
 
-        def build_todo():
-            todo: deque[tuple[str, str]] = deque()
-            with self.runner.file.open() as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    url = row['Notice URL']
-                    recvd = row.get('Date Received')
-                    if not (url and recvd):
-                        continue
-                    if url in self.broken_links:
-                        logger.debug(f'Ignoring {url=}')
-                        continue
-                    if url in artifacts:
-                        key = artifacts[url]
-                        if self.cache.exists(key):
-                            logger.info(f'Skipping {key} already exists')
-                            continue
-                    dateid = str(recvd).split()[0]
-                    urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
-                    prefix = clean_filename(f'{dateid}-{urlid}')
-                    for file in self.cache.glob(f'records/{prefix}*.pdf', f'records/{prefix}*.docx'):
-                        key = self.cache.tokey(file)
-                        logger.info(f'Matched existing file to {key=}')
-                        artifacts[url] = key
-                        write_index()
-                        continue
-                    todo.append((url, prefix))
-            return todo
-
-        async def run():
-            todo = build_todo()
-            if todo:
-                logger.info(f'Found {len(todo)} artifact urls to scrape')
+        async def run(self) -> None:
+            with self.scraper.runner.file.open() as f:
+                todos = deque(self.find_todos(csv.DictReader(f)))
+            if todos:
+                logger.info(f'Found {len(todos)} artifact urls to scrape')
             else:
                 logger.info(f'No artifact urls to scrape')
                 return
-            num_workers = min(settings.SELENIUM_MAX_PROCS, len(todo))
+            self.scraper.cache.mkdir('records')
+            num_workers = min(self.scraper.opts.selenium_max_procs, len(todos))
             logger.info(f'Creating {num_workers} selenium workers')
             try:
                 async with asyncio.TaskGroup() as group:
                     for i in range(num_workers):
                         name = f'worker-{i}'
-                        coro = start_worker(todo, name)
+                        coro = self.start_worker(todos, name)
                         group.create_task(coro, name=name)
             finally:
-                write_index()
+                self.save_index()
 
-        async def start_worker(queue: deque[tuple[str, str]], name: str):
-            dlcache = self.cache.subcache(f'download/{name}')
+        def find_todos(self, rows: Iterable[dict[str, str]]) -> Iterator[tuple[str, str]]:
+            for row in rows:
+                url = row['Notice URL']
+                recvd = row.get('Date Received')
+                if not (url and recvd):
+                    continue
+                if url in self.broken_links:
+                    logger.debug(f'Ignoring {url=}')
+                    continue
+                if url in self.index:
+                    key = self.index[url]
+                    if self.scraper.cache.exists(key):
+                        logger.debug(f'Skipping {key} already exists')
+                        continue
+                dateid = str(recvd).split()[0]
+                urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
+                prefix = clean_filename(f'{dateid}-{urlid}')
+                yield (url, prefix)
+
+        async def start_worker(self, queue: deque[tuple[str, str]], name: str) -> None:
+            cache = self.scraper.cache.subcache(f'download/{name}')
+            cache.mkdir()
             prefs = {
-                'download.default_directory': dlcache.path,
+                'download.default_directory': cache.path,
                 'download.prompt_for_download': False,
                 'download.directory_upgrade': True}
-            try:
-                dlcache.mkdir()
-                async with webdrivers.selenium_driver(prefs=prefs) as driver:
-                    while queue:
-                        args = queue.popleft()
-                        dlcache.delete('*', glob=True)
-                        await process_artifact(*args, driver, dlcache)
-            finally:
-                dlcache.nuke()
+            async with webdrivers.selenium(prefs=prefs) as driver:
+                helper = self.WorkerHelper(self, driver, cache)
+                while queue:
+                    url, prefix = queue.popleft()
+                    cache.delete('*', glob=True)
+                    await helper.run(url, prefix)
+            cache.nuke()
 
-        @functools.cache
-        def get_presence_condition(*args):
-            from selenium.webdriver.support import expected_conditions
-            return expected_conditions.presence_of_all_elements_located(args)
+        def save_index(self) -> None:
+            self.scraper.cache.write_json('artifacts.json', self.index, indent=2)
 
-        async def process_artifact(url: str, prefix: str, driver: webdrivers.Chrome, dlcache: Cache) -> None:
-            driver.get(url)
-            wait = webdrivers.WebDriverWait(driver, 10)
-            # Get element with file format info
-            cond = get_presence_condition('xpath',
-                "//*[contains(text(), 'Word document') or "
-                "contains(text(), 'Adobe PDF')]")
-            try:
-                element = wait.until(cond)[0]
-                doc_type = element.get_attribute('innerHTML')
-            except Exception as err:
-                logger.warning(f'Failed to fetch {url=} {err=}')
-                return
-            title = find_title(driver.page_source)
-            if not title:
-                logger.warning(f'Skipping empty title for {url=}')
-                return
-            # Construct file name
-            filename = build_filename(doc_type, title)
-            cleanname = clean_filename(f'{prefix}-{filename}')
-            key = f'records/{cleanname}'
-            dest = self.cache.topath(key)
-            # Add entry to artifacts index & save
-            artifacts[url] = key
-            write_index()
-            if self.cache.exists(key):
-                logger.info(f'Skipping download {key} already downloaded')
-                return
-            # Find download buttons
-            buttons = driver.find_elements('css selector', 'button.downloadbutton')
-            if not buttons:
-                logger.warning(f'No download button found for {key} {url=}')
-                return
-            try:
-                i, err = 0, None
-                while i < 5:
-                    logger.info(f'Waiting up tp 5s for render')
-                    await asyncio.sleep(1)
-                    try:
-                        buttons[0].click()
-                    except Exception as exc:
-                        err = exc
+        def add_entry(self, url: str, key: str) -> None:
+            self.index[url] = key
+            self.save_index()
+
+        @dataclasses.dataclass
+        class WorkerHelper:
+            downloader: KY.ArtifactDownloader
+            driver: webdrivers.Chrome
+            cache: Cache
+
+            @property
+            def scraper(self) -> KY:
+                return self.downloader.scraper
+
+            @property
+            def index(self) -> dict[str, str]:
+                return self.downloader.index
+
+            def find_title(self) -> str:
+                return self.get_title(self.driver.page_source)
+
+            def find_fileinfos(self) -> list[webdrivers.WebElement]:
+                return self.driver.find_elements('xpath',
+                    "//*[contains(text(), 'Word document') or "
+                    "contains(text(), 'Adobe PDF')]")
+
+            def find_buttons(self) -> list[webdrivers.WebElement]:
+                return self.driver.find_elements('css selector', 'button.downloadbutton')
+
+            def find_downloads(self) -> list[Path]:
+                files = list(self.cache.glob('*'))
+                for file in files:
+                    if file.name.endswith('.crdownload'):
+                        return []
+                return files
+
+            async def run(self, url: str, prefix: str) -> None:
+                self.driver.get(url)
+                wait = utils.Wait(timeout=10)
+                try:
+                    element = (await wait.until(self.find_fileinfos))[0]
+                    doc_type = element.get_attribute('innerHTML')
+                except TimeoutError:
+                    logger.warning(f'No file info found at {url=}')
+                    return
+                except Exception:
+                    logger.warning(f'Failed to fetch {url=}', exc_info=True)
+                    return
+                wait = utils.Wait(timeout=5)
+                try:
+                    title = await wait.until(self.find_title)
+                except TimeoutError:
+                    if url in self.index:
+                        key = self.index[key]
+                        logger.warning(f'Using stored key {key} for {url=}')
                     else:
-                        break
-                    i + 1
-                if err:
-                    raise err
-            except:
-                logger.warning(f'Click to download failed for {url=}', exc_info=True)
-                return
-            await asyncio.sleep(1)
-            # Move downloaded file
-            downloads = list(dlcache.glob('*'))
-            if downloads:
-                dload = downloads.pop()
-                if dload.name.endswith('.crdownload'):
-                    dload = Path(str(dload).removesuffix('.crdownload'))
-                    i = 0
-                    while i < 5 and not dload.exists():
-                        logger.info(f'Waiting for download to complete')
-                        await asyncio.sleep(1)
-                        i += 1
+                        logger.warning(f'Skipping empty title for {url=}')
+                        return
+                else:
+                    # Construct file name
+                    ext = self.get_extension(doc_type)
+                    name = clean_filename(f'{prefix}-{title}.{ext}')
+                    key = f'records/{name}'
+                    # Save to index
+                    self.downloader.add_entry(url, key)
+                await self.download(url, key)
+
+            async def download(self, url: str, key: str) -> None:
+                dest = self.scraper.cache.topath(key)
+                if dest.exists():
+                    logger.info(f'Skipping download {key} already downloaded')
+                    return
+                wait = utils.Wait(timeout=5)
+                try:
+                    button = (await wait.until(self.find_buttons))[0]
+                except TimeoutError:
+                    logger.warning(f'No download button found for {key} {url=}')
+                    return
+                logger.info(f'Clicking download button for {key}')
+                wait = utils.Wait(timeout=5, ignored=[Exception], oper=operator.not_)
+                try:
+                    await wait.until(button.click)
+                except TimeoutError:
+                    logger.warning(f'Click to download failed for {url=}', exc_info=True)
+                    return
+                wait = utils.Wait(timeout=10)
+                try:
+                    downloads = await wait.until(self.find_downloads)
+                except TimeoutError:
+                    logger.warning(f'Downloads did not have complete for {key} {url=}')
+                    return
+                if len(downloads) > 1:
+                    logger.warning(f'Multiple downloads found for {url=} {downloads}')
+                    return
                 logger.info(f'Moving download to {key}')
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dload.rename(dest)
-                for orphan in downloads:
-                    if orphan.exists():
-                        logger.warning(f'Removing {orphan=}')
-                        orphan.unlink(missing_ok=True)
-            else:
-                logger.warning(f'No download found for {url=}')
+                downloads.pop().rename(dest)
 
-        def find_title(text: str) -> str:
-            start_str = 'Page 1 of '
-            start_index = text.find(start_str)
-            if start_index == -1:
-                return ''
-            start_index += len(start_str)
-            end_index = text.find('"', start_index)
-            if end_index == -1:
-                return ''
-            filename = text[start_index:end_index].split(', ')[1]
-            return filename
+            @staticmethod
+            def get_title(text: str) -> str:
+                start_str = 'Page 1 of '
+                start_index = text.find(start_str)
+                if start_index == -1:
+                    return ''
+                start_index += len(start_str)
+                end_index = text.find('"', start_index)
+                if end_index == -1:
+                    return ''
+                filename = text[start_index:end_index].split(', ')[1]
+                return filename
 
-        def build_filename(file_type: str, file_name: str) -> str:
-            extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
-            return file_name + extension
-
-        await run()
+            @staticmethod
+            def get_extension(file_type: str) -> str:
+                if file_type == 'Adobe PDF':
+                    return 'pdf'
+                return 'docx'
 
 class LA(Scraper):
     base_url = 'https://www.laworks.net'
@@ -1757,8 +1771,8 @@ class Cache(warn.cache.Cache):
         if self.dir.exists():
             shutil.rmtree(self.dir)
 
-    def mkdir(self) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
+    def mkdir(self, key: str|None = None) -> None:
+        self.topath(key or '.').mkdir(parents=True, exist_ok=True)
 
     def subcache(self, key: str) -> Self:
         key = self.tokey(key)
