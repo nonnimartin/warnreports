@@ -369,7 +369,7 @@ class PipelineLog(DataModel):
             elapsed=self.elapsed)
         if self.errors:
             mapping.update(errors=len(self.errors))
-        for key, value in self.batch_opts.items():
+        for key, value in self.batch_opts.model_dump().items():
             if value is True:
                 mapping[key] = value
         for key, value in self.context.items():

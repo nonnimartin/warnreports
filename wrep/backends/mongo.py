@@ -14,8 +14,10 @@ from pymongo.operations import IndexModel
 from .. import settings, utils
 from ..models import DataModel, FilterModel, Limit, Offset
 
+type FilterType[DM: DataModel] = MongoFilter|FilterModel[DM]
+type FiltersType[DM: DataModel] = dict[type[DM], type[FilterType[DM]]]
 logger = utils.get_logger('backends.mongo')
-filters: dict[type[DataModel], type[MongoFilter|FilterModel]] = {}
+filters: FiltersType = {}
 
 @dataclasses.dataclass
 class MongoClient:
@@ -182,8 +184,8 @@ class MongoQueryFilter(MongoFilter):
             yield self.q
 
 @dataclasses.dataclass
-class Search[DM: DataModel, FM: FilterModel[DM]|MongoFilter]:
-    filter: FM
+class Search[DM: DataModel]:
+    filter: FilterType[DM]
     limit: Limit|None = None
     offset: Offset = 0
     dbname: str|None = None
