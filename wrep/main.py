@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ipaddress
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable, Coroutine, Iterator, Sequence
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -17,8 +19,6 @@ logger = utils.get_logger('main')
 appslist: Sequence[str] = []
 
 class Apps:
-
-    opts: dict[str, Any] = dict(proxy_headers=False)
 
     def wapp[F: Callable](wrapped: F):
         appslist.append(wrapped.__name__)
@@ -57,6 +57,10 @@ class Apps:
         app.include_router(routers.backend)
         return app
 
+    @wapp
+    def noop(self):
+        return FastAPI(lifespan=self.default_lifespan)
+
     del(wapp)
 
     def create_app(self, **kw) -> FastAPI:
@@ -82,7 +86,7 @@ class Apps:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE)
 
     async def set_proxy_client(self, req: Request, call_next: FNext) -> Response:
-        if self.opts['proxy_headers'] and (fwd := req.headers.get('x-forwarded-for')):
+        if settings.PROXY_HEADERS and (fwd := req.headers.get('x-forwarded-for')):
             try:
                 addr = fwd.rsplit(None, 1)[-1]
                 ip, port = addr.rsplit(':', 1)
@@ -118,7 +122,8 @@ class Command:
 
     def __call__(self, /, *, role: str, **kw) -> None:
         logger.info(f'Starting uvicorn {role=}')
-        apps.opts['proxy_headers'] = kw['proxy_headers']
+        envfile = Path(tempfile.mktemp())
+        kw['env_file'] = str(envfile)
         if kw['reload']:
             kw['reload_dirs'] = (
                 *kw['reload_dirs'],
@@ -127,7 +132,11 @@ class Command:
                 *kw['reload_includes'],
                 *self.reload_extra(role))
         app = f'{self.pkgname}.main:apps.{role}'
-        self.delegate.callback(app, **kw)
+        envfile.write_text(f'PROXY_HEADERS={kw['proxy_headers']}')
+        try:
+            self.delegate.callback(app, **kw)
+        finally:
+            envfile.unlink(missing_ok=True)
 
     @classmethod
     def main(cls):

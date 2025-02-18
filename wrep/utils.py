@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import builtins
+import dataclasses
 import enum
 import logging
 import logging.config
 import mimetypes
 import re
+import time
 from argparse import ArgumentParser, _SubParsersAction
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
                         asynccontextmanager)
@@ -15,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from typing import (TYPE_CHECKING, Any, AsyncIterable, AsyncIterator, Callable,
-                    ClassVar, Iterable, Iterator)
+                    ClassVar, Iterable, Iterator, Sequence)
 from uuid import UUID
 
 import dateutil.parser
@@ -180,6 +182,34 @@ def lazyprop[S, T](wrapped: Callable[..., T]) -> property[S, T]:
         except KeyError:
             return self.__dict__.setdefault(name, wrapped(self))
     return property(wrapper)
+
+@dataclasses.dataclass(frozen=True)
+class Wait:
+    timeout: float
+    poll: float = 0.5
+    ignored: tuple[type[Exception], ...] = ()
+    args: Sequence[Any] = ()
+    kwargs: dict = dataclasses.field(default_factory=dict)
+    raises: type[Exception] = dataclasses.field(default_factory=lambda: TimeoutError)
+    oper: Callable[[Any], Any] = dataclasses.field(default_factory=lambda: bool)
+
+    async def until[T](self, callback: Callable[..., T]) -> T:
+        end = time.monotonic() + self.timeout
+        err = None
+        ignored = tuple(self.ignored or ())
+        while True:
+            try:
+                value = callback(*self.args, **self.kwargs)
+                if self.oper(value):
+                    return value
+            except ignored as exc:
+                err = exc
+            if time.monotonic() > end:
+                break
+            await asyncio.sleep(self.poll)
+        raise self.raises from err
+
+    replace = dataclasses.replace
 
 from .backends.email import instances as email_backends
 

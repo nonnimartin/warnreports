@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, Any, ClassVar, Literal, TypeAlias
+from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from annotated_types import Le
 from pydantic import BaseModel as DataModel
 from pydantic import (ConfigDict, Field, NonNegativeInt, StringConstraints,
-                      field_serializer)
+                      field_serializer, model_validator)
 from pydantic_core import ValidationError as ValidationError
 
-from . import Stage, utils
+from . import Stage, settings, utils
 from .ref.tz import zoneinfos
 
 logger = utils.get_logger('models')
@@ -249,9 +249,12 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
 # ----------------------------
 
 __all__ += [
+    'PipelineBatchOpts',
     'PipelineLog',
+    'PipelineOpts',
     'PipelineRunError',
-    'PipelineRunDetail']
+    'PipelineRunDetail',
+    'ScraperOpts']
 
 class PipelineRunDetail(DataModel):
     state: StateCode
@@ -269,13 +272,41 @@ class PipelineRunError(DataModel):
     state: StateCode|None = None
     stage: Stage|None = None
 
+    @classmethod
+    def fromexc(cls, exc: Exception, **kw) -> Self:
+        return cls(type=type(exc).__name__, message=str(exc), **kw)
+
+class PipelineBatchOpts(DataModel):
+    clean: bool = False
+    clean_only: bool = False
+    stat_only: bool = False
+    fail: bool = False
+    incremental: bool = False
+    concurrent: bool = False
+    max_workers: int = settings.ETL_DEFAULT_WORKERS
+    max_threads: int = settings.ETL_DEFAULT_THREADS
+
+    @model_validator(mode='after')
+    def check_flags(self) -> Self:
+        if self.clean_only and (self.clean or self.incremental or self.stat_only):
+            raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
+        if self.stat_only and (self.clean or self.incremental or self.clean_only):
+            raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
+        return self
+
+class ScraperOpts(DataModel):
+    selenium_max_procs: int = settings.SELENIUM_MAX_PROCS
+
+class PipelineOpts(ScraperOpts):
+    lazy: bool = True
+
 class PipelineLog(DataModel):
     id: UUID = Field(alias='_id')
     stages: list[Stage] = Field(default_factory=list)
     states: list[StateCode] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
-    batch_opts: dict[str, Any] = Field(default_factory=dict)
-    pipeline_opts: dict[str, Any] = Field(default_factory=dict)
+    batch_opts: PipelineBatchOpts = Field(default_factory=PipelineBatchOpts)
+    pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
     start: datetime|None = None
     end: datetime|None = None
     elapsed: float = 0
@@ -338,7 +369,7 @@ class PipelineLog(DataModel):
             elapsed=self.elapsed)
         if self.errors:
             mapping.update(errors=len(self.errors))
-        for key, value in self.batch_opts.items():
+        for key, value in self.batch_opts.model_dump().items():
             if value is True:
                 mapping[key] = value
         for key, value in self.context.items():

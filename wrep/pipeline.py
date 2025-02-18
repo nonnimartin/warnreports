@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import functools
 import operator
 import uuid
@@ -59,23 +58,19 @@ class Pipeline:
     BACKENDS: ClassVar[Mapping[Stage, type[StageBackend]]] = MapProxy(
         StageBackend.registry['mongo'])
 
-    @dataclasses.dataclass
-    class Opts:
-        lazy: bool = True
-
-    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, **opts) -> None:
+    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, opts: PipelineOpts|dict|None = None) -> None:
         if context is None:
             context = {}
         self.state = state.upper()
         self.context = context
         self.backends: dict[Stage, StageBackend] = {}
-        self.opts = self.Opts(**opts)
+        self.opts = PipelineOpts.model_validate(opts or {})
         self.session: orm.Session|None = None
 
     @utils.lazyprop
     def scraper(self) -> Scraper:
         from .scrapers import scrapers
-        return scrapers[self.state]()
+        return scrapers[self.state](opts=self.opts)
 
     @utils.lazyprop
     def translator(self) -> Translator:
@@ -409,53 +404,48 @@ class PipelineRunner:
         Stage.Load: 2,
         Stage.Index: 3})
 
-    def __init__(
-        self,
-        stages: Iterable[Stage|str],
-        states: Iterable[StateCode],
-        clean: bool = False,
-        clean_only: bool = False,
-        stat_only: bool = False,
-        fail: bool = False,
-        incremental: bool = False,
-        concurrent: bool = False,
-        max_workers: int = settings.ETL_DEFAULT_WORKERS,
-        context: dict[str, Any]|None = None,
-        **pipeline_opts,
-    ) -> None:
-        if clean_only and (clean or incremental or stat_only):
-            raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
-        if stat_only and (clean or incremental or clean_only):
-            raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
+    def __init__(self, stages: Iterable[Stage], states: Iterable[StateCode], **kw) -> None:
+        context = kw.pop('context', None)
         if context is None:
             context = {}
-        self.clean = clean
-        self.clean_only = clean_only
-        self.stat_only = stat_only
-        self.incremental = incremental
-        self.concurrent = concurrent
-        self.max_workers = int(max(1, max_workers))
-        self.fail = fail
-        self.stages = list(utils.unique(map(Stage, stages)))
-        self.states = list(utils.unique(map(str.upper, states)))
-        self.runs: dict[StateCode, list[PipelineRunDetail]] = defaultdict(list)
-        self.num_workers = min(self.max_workers, len(self.states))
-        self.context = context
-        self.logbackend = PipelineLogBackend.registry['mongo'](context=self.context)
-        self.pipeline_opts = pipeline_opts
         self.log = PipelineLog(
             id=uuid.uuid4(),
-            stages=self.stages,
-            states=self.states,
-            batch_opts=dict(
-                incremental=self.incremental,
-                concurrent=self.concurrent,
-                clean=self.clean,
-                fail=self.fail,
-                clean_only=self.clean_only,
-                max_workers=self.max_workers),
-            pipeline_opts=self.pipeline_opts)
-        self.log.context = self.context
+            stages=list(utils.unique(map(Stage, stages))),
+            states=list(utils.unique(map(str.upper, states))),
+            batch_opts=PipelineBatchOpts(**kw),
+            pipeline_opts=PipelineOpts(**kw))
+        self.log.context = context
+        self.runs: dict[StateCode, list[PipelineRunDetail]] = defaultdict(list)
+        self.logbackend = PipelineLogBackend.registry['mongo'](context=context)
+        self.states_active = dict.fromkeys(self.states)
+
+    @property
+    def num_workers(self):
+        return min(int(max(1, self.opts.max_workers)), len(self.states_active))
+
+    @property
+    def num_threads(self):
+        return min(int(max(1, self.opts.max_threads)), len(self.states_active))
+
+    @property
+    def opts(self):
+        return self.log.batch_opts
+
+    @property
+    def states(self):
+        return self.log.states
+
+    @property
+    def stages(self):
+        return self.log.stages
+
+    @property
+    def context(self):
+        return self.log.context
+
+    @property
+    def pipeline_opts(self):
+        return self.log.pipeline_opts
 
     async def run(self) -> None:
         self.run = None
@@ -464,7 +454,6 @@ class PipelineRunner:
         for stage in self.stages:
             grouping[self.GROUPING[stage]].append(stage)
         it = iter(grouping)
-        self.states_active = dict.fromkeys(self.states)
         self.log.start = utils.utcnow()
         if await self._save_log():
             logger.info(f'start id={self.log.id}')
@@ -476,13 +465,12 @@ class PipelineRunner:
         except* Exception as grp:
             if not self.log.errors:
                 exc = grp.exceptions[-1]
-                error = PipelineRunError(type=type(exc).__name__, message=str(exc))
+                error = PipelineRunError.fromexc(exc)
                 self.log.errors.append(error)
             if len(grp.exceptions) == 1:
                 raise grp.exceptions[0] from None
             raise
         finally:
-            del self.states_active
             self.log.end = utils.utcnow()
             if await self._save_log():
                 logger.info(f'end id={self.log.id}')
@@ -493,11 +481,12 @@ class PipelineRunner:
             await self._save_log()
 
     async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
-        self.num_workers = min(self.num_workers, len(self.states_active))
-        if not (self.states_active and stages and self.concurrent and self.num_workers > 1):
-            return await self.run_consecutively(*stages)
         style = 'threads' if threads else 'workers'
-        logger.info(f'concurrent {style}={self.num_workers} stages=[{', '.join(map(str, stages))}]')
+        num: int = getattr(self, f'num_{style}')
+        if not (
+            self.states_active and stages and self.opts.concurrent and num > 1):
+            return await self.run_consecutively(*stages)
+        logger.info(f'concurrent {style}={num} stages=[{', '.join(map(str, stages))}]')
         if threads:
             await self._run_thread_concurrently(*stages)
         else:
@@ -508,7 +497,7 @@ class PipelineRunner:
         args = (deque(self.states_active), excs := [], *stages)
         workers = [
             Thread(name=str(i + 1), target=self.thread_worker, args=args)
-            for i in range(self.num_workers)]
+            for i in range(self.num_threads)]
         for worker in workers:
             worker.start()
         for worker in workers:
@@ -546,23 +535,19 @@ class PipelineRunner:
         self.runs[state].append(run)
         self.log.runs.append(run)
         try:
-            pipeline = Pipeline(state, context=self.context, **self.pipeline_opts)
-            if self.stat_only:
+            pipeline = Pipeline(state, context=self.context, opts=self.pipeline_opts)
+            if self.opts.stat_only:
                 stat = await pipeline.stat(stage)
                 logger.info(f'{state}:{stage}:stat {stat}')
-            elif self.clean_only:
+            elif self.opts.clean_only:
                 await pipeline.clean(stage)
             else:
-                run.result = await pipeline.run(stage, clean=self.clean)
+                run.result = await pipeline.run(stage, clean=self.opts.clean)
         except Exception as err:
-            run.error = PipelineRunError(
-                type=type(err).__name__,
-                message=str(err),
-                state=state,
-                stage=stage)
+            run.error = PipelineRunError.fromexc(err, state=state, stage=stage)
             run.failed = True
             self.log.errors.append(run.error)
-            if self.fail:
+            if self.opts.fail:
                 raise
             logger.exception(
                 f'{state}:{stage}:fail error={run.error.model_dump(mode='json')}')
@@ -572,14 +557,14 @@ class PipelineRunner:
             run.elapsed = (run.end - run.start).total_seconds()
 
     async def loop_worker(self, queue: deque[str], *stages: Stage) -> None:
-        while queue and not (self.log.errors and self.fail):
+        while queue and not (self.log.errors and self.opts.fail):
             state = queue.popleft()
             if state not in self.states_active:
                 continue
             await self.run_stages(state, *stages)
 
     def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
-        while queue and not (self.log.errors and self.fail) and not excs:
+        while not excs and queue and not (self.log.errors and self.opts.fail):
             try:
                 state = queue.popleft()
             except IndexError:
@@ -588,14 +573,13 @@ class PipelineRunner:
                 continue
             try:
                 asyncio.run(self.run_stages(state, *stages))
-            except Exception as err:
-                excs.append(err)
+            except* Exception as grp:
+                excs.extend(grp.exceptions)
                 logger.error(f'Exiting thread due to error')
-                break
 
     async def _save_log(self) -> bool:
         self.log.sync()
-        if self.stat_only:
+        if self.opts.stat_only:
             return False
         await self.logbackend.save(self.log)
         return True
@@ -605,7 +589,7 @@ class PipelineRunner:
             run = runs[-1]
             if run.failed:
                 return 'Previous stage failed'
-            if self.incremental:
+            if self.opts.incremental:
                 if run.result:
                     if run.result.get('nochange'):
                         return 'No change'
@@ -711,6 +695,20 @@ class Command(utils.BaseCommand):
             help=(
                 'Max workers, applicable only when --concurrent is specified, '
                 f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
+        arg('--max-threads', '-T',
+            type=int,
+            metavar='<n>',
+            default=settings.ETL_DEFAULT_THREADS,
+            help=(
+                'Max threads, applicable only when --concurrent is specified, '
+                f'default ETL_DEFAULT_THREADS ({settings.ETL_DEFAULT_THREADS})'))
+        arg('--selenium-max-procs', '-E',
+            type=int,
+            metavar='<n>',
+            default=settings.SELENIUM_MAX_PROCS,
+            help=(
+                'Max number of concurrent web drivers if applicable, '
+                f'default SELENIUM_MAX_PROCS ({settings.SELENIUM_MAX_PROCS})'))
         arg('--eager', '-e',
             action='store_false',
             dest='lazy',

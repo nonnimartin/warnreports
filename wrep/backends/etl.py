@@ -148,13 +148,13 @@ class MongoContextMixin(ContextMixin):
             self.context[self.client.dbname_key] = self._db.name
         return self._db
 
-class MongoContextCollectionMixin(MongoContextMixin):
+class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
     collection: ClassVar[MongoCollection]
     _coll = None
     _indexes_created = False
 
     @property
-    def model(self) -> type[DataModel]|None:
+    def model(self) -> type[DM]|None:
         return self.collection.data_model
 
     @property
@@ -172,7 +172,7 @@ class MongoContextCollectionMixin(MongoContextMixin):
             await coll.create_indexes(self.collection.indexes)
             self._indexes_created = True
 
-class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
+class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineLog]):
     collection = collections['pipelinelogs']
 
     async def save(self, log):
@@ -182,7 +182,7 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
         res = await coll.replace_one({'_id': doc['_id']}, doc, True)
 
     async def fetch(self, id):
-        filter = filters[self.model](q={'_id': id})
+        filter: FilterModel[PipelineLog] = filters[self.model](q={'_id': id})
         db = await self.db()
         res = Search(filter, 1, dbname=db.name)
         if await res.count():
@@ -195,7 +195,7 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin):
         raise ValueError(f'No entries found')
 
     async def findall(self, limit: Limit|None = None, offset: Offset = 0):
-        filter = filters[self.model]()
+        filter: FilterModel[PipelineLog] = filters[self.model]()
         db = await self.db()
         res = Search(filter, limit=limit, offset=offset, dbname=db.name)
         return res.objs()
