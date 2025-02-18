@@ -14,9 +14,8 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from .. import Stage, search, settings, utils
 from ..models import *
 from ..utils import EitherIterable
-from .mongo import (AbstractCollection, AbstractMongoCollection,
-                    ClientControlCommand, MongoClient, MongoCollection,
-                    MongoQueryFilter, Search, filters)
+from .mongo import (AbstractMongoCollection, ClientControlCommand, MongoClient,
+                    MongoCollection, MongoQueryFilter, Search, filters)
 
 __all__ = [
     'ExtractionBackend',
@@ -133,7 +132,7 @@ class TranslationBackend(StageBackend, ReaderMixin):
 
 class SearchIndexBackend(StageBackend):
     stage = Stage.Index
-    collections: ClassVar[Mapping[str, AbstractCollection]]
+    collections: ClassVar[Mapping[str, search.AbstractMappedCollection]]
 
     @abstractmethod
     async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...

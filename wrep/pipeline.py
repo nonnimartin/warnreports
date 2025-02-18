@@ -656,9 +656,9 @@ class Command(utils.BaseCommand):
 
     @classmethod
     def parser_fmtargs(cls, parser):
-        from .scrapers import scrapers
+        from .translators import translators
         return super().parser_fmtargs(parser) | dict(
-            states=' '.join(sorted(scrapers)))
+            states=' '.join(sorted(translators)))
 
     @classmethod
     def add_arguments(cls, parser):
@@ -723,8 +723,8 @@ class Command(utils.BaseCommand):
     def setup(self, opts):
         from . import search
         from .backends import etl
-        from .scrapers import scrapers
-        opts.states = opts.states or sorted(scrapers)
+        from .translators import translators
+        opts.states = opts.states or sorted(translators)
         runner_opts = dict(vars(opts))
         self.idfile: Path|None = runner_opts.pop('idfile')
         runner_opts['context'] = {

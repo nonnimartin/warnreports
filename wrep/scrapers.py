@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import functools
 import hashlib
 import json
 import re
@@ -14,7 +15,7 @@ from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
 from re import compile as _r
-from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Generator, Iterable, Iterator, Self
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import openpyxl
@@ -35,6 +36,7 @@ import warn.runner
 import warn.utils
 
 from . import SaveType, Stage, settings, utils
+from .backends import webdrivers
 
 scrapers: dict[str, type[Scraper]] = {}
 logger = utils.get_logger('scrapers')
@@ -702,70 +704,120 @@ class KY(Scraper):
         self.runner.scrape()
         if settings.SELENIUM_ENABLED:
             await self.build_artifacts_index()
+        if self.cache.exists('artifacts.json'):
+            artifacts: dict[str, str] = self.cache.read_json('artifacts.json')
+            for key in artifacts.values():
+                if self.cache.exists(key):
+                    self.artifacts.add(key)
 
     async def clean(self):
         await super().clean()
         self.cache.delete('download/*', glob=True)
 
+    def statobjs(self):
+        yield self.runner.file
+        yield self.cache.topath('artifacts.json')
+
+    @contextmanager
+    def extract(self):
+        artifacts: dict[str, str] = {}
+        if self.cache.exists('artifacts.json'):
+            artifacts.update(self.cache.read_json('artifacts.json'))
+        def extend(row: dict) -> dict:
+            if (key := artifacts.get(url := row['Notice URL'])):
+                if self.cache.exists(key):
+                    row.update(artifacts_json=json.dumps({key: url}))
+            return row
+        with super().extract() as it:
+            yield map(extend, it)
+
     async def build_artifacts_index(self) -> dict[str, str]:
         """Build the artifacts index from the downloaded CSV."""
-        import functools
-        from selenium import webdriver
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support.ui import WebDriverWait
-        from selenium.webdriver.support import expected_conditions as EC
 
         artifacts: dict[str, str] = {}
         if self.cache.exists('artifacts.json'):
             artifacts.update(self.cache.read_json('artifacts.json'))
 
-        @functools.cache
-        def get_driver():
-            chromedriver_path = shutil.which("chromedriver")
-            service = webdriver.ChromeService(executable_path=chromedriver_path)
-            options = webdriver.ChromeOptions()
-            options.add_argument('--headless')
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--remote-debugging-pipe')
-            options.add_argument('--dns-prefetch-disable')
-            options.page_load_strategy = 'normal'
-            options.add_experimental_option('prefs', {
-                'download.default_directory': str(self.cache.topath('download')),
-                'download.prompt_for_download': False,
-                'download.directory_upgrade': True})
-            return webdriver.Chrome(service=service, options=options)
+        def write_index():
+            self.cache.write_json('artifacts.json', artifacts, indent=2)
 
-        async def read_csv():
-            with self.runner.file.open() as file:
-                reader = csv.DictReader(file)
+        def build_todo():
+            todo: deque[tuple[str, str]] = deque()
+            with self.runner.file.open() as f:
+                reader = csv.DictReader(f)
                 for row in reader:
                     url = row['Notice URL']
-                    if url and url not in self.broken_links:
-                        if (recvd := row.get('Date Received')):
-                            prefix = recvd.split()[0]
-                            await process_artifacts(url, prefix)
+                    recvd = row.get('Date Received')
+                    if not (url and recvd):
+                        continue
+                    if url in self.broken_links:
+                        logger.debug(f'Ignoring {url=}')
+                        continue
+                    if url in artifacts:
+                        key = artifacts[url]
+                        if self.cache.exists(key):
+                            logger.info(f'Skipping {key} already exists')
+                            continue
+                    dateid = str(recvd).split()[0]
+                    urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
+                    prefix = clean_filename(f'{dateid}-{urlid}')
+                    for file in self.cache.glob(f'records/{prefix}*.pdf', f'records/{prefix}*.docx'):
+                        key = self.cache.tokey(file)
+                        logger.info(f'Matched existing file to {key=}')
+                        artifacts[url] = key
+                        write_index()
+                        continue
+                    todo.append((url, prefix))
+            return todo
 
-        # Get element with file format info
-        element_condition = EC.presence_of_all_elements_located((
-            By.XPATH,
-            "//*[contains(text(), 'Word document') or contains(text(), 'Adobe PDF')]"))
-
-        async def process_artifacts(url: str, prefix: str) -> None:
-            if url in artifacts:
-                key = artifacts[url]
-                if not key:
-                    logger.info(f'Skipping {url=}')
-                    return
-                if self.cache.exists(key):
-                    logger.info(f'Skipping {key} already exists')
-                    return
-            driver = get_driver()
-            driver.get(url)
-            wait = WebDriverWait(driver, 10)
+        async def run():
+            todo = build_todo()
+            if todo:
+                logger.info(f'Found {len(todo)} artifact urls to scrape')
+            else:
+                logger.info(f'No artifact urls to scrape')
+                return
+            num_workers = min(settings.SELENIUM_MAX_PROCS, len(todo))
+            logger.info(f'Creating {num_workers} selenium workers')
             try:
-                element = wait.until(element_condition)[0]
+                async with asyncio.TaskGroup() as group:
+                    for i in range(num_workers):
+                        name = f'worker-{i}'
+                        coro = start_worker(todo, name)
+                        group.create_task(coro, name=name)
+            finally:
+                write_index()
+
+        async def start_worker(queue: deque[tuple[str, str]], name: str):
+            dlcache = self.cache.subcache(f'download/{name}')
+            prefs = {
+                'download.default_directory': dlcache.path,
+                'download.prompt_for_download': False,
+                'download.directory_upgrade': True}
+            try:
+                dlcache.mkdir()
+                async with webdrivers.selenium_driver(prefs=prefs) as driver:
+                    while queue:
+                        args = queue.popleft()
+                        dlcache.delete('*', glob=True)
+                        await process_artifact(*args, driver, dlcache)
+            finally:
+                dlcache.nuke()
+
+        @functools.cache
+        def get_presence_condition(*args):
+            from selenium.webdriver.support import expected_conditions
+            return expected_conditions.presence_of_all_elements_located(args)
+
+        async def process_artifact(url: str, prefix: str, driver: webdrivers.Chrome, dlcache: Cache) -> None:
+            driver.get(url)
+            wait = webdrivers.WebDriverWait(driver, 10)
+            # Get element with file format info
+            cond = get_presence_condition('xpath',
+                "//*[contains(text(), 'Word document') or "
+                "contains(text(), 'Adobe PDF')]")
+            try:
+                element = wait.until(cond)[0]
                 doc_type = element.get_attribute('innerHTML')
             except Exception as err:
                 logger.warning(f'Failed to fetch {url=} {err=}')
@@ -774,36 +826,42 @@ class KY(Scraper):
             if not title:
                 logger.warning(f'Skipping empty title for {url=}')
                 return
+            # Construct file name
             filename = build_filename(doc_type, title)
-            urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
-            key = f'records/{clean_filename(f'{prefix}-{urlid}-{filename}')}'
+            cleanname = clean_filename(f'{prefix}-{filename}')
+            key = f'records/{cleanname}'
             dest = self.cache.topath(key)
             # Add entry to artifacts index & save
             artifacts[url] = key
-            self.cache.write_json('artifacts.json', artifacts, indent=2)
+            write_index()
             if self.cache.exists(key):
                 logger.info(f'Skipping download {key} already downloaded')
                 return
             # Find download buttons
-            buttons = driver.find_elements(By.CSS_SELECTOR, 'button')
+            buttons = driver.find_elements('css selector', 'button.downloadbutton')
             if not buttons:
+                logger.warning(f'No download button found for {key} {url=}')
                 return
-            # Wait for the page to fully render
-            logger.info(f'Waiting 4s for render')
-            await asyncio.sleep(4)
-            self.cache.delete('download/*', glob=True)
-            for button in buttons:
-                # Click on button to download
-                if 'data-key="download"' in button.get_attribute('innerHTML'):
+            try:
+                i, err = 0, None
+                while i < 5:
+                    logger.info(f'Waiting up tp 5s for render')
+                    await asyncio.sleep(1)
                     try:
-                        button.click()
-                        await asyncio.sleep(1)
-                    except:
-                        logger.warning(f'Click to download failed', exc_info=True)
-                        return
-                    break
+                        buttons[0].click()
+                    except Exception as exc:
+                        err = exc
+                    else:
+                        break
+                    i + 1
+                if err:
+                    raise err
+            except:
+                logger.warning(f'Click to download failed for {url=}', exc_info=True)
+                return
+            await asyncio.sleep(1)
             # Move downloaded file
-            downloads = list(self.cache.glob('download/*'))
+            downloads = list(dlcache.glob('*'))
             if downloads:
                 dload = downloads.pop()
                 if dload.name.endswith('.crdownload'):
@@ -839,14 +897,7 @@ class KY(Scraper):
             extension = '.pdf' if file_type == 'Adobe PDF' else '.docx'
             return file_name + extension
 
-        self.cache.delete('download/*', glob=True)
-        try:
-            await read_csv()
-        finally:
-            if get_driver.cache_info().currsize:
-                get_driver().quit()
-        self.cache.write_json('artifacts.json', artifacts, indent=2)
-        return artifacts
+        await run()
 
 class LA(Scraper):
     base_url = 'https://www.laworks.net'
@@ -1705,6 +1756,19 @@ class Cache(warn.cache.Cache):
     def nuke(self) -> None:
         if self.dir.exists():
             shutil.rmtree(self.dir)
+
+    def mkdir(self) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def subcache(self, key: str) -> Self:
+        key = self.tokey(key)
+        inst = type(self)('XX', 'scrape')
+        inst.dir = self.dir/key
+        inst.path = str(inst.dir)
+        return inst
+
+    _path_from_env = str(settings.BUILD_DIR)
+    _path_default = str(settings.BUILD_DIR)
 
 class Artifacts:
 

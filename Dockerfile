@@ -5,26 +5,54 @@ WORKDIR /code
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
 ENV BOOTSTRAP_DIR=/usr/local/src/bootstrap
-ENV FRONTEND_DIST=/srv/dist
 ENV PYTHONSTARTUP=/code/scripts/startup.py
 ENV UVICORN_HOST=0.0.0.0
 ENV UVICORN_SERVER_HEADER=false
-RUN apk --no-cache -q add bash curl mailcap g++ libc-dev linux-headers libffi-dev &&\
+RUN apk --no-cache -q add bash curl mailcap g++ linux-headers &&\
+    pip install -qqq --no-cache-dir --no-input libsass &&\
+    apk -q del g++ &&\
     ln -s /code/bin/wrep-docker /usr/local/bin/wrep
 COPY ./scripts ./scripts
 RUN ./scripts/download-warn-scraper.sh &&\
     ./scripts/download-bootstrap.sh
-COPY ./requirements.txt ./
+COPY ./requirements*.txt ./
 RUN pip install -qqq --no-cache-dir --no-input -r requirements.txt
 CMD ["python", "-m", "wrep.main"]
 
-FROM base AS selenium
-ENV SELENIUM_ENABLED=true
-RUN apk --no-cache -q add chromium-chromedriver &&\
-    pip install -qqq --no-cache-dir --no-input selenium
-COPY . .
-RUN wrep frontend build
+# -----------------
 
-FROM base
+FROM base AS prodbase
+ENV FRONTEND_DIST=/srv/dist
 COPY . .
-RUN wrep frontend build
+RUN apk --no-cache -q add g++ libc-dev libffi-dev &&\
+    wrep frontend build &&\
+    apk -q del g++ libc-dev libffi-dev
+
+FROM prodbase AS server
+
+FROM prodbase AS etl
+RUN pip install -qqq --no-cache-dir --no-input -r requirements-etl.txt
+
+FROM etl AS etl-selenium
+RUN apk --no-cache -q add chromium-chromedriver &&\
+    pip install -qqq --no-cache-dir --no-input -r requirements-selenium.txt
+ENV SELENIUM_ENABLED=true
+
+# -----------------
+
+FROM base AS devbase
+RUN apk --no-cache -q add g++ libc-dev libffi-dev &&\
+    pip install -qqq --no-cache-dir --no-input -r requirements-etl.txt
+ENV UVICORN_RELOAD=true
+ENV FRONTEND_AUTO_BUILD=true
+
+FROM devbase AS etl-dev
+
+FROM devbase AS etl-selenium-dev
+RUN apk --no-cache -q add chromium-chromedriver &&\
+    pip install -qqq --no-cache-dir --no-input -r requirements-selenium.txt
+ENV SELENIUM_ENABLED=true
+
+FROM etl-selenium-dev AS selenium
+FROM etl-dev AS dev
+FROM dev
