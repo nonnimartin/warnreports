@@ -595,7 +595,7 @@ class PipelineRunner:
                         return 'No change'
 
 
-class Command(utils.BaseCommand):
+class Command(utils.AppCommand):
     description = """
     Run pipeline stages.
     
@@ -717,8 +717,10 @@ class Command(utils.BaseCommand):
             default=None,
             type=Path,
             help='Write the pipeline log ID to the given file')
+        super().add_arguments(parser)
 
     def setup(self, opts):
+        super().setup(opts)
         from . import search
         from .backends import etl
         from .translators import translators

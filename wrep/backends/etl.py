@@ -271,7 +271,7 @@ class MongoExtraction(MongoETBase, ExtractionBackend):
     collection = collections['extractions']
     ordering = ['_i']
     clean_keys = ['_id', '_i', 'state']
-    stat_clean_keys = ['scrape_time']
+    stat_clean_keys = ['scrape_time', 'NAICS Codes']
     lookup_id_key = '_id'
 
     async def update(self, source):
@@ -300,6 +300,7 @@ class MongoTranslation(MongoETBase, TranslationBackend):
     collection = collections['translations']
     ordering = ['id']
     clean_keys = ['_id', 'row']
+    stat_clean_keys = ['row']
     lookup_id_key = 'id'
 
     async def update(self, source):
@@ -316,8 +317,8 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
 
     async def clean(self) -> None:
         db = await self.db()
-        for name in self.collections:
-            coll = db.get_collection(name)
+        for name, collection in self.collections.items():
+            coll = db.get_collection(collection.name)
             if name == 'naics':
                 coro = coll.drop()
             elif name == 'artifacts':
@@ -334,12 +335,15 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
             await coro
 
     async def stat(self):
-        it = (await self.db()).reports.find(dict(state=self.state)).sort('id')
+        collection = self.collections['reports']
+        coll = (await self.db()).get_collection(collection.name)
+        it = coll.find(dict(state=self.state)).sort('id')
         return await docs_stat(it)
 
     async def update(self, name, source):
-        coll = (await self.db()).get_collection(name)
-        await coll.create_indexes(self.collections[name].indexes)
+        collection = self.collections[name]
+        coll = (await self.db()).get_collection(collection.name)
+        await coll.create_indexes(collection.indexes)
         it = (inst.as_doc() async for inst in utils.as_aiter(source))
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
@@ -378,214 +382,212 @@ async def docs_stat(it: EitherIterable[Doc]) -> Doc:
         size=size,
         hash=h.hexdigest() if count else None)
 
-class EtlCmdMixin:
-
-    @classmethod
-    def dbname_arg(cls, parser: utils.AP) -> None:
-        arg = parser.add_argument
-        arg('--etl-dbname', '-b',
-            default=None,
-            help=f'Alternate mongo etl db name')
-
-class OneBaseCommand(utils.BaseCommand, EtlCmdMixin):
+class BaseCommand(utils.AppCommand):
 
     @classmethod
     def add_arguments(cls, parser: utils.AP):
         arg = parser.add_argument
-        cls.dbname_arg(parser)
-        arg('--yaml', action='store_true', help='Output yaml')
+        arg('--etl-dbname', '-b',
+            default=None,
+            help=f'Alternate mongo etl db name')
+        super().add_arguments(parser)
 
     def setup(self, opts):
+        super().setup(opts)
         self.context = {client.dbname_key: opts.etl_dbname}
 
-    def printobj(self, obj: Any) -> None:
-        print(self.objtext(obj))
+class OneCommand(utils.BaseCommand):
 
-    def objtext(self, obj: Any) -> str:
-        obj = self.jsondoc(obj)
-        if self.opts.yaml:
-            text = yaml.safe_dump(obj, sort_keys=False)
-        else:
-            text = json.dumps(obj, indent=2)
-        return text
+    class Base(BaseCommand):
+        label: ClassVar[str] = '?'
 
-    @staticmethod
-    def jsondoc(obj: Any) -> Any:
-        return json.loads(json.dumps(obj, default=str))
+        @classmethod
+        def add_arguments(cls, parser: utils.AP):
+            parser.add_argument('--yaml', action='store_true', help='Output yaml')
+            parser.add_argument('id', type=UUID, help=f'The {cls.label} doc id')
+            super().add_arguments(parser)
 
-class TroneCommand(OneBaseCommand):
-    'Run translations for a single extraction doc, and print the result'
+        def printobj(self, obj: Any) -> None:
+            print(self.objtext(obj))
 
-    @classmethod
-    def add_arguments(cls, parser):
-        super().add_arguments(parser)
-        arg = parser.add_argument
-        arg('id', type=UUID, help='The extraction doc id')
+        def objtext(self, obj: Any) -> str:
+            obj = self.jsondoc(obj)
+            if self.opts.yaml:
+                text = yaml.safe_dump(obj, sort_keys=False)
+            else:
+                text = json.dumps(obj, indent=2)
+            return text
 
-    async def run(self):
-        from ..translators import translators
-        state, doc = await MongoExtraction.doc_lookup(
-            self.opts.id,
-            context=self.context)
-        it = translators[state]().entries(doc)
-        it = utils.as_aiter(it)
-        res = [x async for x in it]
-        self.printobj(res)
+        @staticmethod
+        def jsondoc(obj: Any) -> Any:
+            return json.loads(json.dumps(obj, default=str))
 
-class LdoneCommand(OneBaseCommand):
-    'Run load operations for a single translation doc, and print the result'
+    class Trone(Base):
+        'Run translations for a single extraction doc, and print the result'
+        label = 'extraction'
 
-    @classmethod
-    def add_arguments(cls, parser):
-        super().add_arguments(parser)
-        arg = parser.add_argument
-        arg('id', type=UUID, help='The translation doc id')
+        async def run(self):
+            from ..translators import translators
+            state, doc = await MongoExtraction.doc_lookup(
+                self.opts.id,
+                context=self.context)
+            it = translators[state]().entries(doc)
+            it = utils.as_aiter(it)
+            res = [x async for x in it]
+            self.printobj(res)
 
-    async def run(self):
-        from .. import orm
-        from ..pipeline import Pipeline
-        state, doc = await MongoTranslation.doc_lookup(
-            self.opts.id,
-            context=self.context)
-        pipeline = Pipeline(state, context=self.context)
-        with orm.SessionLocal() as session:
-            pipeline.session = session
-            pipeline.artifact_cache = {}
-            report, save = pipeline.save(doc)
-            if report is not None:
-                report, = orm.Report.map_reduce([(report, report, None, None)])
-                report = report.model_dump(mode='json')
-            session.rollback()
-        self.printobj(dict(save=save, report=report))
+    class Ldone(Base):
+        'Run load operations for a single translation doc, and print the result'
+        label = 'translation'
 
-class LogCmdMixin(EtlCmdMixin):
+        async def run(self):
+            from .. import orm
+            from ..pipeline import Pipeline
+            state, doc = await MongoTranslation.doc_lookup(
+                self.opts.id,
+                context=self.context)
+            pipeline = Pipeline(state, context=self.context)
+            with orm.SessionLocal() as session:
+                pipeline.session = session
+                pipeline.artifact_cache = {}
+                report, save = pipeline.save(doc)
+                if report is not None:
+                    report, = orm.Report.map_reduce([(report, report, None, None)])
+                    report = report.model_dump(mode='json')
+                session.rollback()
+            self.printobj(dict(save=save, report=report))
 
-    def get_backend(self, dbname: str|None) -> MongoPipelineLog:
-        return MongoPipelineLog(context={client.dbname_key: dbname})
+    commands = dict(trone=Trone, ldone=Ldone)
 
-class LogShowCommand(utils.BaseCommand, LogCmdMixin):
-    'Show pipeline log'
-    summary_methods: ClassVar[dict[str, str]] = {
-        'short': 'get_short',
-        'runs': 'get_runs',
-        'load-changes': 'get_load_changes',
-        'scrape-stats': 'get_scrape_stats'}
-    summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
-        'short': dict(key=0, value=1),
-        'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
-        'load-changes': ('state', 'created', 'updated'),
-        'scrape-stats': ('state', 'elapsed')}
+class LogCommand(utils.BaseCommand):
+    'Pipeline log commands'
 
-    @classmethod
-    def add_arguments(cls, parser):
-        super().add_arguments(parser)
-        arg = parser.add_argument
-        arg(
-            '--summary', '-s',
-            choices=cls.summary_methods,
-            default=None,
-            help=(f'The summary type to show'))
-        arg(
-            '--output', '-o',
-            choices=['json', 'yaml', 'table'],
-            help=f'Output format')
-        arg(
-            '--tablefmt',
-            default='simple',
-            help=f'Table format')
-        cls.dbname_arg(parser)
-        arg(
-            'id',
-            type=UUID,
-            nargs='?',
-            default=None,
-            help='The pipeline log ID, default latest')
+    class Show(BaseCommand):
+        'Show pipeline log'
+        summary_methods: ClassVar[dict[str, str]] = {
+            'short': 'get_short',
+            'runs': 'get_runs',
+            'load-changes': 'get_load_changes',
+            'scrape-stats': 'get_scrape_stats'}
+        summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
+            'short': dict(key=0, value=1),
+            'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
+            'load-changes': ('state', 'created', 'updated'),
+            'scrape-stats': ('state', 'elapsed')}
 
-    def setup(self, opts):
-        self.summary: str|None = self.opts.summary
-        self.output: str = self.opts.output
-        if not self.summary and self.output == 'table':
-            self.parser.error(f'Table output only supported with summary')
-        self.backend = self.get_backend(opts.etl_dbname)
+        @classmethod
+        def add_arguments(cls, parser):
+            arg = parser.add_argument
+            arg(
+                '--summary', '-s',
+                choices=cls.summary_methods,
+                default=None,
+                help=(f'The summary type to show'))
+            arg(
+                '--output', '-o',
+                choices=['json', 'yaml', 'table'],
+                help=f'Output format')
+            arg(
+                '--tablefmt',
+                default='simple',
+                help=f'Table format')
+            arg(
+                'id',
+                type=UUID,
+                nargs='?',
+                default=None,
+                help='The pipeline log ID, default latest')
+            super().add_arguments(parser)
 
-    async def run(self):
-        if self.opts.id:
-            log = await self.backend.fetch(self.opts.id)
-        else:
-            log = await self.backend.fetch_latest()
-        if self.summary:
-            body = getattr(log, self.summary_methods[self.summary])()
-        else:
-            body = log.model_dump(mode='json')
-            body['runs'] = len(body['runs'])
-            body['states'] = len(body['states'])
-        if self.output == 'table':
+        def setup(self, opts):
+            super().setup(opts)
+            self.summary: str|None = self.opts.summary
+            self.output: str = self.opts.output
+            if not self.summary and self.output == 'table':
+                self.parser.error(f'Table output only supported with summary')
+            self.backend = MongoPipelineLog(context=self.context)
+
+        async def run(self):
+            if self.opts.id:
+                log = await self.backend.fetch(self.opts.id)
+            else:
+                log = await self.backend.fetch_latest()
+            if self.summary:
+                body = getattr(log, self.summary_methods[self.summary])()
+            else:
+                body = self.default_body(log)
+            if self.output == 'table':
+                text = self.output_table(body)
+            elif self.output == 'yaml':
+                text = yaml.safe_dump(body, sort_keys=False)
+            else:
+                text = json.dumps(body, indent=2)
+            print(text)
+
+        def output_table(self, body: Doc) -> str:
             head = self.summary_fields[self.summary]
             if not isinstance(head, Mapping):
                 head = dict(zip(head, head))
             if isinstance(body, Mapping):
                 body = list(body.items())
             from tabulate import tabulate
-            text = tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
-        elif self.output == 'yaml':
-            text = yaml.safe_dump(body, sort_keys=False)
-        else:
-            text = json.dumps(body, indent=2)
-        print(text)
+            return tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
 
-class LogCopyCommand(utils.BaseCommand, LogCmdMixin):
-    'Copy pipeline logs to another db'
+        def default_body(self, log: PipelineLog) -> Doc:
+            body = log.model_dump(mode='json')
+            body['runs'] = len(body['runs'])
+            body['states'] = len(body['states'])
+            return body
 
-    @classmethod
-    def add_arguments(cls, parser):
-        cls.dbname_arg(parser)
-        parser.add_argument('dest', help='The destination db name')
+    class Copy(BaseCommand):
+        'Copy pipeline logs to another db'
 
-    def setup(self, opts):
-        self.src = self.get_backend(opts.etl_dbname)
-        self.dst = self.get_backend(opts.dest)
+        @classmethod
+        def add_arguments(cls, parser):
+            parser.add_argument('dest', help='The destination db name')
+            super().add_arguments(parser)
 
-    async def run(self):
-        src_db = await self.src.db()
-        dst_db = await self.dst.db()
-        if src_db.name == dst_db.name:
-            raise ValueError(f'Source and dest db cannot be the same')
-        logger.info(f'Copying from {src_db.name} to {dst_db.name}')
-        res = await self.dst.update(await self.src.findall())
-        counts = dict(zip(('count', 'created', 'updated'), res))
-        print(counts)
+        def setup(self, opts):
+            super().setup(opts)
+            self.src = MongoPipelineLog(context=self.context)
+            self.dst = MongoPipelineLog(context={next(iter(self.context)): opts.dest})
 
-class LogPruneCommand(utils.BaseCommand, LogCmdMixin):
-    'Prune old pipeline logs'
+        async def run(self):
+            src_db = await self.src.db()
+            dst_db = await self.dst.db()
+            if src_db.name == dst_db.name:
+                raise ValueError(f'Source and dest db cannot be the same')
+            logger.info(f'Copying from {src_db.name} to {dst_db.name}')
+            res = await self.dst.update(await self.src.findall())
+            counts = dict(zip(('count', 'created', 'updated'), res))
+            print(counts)
 
-    @classmethod
-    def add_arguments(cls, parser):
-        parser.add_argument(
-            '--maxage', '-m',
-            type=utils.deltaopt('days'),
-            default='30d',
-            help='Max age, default 30d')
-        cls.dbname_arg(parser)
+    class Prune(BaseCommand):
+        'Prune old pipeline logs'
 
-    def setup(self, opts):
-        self.backend = self.get_backend(opts.etl_dbname)
+        @classmethod
+        def add_arguments(cls, parser):
+            parser.add_argument(
+                '--maxage', '-m',
+                type=utils.deltaopt('days'),
+                default='30d',
+                help='Max age, default 30d')
+            super().add_arguments(parser)
 
-    async def run(self):
-        res = await self.backend.prune(self.opts.maxage)
-        counts = dict(deleted=res)
-        print(counts)
+        def setup(self, opts):
+            super().setup(opts)
+            self.backend = MongoPipelineLog(context=self.context)
 
-class LogCommand(utils.BaseCommand):
-    'Pipeline log commands'
-    commands = dict(
-        show=LogShowCommand,
-        copy=LogCopyCommand,
-        prune=LogPruneCommand)
+        async def run(self):
+            res = await self.backend.prune(self.opts.maxage)
+            counts = dict(deleted=res)
+            print(counts)
+
+    commands = dict(show=Show, copy=Copy, prune=Prune)
 
 class Command(utils.BaseCommand):
     'Misc ETL pipeline commands'
     commands = dict(
         log=LogCommand,
-        trone=TroneCommand,
-        ldone=LdoneCommand,
+        **OneCommand.commands,
         control=ClientControlCommand(client))

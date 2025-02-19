@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import csv
+import glob
 import hashlib
 import io
 import json
+import shutil
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Iterable, Iterator
 
@@ -20,6 +22,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, aliased
 from sqlalchemy.orm import joinedload as joinedload
 from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
+from sqlalchemy.orm.exc import NoResultFound as NoResultFound
 from sqlalchemy.sql import func
 from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 
@@ -369,16 +372,27 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
             inst.reports_count += 1
             memo['reports'].add(report.id)
 
-    def self_update(self) -> bool:
-        file = Path(f'{settings.ARTIFACTS_DIR}/{self.path}')
-        with file.open('rb') as f:
-            digest = hashlib.file_digest(f, 'sha1')
+    def self_update(self, root: Path|None = None) -> bool:
+        root = root or settings.ARTIFACTS_DIR
+        file = root/self.path
         stat = file.stat()
+        digfile = utils.digestfile(file)
+        digest = None
+        if digfile.exists():
+            digstat = digfile.stat()
+            if int(stat.st_mtime) == int(digstat.st_mtime):
+                digest = digfile.read_text()
+        if not digest:
+            logger.debug(f'Calculating hash for {digfile}')
+            with file.open('rb') as f:
+                digest = hashlib.file_digest(f, 'sha1').hexdigest()
+            digfile.write_text(digest)
+            shutil.copystat(file, digfile)
         data = dict(
             size=stat.st_size,
-            modified=datetime.fromtimestamp(stat.st_mtime),
+            modified=datetime.fromtimestamp(int(stat.st_mtime), tz=timezone.utc),
             media_type=utils.get_mimetype(file),
-            sha1=digest.hexdigest())
+            sha1=digest)
         change = False
         for field, value in data.items():
             if getattr(self, field) != value:
@@ -471,10 +485,10 @@ def dump_update(table: Table|str, file: Path|None = None) -> None:
     finally:
         tmp.unlink(missing_ok=True)
 
-class NaicsCommand(utils.FuncCommand(load_naics)):
+class NaicsCommand(utils.FuncCommand(load_naics, utils.AppCommand)):
     pass
 
-class DumpCommand(utils.FuncCommand(dump_update)):
+class DumpCommand(utils.FuncCommand(dump_update, utils.AppCommand)):
 
     @classmethod
     def add_arguments(cls, parser):
@@ -489,8 +503,9 @@ class DumpCommand(utils.FuncCommand(dump_update)):
             nargs='?',
             type=Path,
             help=('The output file, default BUILD_DIR/dump/[table].csv'))
+        super().add_arguments(parser)
 
-class MroneCommand(utils.BaseCommand):
+class MroneCommand(utils.AppCommand):
     description = """
     Run map-reduce for a single object and print the resulting data model object
 
@@ -546,6 +561,7 @@ class MroneCommand(utils.BaseCommand):
         arg(
             'id',
             help='The object primary key (see examples)')
+        super().add_arguments(parser)
 
     def setup(self, opts):
         super().setup(opts)
@@ -590,7 +606,82 @@ class MroneCommand(utils.BaseCommand):
             return yaml.safe_dump(objdict, sort_keys=False)
         return json.dumps(objdict, indent=2)
 
+class ArtifactsCommand(utils.BaseCommand):
+    'Artifacts maintenance'
+
+    class Base(utils.AppCommand):
+
+        @classmethod
+        def add_arguments(cls, parser):
+            arg = parser.add_argument
+            arg(
+                '--check-only', '-c',
+                action='store_false',
+                dest='change',
+                help='Check only, do not make changes')
+            arg(
+                'dir',
+                nargs='?',
+                type=Path,
+                help=f'Alternate artifacts dir')
+            super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.root: Path = opts.dir or settings.ARTIFACTS_DIR
+
+    class Prune(Base):
+        'Delete orphan artifacts from file system'
+
+        async def run(self):
+            it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
+            with SessionLocal() as session:
+                for path in it:
+                    file = self.root/path
+                    if path.endswith('.sha1'):
+                        logger.info(f'Cruft {path=}')
+                        if self.opts.change:
+                            file.unlink()
+                        continue
+                    id = Artifact.path_to_id(path)
+                    try:
+                        session.get(Artifact, id)
+                    except NoResultFound:
+                        logger.info(f'Orphan {path=} {id=}')
+                        if self.opts.change:
+                            file.unlink()
+                            utils.digestfile(file).unlink(missing_ok=True)
+                    else:
+                        logger.debug(f'Found {path=} {id=}')
+
+    class Update(Base):
+        'Update artifacts in DB from files'
+
+        async def run(self):
+            stmt = select(Artifact)
+            with SessionLocal() as session:
+                for art in session.scalars(stmt):
+                    file = self.root/art.path
+                    if file.exists():
+                        logger.debug(f'Found path={art.path} id={art.id}')
+                        if art.self_update(root=self.root):
+                            logger.info(f'Updated path={art.path} id={art.id}')
+                            session.add(art)
+                    else:
+                        logger.warning(f'Missing path={art.path} id={art.id}')
+                if self.opts.change:
+                    session.commit()
+                else:
+                    session.rollback()
+
+    commands = dict(
+        update=Update,
+        prune=Prune)
 
 class Command(utils.BaseCommand):
     'ORM/SQL commands'
-    commands = dict(dump=DumpCommand, naics=NaicsCommand, mrone=MroneCommand)
+    commands = dict(
+        artifacts=ArtifactsCommand,
+        mrone=MroneCommand,
+        dump=DumpCommand,
+        naics=NaicsCommand)
