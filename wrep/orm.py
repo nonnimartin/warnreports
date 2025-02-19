@@ -381,6 +381,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
             if int(stat.st_mtime) == int(digstat.st_mtime):
                 digest = digfile.read_text()
         if not digest:
+            logger.debug(f'Calculating hash for {digfile}')
             with file.open('rb') as f:
                 digest = hashlib.file_digest(f, 'sha1').hexdigest()
             digfile.write_text(digest)
