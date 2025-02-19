@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID, uuid5
 
 from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
                      Response, status)
-from fastapi.responses import FileResponse
 from pydantic import Field
 from starlette.datastructures import URL
 
 from .. import search, settings, utils
+from ..backends.artifacts import Disp, get_artifact_response
 from ..models import *
 from .common import *
 
@@ -17,14 +17,11 @@ logger = utils.get_logger('api')
 router = APIRouter()
 
 artifacts_data = APIRouter()
+
 @artifacts_data.get('/artifacts/{id}/data')
-async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
+async def artifact_data(id: UUID, disposition: Disp = 'download'):
     artifact = await retrieve404(ArtifactDetail, id=[id])
-    return FileResponse(
-        settings.ARTIFACTS_DIR/artifact.path,
-        media_type=artifact.media_type,
-        filename=artifact.name,
-        content_disposition_type=disposition)
+    return await get_artifact_response(artifact, disposition=disposition)
 
 def search_opts(
     order: Annotated[

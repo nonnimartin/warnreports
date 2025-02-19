@@ -164,7 +164,7 @@ class ArtifactsCommand(BaseCommand):
     class Prune(Base):
         'Delete orphan artifacts from file system'
 
-        async def run(self):
+        def run(self):
             it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
             with SessionLocal() as session:
                 for path in it:
@@ -188,7 +188,7 @@ class ArtifactsCommand(BaseCommand):
     class Update(Base):
         'Update artifacts in DB from files'
 
-        async def run(self):
+        def run(self):
             stmt = select(Artifact)
             with SessionLocal() as session:
                 for art in session.scalars(stmt):

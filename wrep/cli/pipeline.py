@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .. import Stage, search, settings, utils
-from ..backends import etl
-from ..pipeline import PipelineRunner
+from .. import Stage, settings, utils
 from ..translators import translators
 from .base import AppCommand
 
@@ -129,6 +127,9 @@ class Command(AppCommand):
 
     def setup(self, opts):
         super().setup(opts)
+        from .. import search
+        from ..backends import etl
+        from ..pipeline import PipelineRunner
         opts.states = opts.states or sorted(translators)
         runner_opts = dict(vars(opts))
         self.idfile: Path|None = runner_opts.pop('idfile')
