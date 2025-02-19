@@ -9,19 +9,11 @@ from pydantic import Field
 from starlette.datastructures import URL
 
 from .. import search, settings, utils
-from ..backends.artifacts import Disp, get_artifact_response
 from ..models import *
 from .common import *
 
 logger = utils.get_logger('api')
 router = APIRouter()
-
-artifacts_data = APIRouter()
-
-@artifacts_data.get('/artifacts/{id}/data')
-async def artifact_data(id: UUID, disposition: Disp = 'download'):
-    artifact = await retrieve404(ArtifactDetail, id=[id])
-    return await get_artifact_response(artifact, disposition=disposition)
 
 def search_opts(
     order: Annotated[

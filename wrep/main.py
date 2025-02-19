@@ -38,7 +38,7 @@ class Apps:
     @wapp
     def artifacts(self):
         app = self.create_app(title='warnreports artifacts')
-        app.include_router(routers.artifacts)
+        app.include_router(routers.artifacts.router, prefix='/api/v0')
         return app
     
     @wapp
