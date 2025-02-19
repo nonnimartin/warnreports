@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import dataclasses
-import json
 import uuid
 from datetime import timedelta, timezone
-from typing import Any, AsyncIterator, ClassVar, Iterable, Self
+from typing import Any, AsyncIterator, ClassVar, Iterable
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorDatabase)
@@ -249,63 +248,3 @@ class Search[DM: DataModel]:
         if self.limit is not None:
             cur = cur.limit(self.limit)
         return cur
-
-class ControlBaseCommand(utils.AppCommand):
-    mongo: MongoClient
-
-    @classmethod
-    def parser_fmtargs(cls, parser):
-        return super().parser_fmtargs(parser) | dict(client=cls.mongo)
-
-    @classmethod
-    def fromclient(cls, client: MongoClient) -> type[Self]:
-        return type(cls.__name__, (cls,), dict(mongo=client))
-
-class ControlGetCommand(ControlBaseCommand):
-    'Get the mongo control doc for {client.dbname_key}'
-
-    async def run(self):
-        doc = await self.mongo.get_doc()
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlSetCommand(ControlBaseCommand):
-    'Update the mongo control doc for {client.dbname_key}'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            '--ttl',
-            type=utils.deltaopt('seconds'),
-            default=None,
-            help='Override the TTL')
-        arg(
-            'name',
-            help='The database name')
-
-    async def run(self):
-        doc = await self.mongo.set_dbname(self.opts.name, ttl=self.opts.ttl)
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlTtlCommand(ControlBaseCommand):
-    'Update the mongo control doc TTL only for {client.dbname_key}'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            'ttl',
-            type=utils.deltaopt('seconds'),
-            help='The TTL')
-
-    async def run(self):
-        doc = await self.mongo.set_ttl(self.opts.ttl)
-        print(json.dumps(doc, indent=2, default=str))
-
-def ClientControlCommand(client: MongoClient) -> type[utils.AppCommand]:
-    return type('MongoClientControlCommand', (utils.AppCommand,), dict(
-        __doc__=f'Mongo control doc commands for {client.dbname_key}',
-        commands=dict(
-            get=ControlGetCommand.fromclient(client),
-            set=ControlSetCommand.fromclient(client),
-            ttl=ControlTtlCommand.fromclient(client))))

@@ -101,9 +101,4 @@ async def lifespan(app: FastAPI):
     yield
     read_html_cached.cache_clear()
 
-from .build import Command as BuildCommand
 from .build import frontend_build
-
-
-class Command(utils.BaseCommand):
-    commands = dict(build=BuildCommand)
