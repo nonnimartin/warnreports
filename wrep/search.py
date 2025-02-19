@@ -251,7 +251,7 @@ class MongoArtifactsFilter(ArtifactsFilter, DefaultMongoFilter):
 class Command(utils.BaseCommand):
     'Search collection commands'
 
-    class BaseCommand(utils.AppCommand):
+    class Base(utils.AppCommand):
         method: ClassVar[str]
 
         @classmethod
@@ -291,14 +291,14 @@ class Command(utils.BaseCommand):
             if res:
                 print(json.dumps(results, indent=2))
 
-    def CollectionCmd(method: str, base=BaseCommand) -> type[Command.BaseCommand]:
+    def Collection(method: str, base=Base) -> type[Command.Base]:
         return type(f'{method}_Command', (base,), dict(
             method=method,
             description=getattr(MappedCollection, method).__doc__))
 
     commands = dict(
-        stats=CollectionCmd('stats'),
-        init=CollectionCmd('init'),
-        build=CollectionCmd('build'),
-        clean=CollectionCmd('clean'),
+        stats=Collection('stats'),
+        init=Collection('init'),
+        build=Collection('build'),
+        clean=Collection('clean'),
         control=ClientControlCommand(client))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import glob
 import hashlib
 import io
 import json
@@ -371,8 +372,9 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
             inst.reports_count += 1
             memo['reports'].add(report.id)
 
-    def self_update(self) -> bool:
-        file = Path(f'{settings.ARTIFACTS_DIR}/{self.path}')
+    def self_update(self, root: Path|None = None) -> bool:
+        root = root or settings.ARTIFACTS_DIR
+        file = root/self.path
         stat = file.stat()
         digfile = utils.digestfile(file)
         digest = None
@@ -604,7 +606,82 @@ class MroneCommand(utils.AppCommand):
             return yaml.safe_dump(objdict, sort_keys=False)
         return json.dumps(objdict, indent=2)
 
+class ArtifactsCommand(utils.BaseCommand):
+    'Artifacts maintenance'
+
+    class Base(utils.AppCommand):
+
+        @classmethod
+        def add_arguments(cls, parser):
+            arg = parser.add_argument
+            arg(
+                '--check-only', '-c',
+                action='store_false',
+                dest='change',
+                help='Check only, do not make changes')
+            arg(
+                'dir',
+                nargs='?',
+                type=Path,
+                help=f'Alternate artifacts dir')
+            super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.root: Path = opts.dir or settings.ARTIFACTS_DIR
+
+    class Prune(Base):
+        'Delete orphan artifacts from file system'
+
+        async def run(self):
+            it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
+            with SessionLocal() as session:
+                for path in it:
+                    file = self.root/path
+                    if path.endswith('.sha1'):
+                        logger.info(f'Cruft {path=}')
+                        if self.opts.change:
+                            file.unlink()
+                        continue
+                    id = Artifact.path_to_id(path)
+                    try:
+                        session.get(Artifact, id)
+                    except NoResultFound:
+                        logger.info(f'Orphan {path=} {id=}')
+                        if self.opts.change:
+                            file.unlink()
+                            utils.digestfile(file).unlink(missing_ok=True)
+                    else:
+                        logger.debug(f'Found {path=} {id=}')
+
+    class Update(Base):
+        'Update artifacts in DB from files'
+
+        async def run(self):
+            stmt = select(Artifact)
+            with SessionLocal() as session:
+                for art in session.scalars(stmt):
+                    file = self.root/art.path
+                    if file.exists():
+                        logger.debug(f'Found path={art.path} id={art.id}')
+                        if art.self_update(root=self.root):
+                            logger.info(f'Updated path={art.path} id={art.id}')
+                            session.add(art)
+                    else:
+                        logger.warning(f'Missing path={art.path} id={art.id}')
+                if self.opts.change:
+                    session.commit()
+                else:
+                    session.rollback()
+
+    commands = dict(
+        update=Update,
+        prune=Prune)
 
 class Command(utils.BaseCommand):
     'ORM/SQL commands'
-    commands = dict(dump=DumpCommand, naics=NaicsCommand, mrone=MroneCommand)
+    commands = dict(
+        artifacts=ArtifactsCommand,
+        mrone=MroneCommand,
+        dump=DumpCommand,
+        naics=NaicsCommand)
