@@ -74,5 +74,5 @@ async def frontend_build() -> None:
     await FrontentBuilder().build()
 
 
-class Command(utils.FuncCommand(frontend_build)):
+class Command(utils.FuncCommand(frontend_build, utils.AppCommand)):
     pass

@@ -392,15 +392,17 @@ class EtlCmdMixin:
             default=None,
             help=f'Alternate mongo etl db name')
 
-class OneBaseCommand(utils.BaseCommand, EtlCmdMixin):
+class OneBaseCommand(utils.AppCommand, EtlCmdMixin):
 
     @classmethod
     def add_arguments(cls, parser: utils.AP):
         arg = parser.add_argument
         cls.dbname_arg(parser)
         arg('--yaml', action='store_true', help='Output yaml')
+        super().add_arguments(parser)
 
     def setup(self, opts):
+        super().setup(opts)
         self.context = {client.dbname_key: opts.etl_dbname}
 
     def printobj(self, obj: Any) -> None:
@@ -423,9 +425,9 @@ class TroneCommand(OneBaseCommand):
 
     @classmethod
     def add_arguments(cls, parser):
-        super().add_arguments(parser)
         arg = parser.add_argument
         arg('id', type=UUID, help='The extraction doc id')
+        super().add_arguments(parser)
 
     async def run(self):
         from ..translators import translators
@@ -442,9 +444,9 @@ class LdoneCommand(OneBaseCommand):
 
     @classmethod
     def add_arguments(cls, parser):
-        super().add_arguments(parser)
         arg = parser.add_argument
         arg('id', type=UUID, help='The translation doc id')
+        super().add_arguments(parser)
 
     async def run(self):
         from .. import orm
@@ -463,197 +465,204 @@ class LdoneCommand(OneBaseCommand):
             session.rollback()
         self.printobj(dict(save=save, report=report))
 
-class LogCmdMixin(EtlCmdMixin):
-
-    def get_backend(self, dbname: str|None) -> MongoPipelineLog:
-        return MongoPipelineLog(context={client.dbname_key: dbname})
-
-class LogShowCommand(utils.BaseCommand, LogCmdMixin):
-    'Show pipeline log'
-    summary_methods: ClassVar[dict[str, str]] = {
-        'short': 'get_short',
-        'runs': 'get_runs',
-        'load-changes': 'get_load_changes',
-        'scrape-stats': 'get_scrape_stats'}
-    summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
-        'short': dict(key=0, value=1),
-        'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
-        'load-changes': ('state', 'created', 'updated'),
-        'scrape-stats': ('state', 'elapsed')}
-
-    @classmethod
-    def add_arguments(cls, parser):
-        super().add_arguments(parser)
-        arg = parser.add_argument
-        arg(
-            '--summary', '-s',
-            choices=cls.summary_methods,
-            default=None,
-            help=(f'The summary type to show'))
-        arg(
-            '--output', '-o',
-            choices=['json', 'yaml', 'table'],
-            help=f'Output format')
-        arg(
-            '--tablefmt',
-            default='simple',
-            help=f'Table format')
-        cls.dbname_arg(parser)
-        arg(
-            'id',
-            type=UUID,
-            nargs='?',
-            default=None,
-            help='The pipeline log ID, default latest')
-
-    def setup(self, opts):
-        self.summary: str|None = self.opts.summary
-        self.output: str = self.opts.output
-        if not self.summary and self.output == 'table':
-            self.parser.error(f'Table output only supported with summary')
-        self.backend = self.get_backend(opts.etl_dbname)
-
-    async def run(self):
-        if self.opts.id:
-            log = await self.backend.fetch(self.opts.id)
-        else:
-            log = await self.backend.fetch_latest()
-        if self.summary:
-            body = getattr(log, self.summary_methods[self.summary])()
-        else:
-            body = log.model_dump(mode='json')
-            body['runs'] = len(body['runs'])
-            body['states'] = len(body['states'])
-        if self.output == 'table':
-            head = self.summary_fields[self.summary]
-            if not isinstance(head, Mapping):
-                head = dict(zip(head, head))
-            if isinstance(body, Mapping):
-                body = list(body.items())
-            from tabulate import tabulate
-            text = tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
-        elif self.output == 'yaml':
-            text = yaml.safe_dump(body, sort_keys=False)
-        else:
-            text = json.dumps(body, indent=2)
-        print(text)
-
-class LogCopyCommand(utils.BaseCommand, LogCmdMixin):
-    'Copy pipeline logs to another db'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        cls.dbname_arg(parser)
-        parser.add_argument('dest', help='The destination db name')
-
-    def setup(self, opts):
-        self.src = self.get_backend(opts.etl_dbname)
-        self.dst = self.get_backend(opts.dest)
-
-    async def run(self):
-        src_db = await self.src.db()
-        dst_db = await self.dst.db()
-        if src_db.name == dst_db.name:
-            raise ValueError(f'Source and dest db cannot be the same')
-        logger.info(f'Copying from {src_db.name} to {dst_db.name}')
-        res = await self.dst.update(await self.src.findall())
-        counts = dict(zip(('count', 'created', 'updated'), res))
-        print(counts)
-
-class LogPruneCommand(utils.BaseCommand, LogCmdMixin):
-    'Prune old pipeline logs'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        parser.add_argument(
-            '--maxage', '-m',
-            type=utils.deltaopt('days'),
-            default='30d',
-            help='Max age, default 30d')
-        cls.dbname_arg(parser)
-
-    def setup(self, opts):
-        self.backend = self.get_backend(opts.etl_dbname)
-
-    async def run(self):
-        res = await self.backend.prune(self.opts.maxage)
-        counts = dict(deleted=res)
-        print(counts)
-
 class LogCommand(utils.BaseCommand):
     'Pipeline log commands'
-    commands = dict(
-        show=LogShowCommand,
-        copy=LogCopyCommand,
-        prune=LogPruneCommand)
 
-class ArtifactsBaseCommand(utils.BaseCommand):
+    class CmdMixin(EtlCmdMixin):
 
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            '--check-only', '-c',
-            action='store_false',
-            dest='change',
-            help='Check only, do not make changes')
+        def get_backend(self, dbname: str|None) -> MongoPipelineLog:
+            return MongoPipelineLog(context={client.dbname_key: dbname})
 
-    def setup(self, opts):
-        super().setup(opts)
-        self.root = settings.ARTIFACTS_DIR
+    class ShowCommand(utils.AppCommand, CmdMixin):
+        'Show pipeline log'
+        summary_methods: ClassVar[dict[str, str]] = {
+            'short': 'get_short',
+            'runs': 'get_runs',
+            'load-changes': 'get_load_changes',
+            'scrape-stats': 'get_scrape_stats'}
+        summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
+            'short': dict(key=0, value=1),
+            'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
+            'load-changes': ('state', 'created', 'updated'),
+            'scrape-stats': ('state', 'elapsed')}
 
-class ArtifactsPruneCommand(ArtifactsBaseCommand):
-    'Delete orphan artifacts from file system'
+        @classmethod
+        def add_arguments(cls, parser):
+            arg = parser.add_argument
+            arg(
+                '--summary', '-s',
+                choices=cls.summary_methods,
+                default=None,
+                help=(f'The summary type to show'))
+            arg(
+                '--output', '-o',
+                choices=['json', 'yaml', 'table'],
+                help=f'Output format')
+            arg(
+                '--tablefmt',
+                default='simple',
+                help=f'Table format')
+            cls.dbname_arg(parser)
+            arg(
+                'id',
+                type=UUID,
+                nargs='?',
+                default=None,
+                help='The pipeline log ID, default latest')
+            super().add_arguments(parser)
 
-    async def run(self):
-        from .. import orm
-        it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
-        with orm.SessionLocal() as session:
-            for path in it:
-                file = self.root/path
-                if path.endswith('.sha1'):
-                    logger.info(f'Cruft {path=}')
-                    if self.opts.change:
-                        file.unlink()
-                    continue
-                id = orm.Artifact.path_to_id(path)
-                try:
-                    session.get(orm.Artifact, id)
-                except orm.NoResultFound:
-                    logger.info(f'Orphan {path=} {id=}')
-                    if self.opts.change:
-                        file.unlink()
-                        utils.digestfile(file).unlink(missing_ok=True)
-                else:
-                    logger.debug(f'Found {path=} {id=}')
+        def setup(self, opts):
+            super().setup(opts)
+            self.summary: str|None = self.opts.summary
+            self.output: str = self.opts.output
+            if not self.summary and self.output == 'table':
+                self.parser.error(f'Table output only supported with summary')
+            self.backend = self.get_backend(opts.etl_dbname)
 
-class ArtifactsCheckCommand(ArtifactsBaseCommand):
-    'Check for missing artifact files'
-
-    async def run(self):
-        from .. import orm
-        stmt = orm.select(orm.Artifact)
-        with orm.SessionLocal() as session:
-            for art in session.scalars(stmt):
-                file = self.root/art.path
-                if file.exists():
-                    logger.debug(f'Found path={art.path} id={art.id}')
-                    if art.self_update():
-                        logger.info(f'Updated path={art.path} id={art.id}')
-                        session.add(art)
-                else:
-                    logger.warning(f'Missing path={art.path} id={art.id}')
-            if self.opts.change:
-                session.commit()
+        async def run(self):
+            if self.opts.id:
+                log = await self.backend.fetch(self.opts.id)
             else:
-                session.rollback()
+                log = await self.backend.fetch_latest()
+            if self.summary:
+                body = getattr(log, self.summary_methods[self.summary])()
+            else:
+                body = log.model_dump(mode='json')
+                body['runs'] = len(body['runs'])
+                body['states'] = len(body['states'])
+            if self.output == 'table':
+                head = self.summary_fields[self.summary]
+                if not isinstance(head, Mapping):
+                    head = dict(zip(head, head))
+                if isinstance(body, Mapping):
+                    body = list(body.items())
+                from tabulate import tabulate
+                text = tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
+            elif self.output == 'yaml':
+                text = yaml.safe_dump(body, sort_keys=False)
+            else:
+                text = json.dumps(body, indent=2)
+            print(text)
 
+    class CopyCommand(utils.AppCommand, CmdMixin):
+        'Copy pipeline logs to another db'
+
+        @classmethod
+        def add_arguments(cls, parser):
+            cls.dbname_arg(parser)
+            parser.add_argument('dest', help='The destination db name')
+            super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.src = self.get_backend(opts.etl_dbname)
+            self.dst = self.get_backend(opts.dest)
+
+        async def run(self):
+            src_db = await self.src.db()
+            dst_db = await self.dst.db()
+            if src_db.name == dst_db.name:
+                raise ValueError(f'Source and dest db cannot be the same')
+            logger.info(f'Copying from {src_db.name} to {dst_db.name}')
+            res = await self.dst.update(await self.src.findall())
+            counts = dict(zip(('count', 'created', 'updated'), res))
+            print(counts)
+
+    class PruneCommand(utils.AppCommand, CmdMixin):
+        'Prune old pipeline logs'
+
+        @classmethod
+        def add_arguments(cls, parser):
+            parser.add_argument(
+                '--maxage', '-m',
+                type=utils.deltaopt('days'),
+                default='30d',
+                help='Max age, default 30d')
+            cls.dbname_arg(parser)
+            super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.backend = self.get_backend(opts.etl_dbname)
+
+        async def run(self):
+            res = await self.backend.prune(self.opts.maxage)
+            counts = dict(deleted=res)
+            print(counts)
+
+    commands = dict(
+        show=ShowCommand,
+        copy=CopyCommand,
+        prune=PruneCommand)
 
 class ArtifactsCommand(utils.BaseCommand):
     'Artifacts maintenance'
+
+    class BaseCommand(utils.AppCommand):
+
+        @classmethod
+        def add_arguments(cls, parser):
+            arg = parser.add_argument
+            arg(
+                '--check-only', '-c',
+                action='store_false',
+                dest='change',
+                help='Check only, do not make changes')
+            super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.root = settings.ARTIFACTS_DIR
+
+    class PruneCommand(BaseCommand):
+        'Delete orphan artifacts from file system'
+
+        async def run(self):
+            from .. import orm
+            it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
+            with orm.SessionLocal() as session:
+                for path in it:
+                    file = self.root/path
+                    if path.endswith('.sha1'):
+                        logger.info(f'Cruft {path=}')
+                        if self.opts.change:
+                            file.unlink()
+                        continue
+                    id = orm.Artifact.path_to_id(path)
+                    try:
+                        session.get(orm.Artifact, id)
+                    except orm.NoResultFound:
+                        logger.info(f'Orphan {path=} {id=}')
+                        if self.opts.change:
+                            file.unlink()
+                            utils.digestfile(file).unlink(missing_ok=True)
+                    else:
+                        logger.debug(f'Found {path=} {id=}')
+
+    class UpdateCommand(BaseCommand):
+        'Update artifacts in DB from files'
+
+        async def run(self):
+            from .. import orm
+            stmt = orm.select(orm.Artifact)
+            with orm.SessionLocal() as session:
+                for art in session.scalars(stmt):
+                    file = self.root/art.path
+                    if file.exists():
+                        logger.debug(f'Found path={art.path} id={art.id}')
+                        if art.self_update():
+                            logger.info(f'Updated path={art.path} id={art.id}')
+                            session.add(art)
+                    else:
+                        logger.warning(f'Missing path={art.path} id={art.id}')
+                if self.opts.change:
+                    session.commit()
+                else:
+                    session.rollback()
+
     commands = dict(
-        check=ArtifactsCheckCommand,
-        prune=ArtifactsPruneCommand)
+        update=UpdateCommand,
+        prune=PruneCommand)
 
 class Command(utils.BaseCommand):
     'Misc ETL pipeline commands'

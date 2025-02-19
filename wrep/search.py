@@ -248,51 +248,54 @@ class MongoArtifactsFilter(ArtifactsFilter, DefaultMongoFilter):
                 yield {field: value}
         yield from super().get_filters()
 
-class CollectionCmdBase(utils.BaseCommand):
-    method: ClassVar[str]
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg('--dbname', '-d',
-            default=None,
-            help=f'Alternate mongo search db name')
-        if cls.method == 'build':
-            arg('--eager', '-e',
-                action='store_false',
-                dest='lazy',
-                help='Use eager loading of SQL result sets. Uses more memory.')
-        arg('names',
-            nargs='*',
-            choices=mapped_collections,
-            help='Collection names, default all')
-
-    def setup(self, opts):
-        self.names = self.opts.names or mapped_collections
-        self.funckw = {}
-        if hasattr(opts, 'lazy'):
-            self.funckw.update(lazy=opts.lazy)
-
-    async def run(self):
-        if self.opts.dbname:
-            logger.info(f'Using search dbname={self.opts.dbname}')
-        db = await client.get_database(self.opts.dbname)
-        results: dict[str, Any] = {}
-        for name in self.names:
-            defn = mapped_collections[name]
-            res = await getattr(defn, self.method)(db=db, **self.funckw)
-            if res is not None:
-                results[name] = res
-        if res:
-            print(json.dumps(results, indent=2))
-
-def CollectionCmd(method: str) -> type[CollectionCmdBase]:
-    return type(f'{method}_Command', (CollectionCmdBase,), dict(
-        method=method,
-        description=getattr(MappedCollection, method).__doc__))
-
 class Command(utils.BaseCommand):
     'Search collection commands'
+
+    class BaseCommand(utils.AppCommand):
+        method: ClassVar[str]
+
+        @classmethod
+        def add_arguments(cls, parser):
+            arg = parser.add_argument
+            arg('--dbname', '-d',
+                default=None,
+                help=f'Alternate mongo search db name')
+            if cls.method == 'build':
+                arg('--eager', '-e',
+                    action='store_false',
+                    dest='lazy',
+                    help='Use eager loading of SQL result sets. Uses more memory.')
+            arg('names',
+                nargs='*',
+                choices=mapped_collections,
+                help='Collection names, default all')
+            super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.names = self.opts.names or mapped_collections
+            self.funckw = {}
+            if hasattr(opts, 'lazy'):
+                self.funckw.update(lazy=opts.lazy)
+
+        async def run(self):
+            if self.opts.dbname:
+                logger.info(f'Using search dbname={self.opts.dbname}')
+            db = await client.get_database(self.opts.dbname)
+            results: dict[str, Any] = {}
+            for name in self.names:
+                defn = mapped_collections[name]
+                res = await getattr(defn, self.method)(db=db, **self.funckw)
+                if res is not None:
+                    results[name] = res
+            if res:
+                print(json.dumps(results, indent=2))
+
+    def CollectionCmd(method: str, base=BaseCommand) -> type[Command.BaseCommand]:
+        return type(f'{method}_Command', (base,), dict(
+            method=method,
+            description=getattr(MappedCollection, method).__doc__))
+
     commands = dict(
         stats=CollectionCmd('stats'),
         init=CollectionCmd('init'),

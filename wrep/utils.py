@@ -326,16 +326,17 @@ class BaseCommand:
         cmd = cls(opts, parser)
         asyncio.run(wait(cmd.run()))
 
-    def __init__(self, opts, parser: AP):
+    def __init__(self, opts, parser: AP) -> None:
         self.opts = opts
         self.parser = parser
         if hasattr(opts, self.command_opt):
             self.command_name = getattr(opts, self.command_opt)
             delattr(opts, self.command_opt)
             self.command = self.commands[self.command_name](opts, parser)
-        self.setup(opts)
+        else:
+            self.setup(opts)
 
-    def setup(self, opts):
+    def setup(self, opts) -> None:
         pass
 
     async def run(self):
@@ -360,6 +361,22 @@ def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
         description = f.__doc__
 
     return Command
+
+class AppCommand(BaseCommand):
+
+    def setup(self, opts):
+        super().setup(opts)
+        if opts.log_level:
+            from . import settings
+            settings.LOG_LEVEL = opts.log_level
+            init_logging()
+        del opts.log_level
+
+    @classmethod
+    def add_arguments(cls, parser: AP):
+        arg = parser.add_argument
+        arg('--log-level', default=None)
+        super().add_arguments(parser)
 
 if TYPE_CHECKING:
     from typing import overload

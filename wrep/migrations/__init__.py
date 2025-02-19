@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from .. import orm, settings
-from ..utils import BaseCommand, FuncCommand
+from ..utils import AppCommand, BaseCommand, FuncCommand
 
 
 class AutoHelper:
@@ -66,42 +66,47 @@ def auto(message: str|None = None) -> None:
     'Auto-generate schema migration'
     AutoHelper(message).run()
 
-class MigrateCommand(FuncCommand(migrate)):
-
-    @classmethod
-    def add_arguments(cls, parser):
-        parser.add_argument('--auto-only', action='store_true', help='Only run if DB_AUTO_MIGRATE=true')
-
-class AutoCommand(FuncCommand(auto)):
-
-    @classmethod
-    def add_arguments(cls, parser):
-        parser.add_argument('--message', '-m', default='auto', help='Migration message, default auto')
-
-
-class AlembicCommand(BaseCommand):
-
-    @classmethod
-    def init_parser(cls, parser):
-        for action in CommandLine().parser._actions:
-            if action.dest in ('help', 'config'):
-                continue
-            parser._add_action(action)
-
-    def setup(self, opts):
-        if not hasattr(opts, 'cmd'):
-            self.parser.error('too few arguments')
-        self.config = Config(settings.ALEMBIC_INI, ini_section=opts.name, cmd_opts=opts)
-
-    def run(self):
-        CommandLine().run_cmd(self.config, self.opts)
-
 class Command(BaseCommand):
     'Migration commands'
-    commands = dict(migrate=MigrateCommand, auto=AutoCommand, alembic=AlembicCommand)
+
+    class MigrateCommand(FuncCommand(migrate, AppCommand)):
+
+        @classmethod
+        def add_arguments(cls, parser):
+            parser.add_argument('--auto-only', action='store_true', help='Only run if DB_AUTO_MIGRATE=true')
+            super().add_arguments(parser)
+
+    class AutoCommand(FuncCommand(auto, AppCommand)):
+
+        @classmethod
+        def add_arguments(cls, parser):
+            parser.add_argument('--message', '-m', default='auto', help='Migration message, default auto')
+            super().add_arguments(parser)
+
+    class AlembicCommand(BaseCommand):
+
+        @classmethod
+        def init_parser(cls, parser):
+            for action in CommandLine().parser._actions:
+                if action.dest in ('help', 'config'):
+                    continue
+                parser._add_action(action)
+
+        def setup(self, opts):
+            if not hasattr(opts, 'cmd'):
+                self.parser.error('too few arguments')
+            self.config = Config(settings.ALEMBIC_INI, ini_section=opts.name, cmd_opts=opts)
+
+        def run(self):
+            CommandLine().run_cmd(self.config, self.opts)
+
+    commands = dict(
+        migrate=MigrateCommand,
+        auto=AutoCommand,
+        alembic=AlembicCommand)
 
 try:
     import alembic.command
-    from alembic.config import Config, CommandLine
+    from alembic.config import CommandLine, Config
 except ModuleNotFoundError:
     Command.commands.pop('alembic')

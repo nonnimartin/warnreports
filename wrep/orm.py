@@ -482,10 +482,10 @@ def dump_update(table: Table|str, file: Path|None = None) -> None:
     finally:
         tmp.unlink(missing_ok=True)
 
-class NaicsCommand(utils.FuncCommand(load_naics)):
+class NaicsCommand(utils.FuncCommand(load_naics, utils.AppCommand)):
     pass
 
-class DumpCommand(utils.FuncCommand(dump_update)):
+class DumpCommand(utils.FuncCommand(dump_update, utils.AppCommand)):
 
     @classmethod
     def add_arguments(cls, parser):
@@ -500,8 +500,9 @@ class DumpCommand(utils.FuncCommand(dump_update)):
             nargs='?',
             type=Path,
             help=('The output file, default BUILD_DIR/dump/[table].csv'))
+        super().add_arguments(parser)
 
-class MroneCommand(utils.BaseCommand):
+class MroneCommand(utils.AppCommand):
     description = """
     Run map-reduce for a single object and print the resulting data model object
 
@@ -557,6 +558,7 @@ class MroneCommand(utils.BaseCommand):
         arg(
             'id',
             help='The object primary key (see examples)')
+        super().add_arguments(parser)
 
     def setup(self, opts):
         super().setup(opts)

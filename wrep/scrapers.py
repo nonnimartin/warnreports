@@ -208,10 +208,11 @@ class CA(Scraper):
 
     @contextmanager
     def extract(self):
-        files = map(self.cache.topath, self.load_index())
-        yield chain.from_iterable(map(self.read_record_file, files))
+        it = map(self.read_record_file, self.load_index())
+        yield chain.from_iterable(it)
 
-    def read_record_file(self, file: Path) -> Iterator[dict[str, str]]:
+    def read_record_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+        file = self.cache/file
         from warn.scrapers import ca
         if file.name.endswith('.pdf'):
             records = ca._extract_pdf_data(file)

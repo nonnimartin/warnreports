@@ -250,7 +250,7 @@ class Search[DM: DataModel]:
             cur = cur.limit(self.limit)
         return cur
 
-class ControlBaseCommand(utils.BaseCommand):
+class ControlBaseCommand(utils.AppCommand):
     mongo: MongoClient
 
     @classmethod
@@ -302,8 +302,8 @@ class ControlTtlCommand(ControlBaseCommand):
         doc = await self.mongo.set_ttl(self.opts.ttl)
         print(json.dumps(doc, indent=2, default=str))
 
-def ClientControlCommand(client: MongoClient) -> type[utils.BaseCommand]:
-    return type('MongoClientControlCommand', (utils.BaseCommand,), dict(
+def ClientControlCommand(client: MongoClient) -> type[utils.AppCommand]:
+    return type('MongoClientControlCommand', (utils.AppCommand,), dict(
         __doc__=f'Mongo control doc commands for {client.dbname_key}',
         commands=dict(
             get=ControlGetCommand.fromclient(client),
