@@ -70,12 +70,11 @@ class OneCommand(BaseCommand):
         collection = etl.MongoExtraction.collection
 
         async def run(self):
-            inst = await self.get_inst()
-            doc = inst.model_dump(mode='json')
-            it = translators[inst.state]().entries(doc)
-            objs = list(it)
-            it = (x.model_dump(mode='json', exclude_unset=True) for x in objs)
-            docs = list(it)
+            inst: Extraction = await self.get_inst()
+            objs = list(translators[inst.state]().entries(inst.model_extra))
+            docs = [
+                x.model_dump(mode='json', exclude_unset=True, exclude_none=True)
+                for x in objs]
             self.printobj(docs)
             if self.opts.save:
                 backend = etl.MongoTranslation(inst.state, context=self.context)
@@ -85,7 +84,7 @@ class OneCommand(BaseCommand):
             try:
                 return await super().get_inst()
             except ValueError as err:
-                logger.warning(f'Extraction doc not found, checking translations')
+                logger.warning(f'Extraction {self.opts.id} not found, checking translations')
             filter = filters[Translation](id=[self.opts.id])
             res = Search(filter, limit=1, context=self.context)
             try:
@@ -101,7 +100,7 @@ class OneCommand(BaseCommand):
         collection = etl.MongoTranslation.collection
 
         async def run(self):
-            inst = await self.get_inst()
+            inst: Translation = await self.get_inst()
             pipeline = Pipeline(inst.state, context=self.context)
             with orm.SessionLocal() as session:
                 pipeline.session = session

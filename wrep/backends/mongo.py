@@ -191,7 +191,7 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
                     prepped.append(get_naics_filter(value, anno.alias))
                     continue
                 if anno.oper == '$search':
-                    name = '$text'
+                    anno.alias = '$text'
                 elif anno.oper == '$contains':
                     anno.oper = '$regex'
                     value = wc_contains(value)
@@ -238,7 +238,6 @@ class Search[DM: DataModel]:
             self.orders = list(self.filter.get_ordering())
             if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
                 self.orders.append(('_id', 1))
-
     async def db(self) -> AsyncIOMotorDatabase:
         return await self.client.get_context_database(self.context)
 

@@ -163,9 +163,9 @@ class Extraction(DataModel):
     model_config=ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
 
 class Translation(DataModel):
-    id: UUID = Field(alias='_id')
-    values_id: UUID
-    state: StateCode
+    id: UUID = Field(None, alias='_id')
+    values_id: UUID = None
+    state: StateCode = None
     company: CompanyName|None = None
     reported: datetime|None = None
     location: str|None = None
@@ -178,9 +178,13 @@ class Translation(DataModel):
     report_id: str|None = None
     naics: list[int]|None = None
     artifacts: dict[str, str]|None = None
-    row: Extraction
+    row: Extraction = None
     stat_exclude_fields: ClassVar = ('row',)
-    model_config=ConfigDict(populate_by_name=True, from_attributes=True)
+    model_config=ConfigDict(
+        populate_by_name=True,
+        from_attributes=True,
+        validate_assignment=True,
+        revalidate_instances='always')
 
     tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
 
