@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import uuid
 from datetime import timedelta
-from typing import Any, AsyncIterator, ClassVar, Iterable
+from typing import Any, AsyncIterator, ClassVar, Iterable, Literal
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorDatabase)
-from pydantic import Field
+from pydantic import SerializationInfo, SerializerFunctionWrapHandler, model_serializer
 from pymongo.operations import IndexModel
 
 from .. import settings, utils
-from ..models import DataModel, FilterModel, Limit, Offset
+from ..models import DataModel, FilterModel, Limit, Offset, Fi
 
 filters: dict[type[DataModel], type[FilterModel[DataModel]]] = {}
 logger = utils.get_logger('backends.mongo')
@@ -162,15 +163,42 @@ class MongoCollection(AbstractMongoCollection):
     def __post_init__(self) -> None:
         self.indexes = list(map(IndexModel, self.indexes))
 
-class MongoFilter:
-    collection: ClassVar[AbstractMongoCollection]
+class MongoFilterModel[DM: DataModel](FilterModel[DM]):
+    collection: ClassVar[MongoCollection]
 
-    def get_query(self) -> dict[str, Any]:
-        filts = tuple(self.get_filters())
-        return {'$and': filts} if filts else {}
+    def get_query(self):
+        q = self.model_dump(context={'tofilter': True})
+        if (filts := list(self.get_filters())):
+            q.setdefault('$and', []).extend(filts)
+        return q
 
     def get_filters(self) -> Iterable[dict[str, Any]]:
         yield from ()
+
+    @model_serializer(mode='wrap')
+    def serialize_filter(self, nxt: SerializerFunctionWrapHandler, info: SerializationInfo):
+        if not (info.context and info.context.get('tofilter')):
+            return nxt(self)
+        result = {}
+        prepped = []
+        data = self.model_dump(exclude_none=True, exclude=['order'])
+        for name, value in data.items():
+            field = self.model_fields[name]
+            if (meta := field.metadata) and isinstance(anno := meta[0], Fi):
+                if anno.alias is None:
+                    anno.alias = name
+                if anno.oper == '$naics':
+                    prepped.append(get_naics_filter(value, anno.alias))
+                    continue
+                if anno.oper == '$search':
+                    name = '$text'
+                elif anno.oper == '$contains':
+                    anno.oper = '$regex'
+                    value = wc_contains(value)
+                prepped.append({anno.alias: {anno.oper: value}})
+        if prepped:
+            result['$and'] = prepped
+        return result
 
     def __init_subclass__(cls, **kw) -> None:
         super().__init_subclass__(**kw)
@@ -178,16 +206,9 @@ class MongoFilter:
             if issubclass(model, DataModel):
                 filters[model] = cls
 
-class MongoQueryFilter(MongoFilter):
-    q: dict[str, Any] = Field(default_factory=dict)
-
-    def get_filters(self):
-        if self.q:
-            yield self.q
-
 @dataclasses.dataclass
 class Search[DM: DataModel]:
-    filter: FilterModel[DM]|MongoFilter
+    filter: FilterModel[DM]|MongoFilterModel[DM]
     limit: Limit|None = None
     offset: Offset = 0
     context: dict[str, Any]|None = None
@@ -250,3 +271,17 @@ class Search[DM: DataModel]:
         if self.limit is not None:
             cur = cur.limit(self.limit)
         return cur
+
+def wc_contains(text: str) -> re.Pattern:
+    return re.compile(f'.*{re.escape(text)}.*', re.I)
+
+def wc_startswith(text: str) -> re.Pattern:
+    return re.compile(f'^{re.escape(text)}.*', re.I)
+
+def get_naics_filter(naics: list[int], prefix: str = 'naics') -> dict[Literal['$or'], list[dict[str, Any]]]:
+    if prefix:
+        prefix = prefix.removesuffix('.') + '.'
+    rxs = (
+        {f'{prefix}code': {'$regex': wc_startswith(str(code))}}
+        for code in naics)
+    return {'$or': [*rxs, {f'{prefix}id': {'$in': naics}}]}

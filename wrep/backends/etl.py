@@ -14,7 +14,7 @@ from .. import Stage, settings, utils
 from ..models import *
 from ..utils import EitherIterable
 from .mongo import (AbstractMongoCollection, MongoClient, MongoCollection,
-                    Search, filters)
+                    MongoFilterModel, Search, filters)
 
 __all__ = [
     'ExtractionBackend',
@@ -171,7 +171,7 @@ class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
             self._indexes_created = True
 
 class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineLog]):
-    collection = collections['pipelinelogs']
+    collection: ClassVar = collections['pipelinelogs']
 
     async def save(self, log):
         doc = log.as_doc()
@@ -255,7 +255,7 @@ class MongoETBase[DM: (Extraction, Translation)](StageBackend, MongoContextColle
 
 class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
     NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
-    collection = collections['extractions']
+    collection: ClassVar = collections['extractions']
 
     @override
     async def update(self, source):
@@ -271,7 +271,7 @@ class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
 
 
 class MongoTranslation(MongoETBase[Translation], TranslationBackend):
-    collection = collections['translations']
+    collection: ClassVar = collections['translations']
 
     @override
     def get_replace_filter(self, doc: Doc) -> Doc:
@@ -279,6 +279,15 @@ class MongoTranslation(MongoETBase[Translation], TranslationBackend):
             '$or': [
                 super().get_replace_filter(doc),
                 {'values_id': doc['values_id']}]}
+
+class MongoExtractionFilter(ExtractionFilter, MongoFilterModel[Extraction]):
+    collection: ClassVar = collections['extractions']
+
+class MongoTranslationFilter(TranslationFilter, MongoFilterModel[Translation]):
+    collection: ClassVar = collections['translations']
+
+class MongoPipelineLogFilter(PipelineLogFilter, MongoFilterModel[PipelineLog]):
+    collection: ClassVar = collections['pipelinelogs']
 
 from .. import search
 

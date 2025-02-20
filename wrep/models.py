@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
@@ -83,7 +84,7 @@ class ReportData(DataModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     @field_serializer('reported', 'starting')
-    def tzreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+    def tzreplace(self, dt: datetime|None) -> datetime|None:
         return tzreplace(dt, zoneinfos[self.state])
 
 class ArtifactData(DataModel):
@@ -179,13 +180,12 @@ class Translation(DataModel):
     artifacts: dict[str, str]|None = None
     row: Extraction
     stat_exclude_fields: ClassVar = ('row',)
-    stat_exclude_fields: ClassVar[tuple[str, ...]] = ()
     model_config=ConfigDict(populate_by_name=True, from_attributes=True)
 
     tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
 
     @field_serializer('scrape_time')
-    def utcreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+    def utcreplace(self, dt: datetime|None) -> datetime|None:
         if dt and not dt.tzinfo:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
@@ -325,7 +325,6 @@ class FilterModel[DM: DataModel](DataModel):
     result_model: ClassVar[type[DM]]
     order_fields: ClassVar[set[str]] = set()
     default_ordering: ClassVar[list[tuple[str, Literal[1, -1]]]] = []
-    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def get_ordering(self):
         if self.order:
@@ -344,80 +343,87 @@ class FilterModel[DM: DataModel](DataModel):
             if allowed is None or field in allowed:
                 yield field, dir_
 
+@dataclasses.dataclass
+class Fi:
+    oper: str
+    alias: str|None = None
+
 class ReportsFilter(FilterModel[ReportData]):
-    id: list[UUID]|None = None
-    id_not: list[UUID]|None = None
-    text: str|None = None
-    company: list[CompanyName]|None = None
-    company_id: list[UUID]|None = None
-    state: list[StateCode] = None
-    location: str|None = None
-    action: str|None = None
-    naics: list[int]|None = None
-    reported_min: datetime|None = None
-    reported_max: datetime|None = None
-    starting_min: datetime|None = None
-    starting_max: datetime|None = None
-    employees_min: int|None = None
-    employees_max: int|None = None
-    result_model: ClassVar = ReportData
-    order_fields: ClassVar = {'reported', 'company', 'state', 'employees', 'starting', 'action'}
+    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
+    id_not: Annotated[list[UUID]|None, Fi('$nin', '_id')] = None
+    text: Annotated[str|None, Fi('$search')] = None
+    company: Annotated[list[CompanyName]|None, Fi('$in')] = None
+    company_id: Annotated[list[UUID]|None, Fi('$in')] = None
+    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    location: Annotated[str|None, Fi('$contains')] = None
+    action: Annotated[str|None, Fi('$contains')] = None
+    naics: Annotated[list[int]|None, Fi('$naics')] = None
+    reported_min: Annotated[datetime|None, Fi('$gte', 'reported')] = None
+    reported_max: Annotated[datetime|None, Fi('$lte', 'reported')] = None
+    starting_min: Annotated[datetime|None, Fi('$gte', 'starting')] = None
+    starting_max: Annotated[datetime|None, Fi('$lte', 'starting')] = None
+    employees_min: Annotated[int|None, Fi('$gte', 'employees')] = None
+    employees_max: Annotated[int|None, Fi('$lte', 'employees')] = None
+    order_fields: ClassVar = {
+        'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
+    result_model: ClassVar = ReportData
 
 class NaicsStatesFilterMixin:
-    reports_count_min: int|None = None
-    reports_count_max: int|None = None
-    last_reported_min: datetime|None = None
-    last_reported_max: datetime|None = None
+    reports_count_min: Annotated[int|None, Fi('$gte', 'reports_count')] = None
+    reports_count_max: Annotated[int|None, Fi('$lte', 'reports_count')] = None
+    last_reported_min: Annotated[datetime|None, Fi('$gte', 'last_reported')] = None
+    last_reported_max: Annotated[datetime|None, Fi('$lte', 'last_reported')] = None
 
 class StatesFilter(FilterModel[StateDetail], NaicsStatesFilterMixin):
-    id: list[StateCode]|None = None
+    id: Annotated[list[StateCode]|None, Fi('$in')] = None
     result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('id', 1)]
 
 class NaicsCompaniesFilterMixin(NaicsStatesFilterMixin):
-    state: list[StateCode]|None = None
-    states_count_min: int|None = None
-    states_count_max: int|None = None
-    employees_sum_min: int|None = None
-    employees_sum_max: int|None = None
+    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
+    states_count_min: Annotated[int|None, Fi('$gte', 'states_count')] = None
+    states_count_max: Annotated[int|None, Fi('$lte', 'states_count')] = None
+    employees_sum_min: Annotated[int|None, Fi('$gte', 'employees_sum')] = None
+    employees_sum_max: Annotated[int|None, Fi('$lte', 'employees_sum')] = None
 
 class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
-    id: list[UUID]|None = None
-    text: str|None = None
-    name: list[CompanyName]|None = None
-    naics: list[int]|None = None
-    result_model: ClassVar = CompanyDetail
-    order_fields: ClassVar = {'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
+    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
+    text: Annotated[str|None, Fi('$search')] = None
+    name: Annotated[list[CompanyName]|None, Fi('$in', 'aliases')] = None
+    naics: Annotated[list[int]|None, Fi('$naics')] = None
+    order_fields: ClassVar = {
+        'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
     default_ordering: ClassVar = [('name', 1)]
+    result_model: ClassVar = CompanyDetail
 
 class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
-    id: list[int]|None = None
-    prefix: list[int]|None = None
-    title: str|None = None
-    root: list[int]|None = None
-    parent: list[int]|None = None
-    is_leaf: bool|None = None
+    id: Annotated[list[int]|None, Fi('$in')] = None
+    prefix: Annotated[list[int]|None, Fi('$naics', '')] = None
+    title: Annotated[str|None, Fi('$contains')] = None
+    root: Annotated[list[int]|None, Fi('$in')] = None
+    parent: Annotated[list[int]|None, Fi('$in')] = None
+    is_leaf: Annotated[bool|None, Fi('$eq')] = None
     includes: list[int]|None = None
-    depth_min: int|None = None
-    depth_max: int|None = None
-    companies_count_min: int|None = None
-    companies_count_max: int|None = None
-    result_model: ClassVar = NaicsDetail
+    depth_min: Annotated[int|None, Fi('$gte', 'depth')] = None
+    depth_max: Annotated[int|None, Fi('$lte', 'depth')] = None
+    companies_count_min: Annotated[int|None, Fi('$gte', 'companies_count')] = None
+    companies_count_max: Annotated[int|None, Fi('$lte', 'companies_count')] = None
     order_fields: ClassVar = (
         {'id', 'code', 'title', 'root', 'depth', 'companies_count'} |
         {'reports_count', 'states_count', 'last_reported', 'employees_sum'})
     default_ordering: ClassVar = [('code', 1), ('id', 1)]
+    result_model: ClassVar = NaicsDetail
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
-    id: list[UUID]|None = None
+    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
     state: list[StateCode]|None = None
-    sha1: str|None = None
-    name: str|None = None
-    result_model: ClassVar = ArtifactDetail
+    sha1: Annotated[str|None, Fi('$eq')] = None
+    name: Annotated[str|None, Fi('$eq')] = None
     order_fields: ClassVar = {'name'}
     default_ordering: ClassVar = [('name', 1)]
+    result_model: ClassVar = ArtifactDetail
 
 # ----------------------------
 
@@ -427,28 +433,26 @@ __all__ += [
     'TranslationFilter']
 
 class ExtractionFilter(FilterModel[Extraction]):
-    id: list[UUID]|None = None
-    state: list[StateCode]|None = None
-    result_model: ClassVar = Extraction
+    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
+    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
     default_ordering: ClassVar = [('state', 1), ('_i', 1)]
+    result_model: ClassVar = Extraction
 
 class TranslationFilter(FilterModel[Translation]):
-    id: list[UUID]|None = None
-    state: list[StateCode]|None = None
-    result_model: ClassVar = Translation
+    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
+    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
     default_ordering: ClassVar = [('id', 1)]
+    result_model: ClassVar = Translation
 
 class PipelineLogFilter(FilterModel[PipelineLog]):
-    id: list[UUID]|None = None
-    stages: list[Stage]|None = None
-    states: list[StateCode]|None = None
-    start_min: datetime|None = None
-    start_max: datetime|None = None
-    end_min: datetime|None = None
-    end_max: datetime|None = None
-    elapsed_min: int|None = None
-    elapsed_max: int|None = None
-    errors_count_min: int|None = None
-    errors_count_max: int|None = None
-    result_model: ClassVar = PipelineLog
+    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
+    stages: Annotated[list[Stage]|None, Fi('$in')] = None
+    states: Annotated[list[StateCode]|None, Fi('$in')] = None
+    start_min: Annotated[datetime|None, Fi('$gte', 'start')] = None
+    start_max: Annotated[datetime|None, Fi('$lte', 'start')] = None
+    end_min: Annotated[datetime|None, Fi('$gte', 'end')] = None
+    end_max: Annotated[datetime|None, Fi('$lte', 'end')] = None
+    elapsed_min: Annotated[int|None, Fi('$gte', 'elapsed')] = None
+    elapsed_max: Annotated[int|None, Fi('$lte', 'elapsed')] = None
     default_ordering: ClassVar = [('start', -1)]
+    result_model: ClassVar = PipelineLog

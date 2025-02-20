@@ -9,6 +9,7 @@ from pydantic import Field
 from starlette.datastructures import URL
 
 from .. import search, settings, utils
+from ..backends.mongo import Search, filters
 from ..models import *
 from .common import *
 
@@ -116,8 +117,8 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     if req.method == 'HEAD':
         opts['limit'] = 0
         rep.status_code = status.HTTP_204_NO_CONTENT
-    filter = search.filters[model].model_validate(params)
-    result = search.Search(filter, **opts)
+    filter = filters[model].model_validate(params)
+    result = Search(filter, **opts)
     total = await result.count()
     rep.headers['count'] = str(total)
     if (nexturl := get_next_url(req.url, total, opts['offset'], limit)):
@@ -127,8 +128,8 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     return await result.tolist()
 
 async def retrieve404[DM: DataModel](model: type[DM], **params) -> DM:
-    filter = search.filters[model].model_validate(params)
-    result = search.Search(filter, limit=1)
+    filter = filters[model].model_validate(params)
+    result = Search(filter, limit=1)
     if await result.count():
         return await anext(result.objs())
     raise HTTPException(status.HTTP_404_NOT_FOUND)
