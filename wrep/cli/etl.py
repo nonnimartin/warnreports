@@ -59,9 +59,10 @@ class OneCommand(BaseCommand):
 
         async def get_inst(self):
             res = Search(self.get_filter(), limit=1, context=self.context)
-            if not await res.count():
+            try:
+                return await anext(res.objs())
+            except StopAsyncIteration:
                 raise ValueError(f'Doc not found: {self.opts.id}')
-            return await anext(res.objs())
 
     class Trone(Base):
         'Run translations for a single extraction doc, and print the result'
@@ -72,12 +73,27 @@ class OneCommand(BaseCommand):
             inst = await self.get_inst()
             doc = inst.model_dump(mode='json')
             it = translators[inst.state]().entries(doc)
-            it = (x.model_dump(mode='json', exclude_unset=True) for x in it)
+            objs = list(it)
+            it = (x.model_dump(mode='json', exclude_unset=True) for x in objs)
             docs = list(it)
             self.printobj(docs)
             if self.opts.save:
                 backend = etl.MongoTranslation(inst.state, context=self.context)
-                await backend.update(docs)
+                await backend.update(objs)
+
+        async def get_inst(self):
+            try:
+                return await super().get_inst()
+            except ValueError as err:
+                logger.warning(f'Extraction doc not found, checking translations')
+            filter = filters[Translation](id=[self.opts.id])
+            res = Search(filter, limit=1, context=self.context)
+            try:
+                translation = await anext(res.objs())
+            except StopAsyncIteration:
+                raise ValueError(f'Doc not found: {self.opts.id}')
+            self.opts.id = translation.row.id
+            return await super().get_inst()
 
     class Ldone(Base):
         'Run load operations for a single translation doc, and print the result'
@@ -86,18 +102,20 @@ class OneCommand(BaseCommand):
 
         async def run(self):
             inst = await self.get_inst()
-            doc = inst.model_dump(mode='json', exclude=['_id'])
             pipeline = Pipeline(inst.state, context=self.context)
             with orm.SessionLocal() as session:
                 pipeline.session = session
                 pipeline.artifact_cache = {}
-                report, save = pipeline.save(doc)
+                report, save = pipeline.save(inst)
                 if report is not None:
                     row = (report, report, None, None)
                     report, = orm.Report.map_reduce([row])
-                    report = report.model_dump(mode='json')
-                session.rollback()
-            self.printobj(dict(save=save, report=report))
+                    report = report.model_dump(mode='json', exclude_unset=True)
+                self.printobj(dict(save=save, report=report))
+                if self.opts.save and save is not save.Nochange:
+                    session.commit()
+                else:
+                    session.rollback()
 
     commands = dict(trone=Trone, ldone=Ldone)
 

@@ -14,30 +14,23 @@ from html import unescape as _u
 from itertools import chain, filterfalse
 from pathlib import Path
 from re import compile as _r
-from typing import TYPE_CHECKING, Any, ClassVar, Generator, Iterable, Iterator
+from typing import Any, ClassVar, Generator, Iterable, Iterator
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
-import openpyxl
-import openpyxl.worksheet
-import openpyxl.worksheet.worksheet
-import pdfplumber
 import requests
-from bs4 import BeautifulSoup as Soup
-from bs4.element import PageElement, ResultSet, Tag
-from openpyxl.worksheet.worksheet import Worksheet
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
 from starlette.datastructures import URL
 from typing_extensions import Buffer
 
-import warn.cache
-import warn.runner
 import warn.utils
 
 from . import Stage, settings, utils
 from .backends import webdrivers
 from .backends.files import ArtifactStore, FileCache, clean_filename
 from .models import ScraperOpts
+from .tools import dom, pdfs, xlsx
+from .tools.dom import Soup, bs
 
 scrapers: dict[str, type[Scraper]] = {}
 
@@ -95,7 +88,7 @@ class Scraper:
 
     async def download(self, key: str, url: str, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
-        dest = self.cache.topath(key)
+        dest = self.cache/key
         if missing_only and dest.exists():
             return
         self.logger.debug(f'Downloading {url} to {dest}')
@@ -110,6 +103,7 @@ class Scraper:
         return rep
 
     async def request(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
+        print(f'{url=}')
         if self.request_delay and self.metrics['request_count']:
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
@@ -126,7 +120,6 @@ class Scraper:
                 status = None
             self.logger.error(f'Failed to get {url=} {status=}')
             raise
-        self.metrics['request_count'] += 1
         if not kw.get('stream'):
             self.metrics['request_bytes'] += len(rep.content)
             await asyncio.sleep(0)
@@ -617,17 +610,41 @@ class GA(Scraper):
         shortcode_atts=dict(id=77460))
 
 class IL(Scraper):
-    # Scrape time: ~20s
-    # Extract time: ~7s
-    source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export?search=&layoffTypes=&trade=0&dateReportedStart=Invalid%20Date&dateReportedEnd=Invalid%20Date&statuses=4&reasons=&eventCauses=&naicsCodes=1&naicIndustries=&naics=&unionsInvolved=0&geolocation=1&cities=&counties=&lwias=&includeAdditionalLwias=false&edrs=&lat=0&lng=0&distance=.5&memberType=1&users=&accessList=&bookmarked=false'
+    source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export'
+    source_params = [
+        ('search', ''),
+        ('layoffTypes', ''),
+        ('trade', '0'),
+        ('dateReportedStart', 'Invalid Date'),
+        ('dateReportedEnd', 'Invalid Date'),
+        ('statuses', '4'),
+        ('reasons', ''),
+        ('eventCauses', ''),
+        ('naicsCodes', '1'),
+        ('naicIndustries', ''),
+        ('naics', ''),
+        ('unionsInvolved', '0'),
+        ('geolocation', '1'),
+        ('cities', ''),
+        ('counties', ''),
+        ('lwias', ''),
+        ('includeAdditionalLwias', 'false'),
+        ('edrs', ''),
+        ('lat', '0'),
+        ('lng', '0'),
+        ('distance', '.5'),
+        ('memberType', '1'),
+        ('users', ''),
+        ('accessList', ''),
+        ('bookmarked', 'false')]
 
     async def scrape(self):
-        await self.download('export.xlsx', self.source_url)
+        await self.download('export.xlsx', self.source_url, params=self.source_params)
 
     def statobjs(self):
         file = self.cache/'export.xlsx'
         if file.exists():
-            for row in extract_xlsx(file):
+            for row in xlsx.extract_workbook(file):
                 row.pop('NAICS Codes', None)
                 yield json.dumps(row)
 
@@ -636,7 +653,7 @@ class IL(Scraper):
 
     @contextmanager
     def extract(self):
-        yield extract_xlsx(self.cache/'export.xlsx')
+        yield xlsx.extract_workbook(self.cache/'export.xlsx')
 
 class IN(Scraper):
     # Scrape time: < 2s
@@ -1126,13 +1143,13 @@ class NJ(Scraper):
     def extract(self):
         file = self.cache.topath('latest.xlsx')
         extra = dict(scrape_time=utils.file_mtime(file).isoformat())
-        wb = openpyxl.load_workbook(file, read_only=True)
+        wb = xlsx.load_workbook(file, read_only=True)
         it = chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
         yield (row|extra for row in it)
 
-    def extract_xlsx_worksheet(self, ws: openpyxl.worksheet.worksheet.Worksheet):
+    def extract_xlsx_worksheet(self, ws: xlsx.Worksheet):
         extra = dict(worksheet_name=ws.title)
-        it = extract_xlsx_worksheet(ws)
+        it = xlsx.extract_worksheet(ws)
         return (row|extra for row in it)
 
 class NY(Scraper):
@@ -1183,7 +1200,7 @@ class NY(Scraper):
 
     def read_xlsx_file(self, file: Path|str) -> Iterator[dict[str, str]]:
         "Extract records from historical xlsx file"
-        return extract_xlsx(self.cache/file)
+        return xlsx.extract_workbook(self.cache/file)
 
     def read_html_file(self, file: Path|str) -> Iterator[dict[str, str]]:
         "Extract records from HTML page"
@@ -1246,7 +1263,7 @@ class NY(Scraper):
         file = self.cache/file
         textkey = f'{self.cache.tokey(file)}.txt'
         if not self.extract_cache.exists(textkey):
-            with pdfplumber.open(file) as pdf:
+            with pdfs.open(file) as pdf:
                 text = '\n'.join(page.extract_text() for page in pdf.pages)
             self.extract_cache.write(textkey, text)
         return self.extract_cache.read(textkey)
@@ -1568,7 +1585,7 @@ class SC(Scraper):
         return self.headers_species[None]
 
     def read_table(self, path: Path) -> Iterator[list[str]]:
-        with pdfplumber.open(path) as pdf:
+        with pdfs.open(path) as pdf:
             it = [page.extract_tables() for page in pdf.pages]
         it = chain.from_iterable(it)
         it = map(self.process_table, it)
@@ -1710,7 +1727,7 @@ class TX(Scraper):
         extra = {}
         if self.year_pat.match(file.name):
             extra.update(artifact_url=self.absurl(file.name))
-        for row in extract_xlsx(file):
+        for row in xlsx.extract_workbook(file):
             row.update(extra)
             yield row
 
@@ -1781,31 +1798,7 @@ def absurl(base_url: str|None, url: str) -> None:
         url = base_url.rstrip('/') + '/' + url.lstrip('/')
     return url
 
-def bs(markup: Any, features='html.parser', **kw):
-    if isinstance(markup, Path):
-        markup = markup.read_bytes()
-    return Soup(markup, features, **kw)
-
-def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
-    worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
-    return extract_xlsx_worksheet(worksheet)
-
-def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
-    it = ([cell.value for cell in row] for row in ws.rows)
-    headers = next(it)
-    for values in filter(any, it):
-        row = {}
-        for k, v in filter(any, zip(headers, values)):
-            if v is None:
-                v = ''
-            elif isinstance(v, datetime):
-                v = v.strftime(f'%Y-%m-%d')
-            else:
-                v = str(v)
-            row[k] = v
-        yield row
-
-def hashstat(it: Iterable[Path|str|Buffer|PageElement]) -> dict[str, str|int|None]:
+def hashstat(it: Iterable[Path|str|Buffer|dom.PageElement]) -> dict[str, str|int|None]:
     h = hashlib.sha1()
     size = 0
     for obj in it:
@@ -1819,7 +1812,7 @@ def hashstat(it: Iterable[Path|str|Buffer|PageElement]) -> dict[str, str|int|Non
             continue
         if isinstance(obj, str):
             buf = obj.encode()
-        elif isinstance(obj, PageElement):
+        elif isinstance(obj, dom.PageElement):
             buf = obj.text.encode()
         else:
             buf = obj
@@ -1831,18 +1824,7 @@ def hashstat(it: Iterable[Path|str|Buffer|PageElement]) -> dict[str, str|int|Non
 
 scrapers.update({
     state: type(state, (Scraper,), {})
-    for state in map(str.upper, warn.utils.get_all_scrapers())
+    for state in (
+    x.stem.upper() for x in
+    (settings.REPODIR/'warn/scrapers').glob('??.py'))
     if state not in scrapers})
-
-if TYPE_CHECKING:
-    from typing import overload
-    class Soup(Soup):
-        @overload
-        def find_all(
-            self,
-            name:str|Any=...,
-            attrs: dict[str, Any]=...,
-            recursive:bool=True,
-            string:str|Any=...,
-            limit:int|None=...,
-            **kwargs) -> ResultSet[Soup|PageElement|Tag]: ...

@@ -340,7 +340,8 @@ class CA(Translator):
         'num_employees': 'employees',
         'layoff_or_closure': 'action',
         'effective_date': 'starting',
-        'source_file': ['url', 'artifacts'],
+        'source_file': 'url',
+        # 'source_file': ['url', 'artifacts'],
     }
     rewrites = dict(
         company=[
@@ -518,6 +519,18 @@ class FL(ReportedYearToUrl):
         ],
     )
     values_hash_exclude = ['download', 'artifacts_json']
+
+    def finish(self, entry, row):
+        if entry.get('company') and not entry.get('location'):
+            if (text := row.get('Company Name')) and '\n' in text:
+                if '\n\n' in text:
+                    addrtext = text.rsplit('\n\n', 1)[-1]
+                else:
+                    addrtext = text.split('\n', 1)[-1]
+                addrtext = ' '.join(addrtext.split())
+                if addrtext:
+                    entry['location'] = addrtext
+        super().finish(entry, row)
 
     def get_reported_year_url(self, year: int) -> str:
         action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
@@ -1282,7 +1295,7 @@ class TX(Translator):
         'TOTAL_LAYOFF_NUMBER': 'employees',
         'Layoff Type': 'action',
         'LayOff_Date': 'starting',
-        'artifact_url': 'artifacts',
+        # 'artifact_url': 'artifacts',
     }
     rewrites = dict(
         company=[
