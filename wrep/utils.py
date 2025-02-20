@@ -158,6 +158,10 @@ async def amap[T, R](func: Callable[[T], R], it: EitherIterable[T]) -> AsyncIter
     async for x in as_aiter(it):
         yield await wait(func(x))
 
+async def astarmap[**P, R](func: Callable[P, R], it: EitherIterable[P]) -> AsyncIterator[R]:
+    async for args in as_aiter(it):
+        yield await wait(func(*args))
+
 @asynccontextmanager
 async def awith[T](ctx: EitherContext[T]):
     if isinstance(ctx, AbstractAsyncContextManager):
@@ -181,6 +185,11 @@ def lazyprop[S, T](wrapped: Callable[..., T]) -> property[S, T]:
         except KeyError:
             return self.__dict__.setdefault(name, wrapped(self))
     return property(wrapper)
+
+class StrEnum(str, enum.Enum):
+
+    def __str__(self):
+        return self.value
 
 @dataclasses.dataclass(frozen=True)
 class Wait:
@@ -210,10 +219,9 @@ class Wait:
 
     replace = dataclasses.replace
 
-
 def send_email(recipient: str, subject: str, body: str) -> bool:
-    from .backends.email import instances as email_backends
     from . import settings
+    from .backends.email import instances as email_backends
     backend = email_backends[settings.EMAIL_BACKEND]
     sender = settings.EMAIL_FROM_ADDRESS
     logger.info(f'Sending email {recipient=} {backend=} {subject=}')
@@ -223,12 +231,6 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
     else:
         logger.info('Failed to send email.')
     return success
-
-
-class StrEnum(str, enum.Enum):
-
-    def __str__(self):
-        return self.value
 
 if TYPE_CHECKING:
     from typing import overload

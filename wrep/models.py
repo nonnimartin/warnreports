@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -43,8 +43,11 @@ def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
 
 class DataModel(DataModel):
 
-    def as_doc(self) -> dict[str, Any]:
-        return self.model_dump(by_alias=True)
+    def as_doc(self, **kw) -> dict[str, Any]:
+        return self.model_dump(by_alias=True, **kw)
+
+    def as_jdoc(self, **kw) -> dict[str, Any]:
+        return self.as_doc(mode='json', **kw)
 
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
@@ -153,6 +156,7 @@ class FilterModel[DM: DataModel](DataModel):
     result_model: ClassVar[type[DM]]
     order_fields: ClassVar[set[str]] = set()
     default_ordering: ClassVar[list[tuple[str, Literal[1, -1]]]] = []
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def get_ordering(self):
         if self.order:
@@ -177,7 +181,7 @@ class ReportsFilter(FilterModel[ReportData]):
     text: str|None = None
     company: list[CompanyName]|None = None
     company_id: list[UUID]|None = None
-    state: list[StateCode]|None = None
+    state: list[StateCode] = None
     location: str|None = None
     action: str|None = None
     naics: list[int]|None = None
@@ -249,12 +253,14 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
 # ----------------------------
 
 __all__ += [
+    'Extraction',
     'PipelineBatchOpts',
     'PipelineLog',
     'PipelineOpts',
     'PipelineRunError',
     'PipelineRunDetail',
-    'ScraperOpts']
+    'ScraperOpts',
+    'Translation']
 
 class PipelineRunDetail(DataModel):
     state: StateCode
@@ -376,3 +382,75 @@ class PipelineLog(DataModel):
             if value:
                 mapping[f'context.{key}'] = value
         return mapping
+
+class ETBase(DataModel):
+    model_config=ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
+    stat_exclude_fields: ClassVar[tuple[str, ...]] = ()
+
+class Extraction(ETBase):
+    id: UUID = Field(alias='_id', default=None)
+    state: StateCode|None = Field(default=None)
+    i: int|None = Field(alias='_i', default=None,)
+    values_hash_exclude_fields: ClassVar[tuple[str, ...]] = ('id', 'state', 'i')
+    stat_exclude_fields: ClassVar = ('scrape_time', 'NAICS Codes')
+
+class Translation(ETBase):
+    id: UUID = Field(alias='_id')
+    values_id: UUID
+    state: StateCode
+    company: CompanyName|None = None
+    reported: datetime|None = None
+    location: str|None = None
+    employees: int|None = None
+    starting: datetime|None = None
+    action: str|None = None
+    url: str|None = None
+    industry: str|None = None
+    scrape_time: datetime|None = None
+    report_id: str|None = None
+    naics: list[int]|None = None
+    artifacts: dict[str, str]|None = None
+    row: Extraction
+    stat_exclude_fields: ClassVar = ('row',)
+
+    tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
+
+    @field_serializer('scrape_time')
+    def utcreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+        if dt and not dt.tzinfo:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+# ----------------------------
+
+__all__ += [
+    'ExtractionFilter',
+    'PipelineLogFilter',
+    'TranslationFilter']
+
+class ExtractionFilter(FilterModel[Extraction]):
+    id: list[UUID]|None = None
+    state: list[StateCode]|None = None
+    result_model: ClassVar = Extraction
+    default_ordering: ClassVar = [('state', 1), ('_i', 1)]
+
+class TranslationFilter(FilterModel[Translation]):
+    id: list[UUID]|None = None
+    state: list[StateCode]|None = None
+    result_model: ClassVar = Translation
+    default_ordering: ClassVar = [('id', 1)]
+
+class PipelineLogFilter(FilterModel[PipelineLog]):
+    id: list[UUID]|None = None
+    stages: list[Stage]|None = None
+    states: list[StateCode]|None = None
+    start_min: datetime|None = None
+    start_max: datetime|None = None
+    end_min: datetime|None = None
+    end_max: datetime|None = None
+    elapsed_min: int|None = None
+    elapsed_max: int|None = None
+    errors_count_min: int|None = None
+    errors_count_max: int|None = None
+    result_model: ClassVar = PipelineLog
+    default_ordering: ClassVar = [('start', -1)]

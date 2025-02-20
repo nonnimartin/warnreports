@@ -5,16 +5,16 @@ import json
 from abc import abstractmethod
 from contextlib import asynccontextmanager
 from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar,
-                    Mapping)
+                    Mapping, override)
 from uuid import UUID, uuid5
 
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from .. import Stage, search, settings, utils
+from .. import Stage, settings, utils
 from ..models import *
 from ..utils import EitherIterable
 from .mongo import (AbstractMongoCollection, MongoClient, MongoCollection,
-                    MongoQueryFilter, Search, filters)
+                    Search, filters)
 
 __all__ = [
     'ExtractionBackend',
@@ -36,12 +36,14 @@ collections: dict[str, MongoCollection] = dict(
     extractions=MongoCollection(
         client=client,
         name='extractions',
+        data_model=Extraction,
         indexes=[
             {'state': 1},
             {'_i': 1}]),
     translations=MongoCollection(
         client=client,
         name='translations',
+        data_model=Translation,
         indexes=[
             {'id': 1},
             {'values_id': 1},
@@ -57,11 +59,11 @@ collections: dict[str, MongoCollection] = dict(
             {'end': -1},
             {'elapsed': -1}]))
 
-class ReaderMixin:
+class ReaderMixin[T]:
 
     @abstractmethod
     @asynccontextmanager
-    async def reader(self) -> AsyncGenerator[AsyncIterable[Doc]]: ...
+    async def reader(self) -> AsyncGenerator[AsyncIterable[T]]: ...
 
 class ContextMixin:
 
@@ -117,17 +119,17 @@ class StageBackend(ContextMixin):
         if hasattr(cls, 'engine') and hasattr(cls, 'stage'):
             cls.registry.setdefault(cls.engine, {})[cls.stage] = cls
 
-class ExtractionBackend(StageBackend, ReaderMixin):
+class ExtractionBackend(StageBackend, ReaderMixin[Extraction]):
     stage = Stage.Extract
 
     @abstractmethod
-    async def update(self, source: EitherIterable[Doc]) -> tuple[int, int, int]: ...
+    async def update(self, source: EitherIterable[Extraction|Doc]) -> tuple[int, int, int]: ...
 
-class TranslationBackend(StageBackend, ReaderMixin):
+class TranslationBackend(StageBackend, ReaderMixin[Translation]):
     stage = Stage.Translate
 
     @abstractmethod
-    async def update(self, source: EitherIterable[Doc]) -> tuple[int, int, int]: ...
+    async def update(self, source: EitherIterable[Translation|Doc]) -> tuple[int, int, int]: ...
 
 class SearchIndexBackend(StageBackend):
     stage = Stage.Index
@@ -139,31 +141,28 @@ class SearchIndexBackend(StageBackend):
 class MongoContextMixin(ContextMixin):
     engine = 'mongo'
     client: ClassVar[MongoClient]
-    _db = None
 
     async def db(self):
-        if self._db is None:
-            self._db = await self.client.get_database(self.context.get(self.client.dbname_key))
-            self.context[self.client.dbname_key] = self._db.name
-        return self._db
+        return await self.client.get_context_database(self.context)
 
 class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
     collection: ClassVar[MongoCollection]
-    _coll = None
     _indexes_created = False
 
     @property
-    def model(self) -> type[DM]|None:
+    def model(self) -> type[DM]:
         return self.collection.data_model
 
     @property
     def client(self) -> MongoClient:
         return self.collection.client
 
+    @property
+    def filter_class(self) -> type[FilterModel[DM]]:
+        return filters[self.model]
+
     async def get_collection(self):
-        if self._coll is None:
-            self._coll = (await self.db()).get_collection(self.collection.name)
-        return self._coll
+        return (await self.db()).get_collection(self.collection.name)
 
     async def create_indexes(self) -> None:
         if not self._indexes_created:
@@ -178,12 +177,10 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
         doc = log.as_doc()
         await self.create_indexes()
         coll = await self.get_collection()
-        res = await coll.replace_one({'_id': doc['_id']}, doc, True)
+        await coll.replace_one({'_id': doc['_id']}, doc, True)
 
     async def fetch(self, id):
-        filter: FilterModel[PipelineLog] = filters[self.model](q={'_id': id})
-        db = await self.db()
-        res = Search(filter, 1, dbname=db.name)
+        res = Search(self.filter_class(id=[id]), 1, context=self.context)
         if await res.count():
             return await anext(res.objs())
         raise ValueError(f'Not found {id=}')
@@ -194,9 +191,8 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
         raise ValueError(f'No entries found')
 
     async def findall(self, limit: Limit|None = None, offset: Offset = 0):
-        filter: FilterModel[PipelineLog] = filters[self.model]()
-        db = await self.db()
-        res = Search(filter, limit=limit, offset=offset, dbname=db.name)
+        filter = self.filter_class()
+        res = Search(filter, limit=limit, offset=offset, context=self.context)
         return res.objs()
 
     async def update(self, source):
@@ -212,103 +208,80 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
         res = await coll.delete_many(filt)
         return res.deleted_count
 
-class PipelineLogFilter(FilterModel[PipelineLog], MongoQueryFilter):
-    result_model: ClassVar = PipelineLog
-    collection: ClassVar = MongoPipelineLog.collection
-    default_ordering: ClassVar = [('start', -1)]
-
-class MongoETBase(StageBackend, MongoContextCollectionMixin):
+class MongoETBase[DM: (Extraction, Translation)](StageBackend, MongoContextCollectionMixin[DM]):
     'Common base class for MongoExraction & MongoTranslation'
-    ordering: ClassVar[list[str]] = []
-    clean_keys: ClassVar[list[str]] = []
-    stat_clean_keys: ClassVar[list[str]] = []
-    lookup_id_key: ClassVar[str]
-
-    async def clean(self) -> None:
-        filt = self.get_filter()
-        coll = await self.get_collection()
-        res = await coll.delete_many(filt)
-        logger.debug(f'{filt=} {res=}')
 
     @asynccontextmanager
     async def reader(self):
         coll = await self.get_collection()
-        it = coll.find(self.get_filter()).sort(self.ordering)
-        yield utils.amap(self.clean_doc, it)
+        ordering = self.filter_class.default_ordering
+        it = coll.find(self.get_select_filter()).sort(ordering)
+        yield utils.amap(self.model.model_validate, it)
 
     async def stat(self):
         async with self.reader() as reader:
-            it = utils.amap(self.clean_stat_doc, reader)
+            it = utils.amap(self.model.as_doc, reader)
+            it = utils.amap(self.clean_stat_doc, it)
             return await docs_stat(it)
 
-    def clean_doc(self, doc: Doc) -> Doc:
-        for key in self.clean_keys:
-            doc.pop(key, None)
-        return doc
-
-    def clean_stat_doc(self, doc: Doc) -> Doc:
-        for key in self.stat_clean_keys:
-            doc.pop(key, None)
-        return doc
-
-    def get_filter(self) -> Doc:
-        return dict(state=self.state)
-
-    @classmethod
-    async def doc_lookup(cls, id: str|UUID, context: Doc|None = None) -> tuple[StateCode, Doc]:
-        filt = {cls.lookup_id_key: UUID(str(id))}
-        self = cls('XX', context=context)
+    async def clean(self) -> None:
         coll = await self.get_collection()
-        doc = await coll.find_one(filt)
-        if not doc:
-            raise ValueError(f'doc {id=} not found')
-        self.state = doc['state']
-        return doc['state'], self.clean_doc(doc)
-
-class MongoExtraction(MongoETBase, ExtractionBackend):
-    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
-    collection = collections['extractions']
-    ordering = ['_i']
-    clean_keys = ['_id', '_i', 'state']
-    stat_clean_keys = ['scrape_time', 'NAICS Codes']
-    lookup_id_key = '_id'
+        await coll.delete_many(self.get_clean_filter())
 
     async def update(self, source):
-        await self.clean()
         await self.create_indexes()
         coll = await self.get_collection()
-        it = utils.aenumerate(source)
-        it = utils.amap(self._makedoc, it)
+        it = utils.amap(self.model.model_validate, source)
+        it = utils.amap(reversed, utils.aenumerate(it))
+        it = utils.astarmap(self.get_save_doc, it)
         return await update_collection(coll, it, self.get_replace_filter)
 
+    def get_save_doc(self, inst: DM, i: int) -> Doc:
+        return inst.as_doc(exclude_unset=True)
+
+    def get_select_filter(self) -> Doc:
+        return dict(state=self.state)
+
+    def get_clean_filter(self) -> Doc:
+        return self.get_select_filter()
+
     def get_replace_filter(self, doc: Doc) -> Doc:
-        return dict(_i=doc['_i'], state=self.state)
+        return {'_id': doc['_id']}
 
-    def _makedoc(self, item: tuple[int, Doc]) -> Doc:
-        i, doc = item
-        return dict(
-            state=self.state,
-            _i=i,
-            _id=self.state_seq_docid(self.state, i)) | doc
+    def clean_stat_doc(self, doc: Doc) -> Doc:
+        for field in self.model.stat_exclude_fields:
+            doc.pop(field, None)
+        return doc
 
-    @classmethod
-    def state_seq_docid(cls, state: StateCode, i: int) -> UUID:
-        return uuid5(cls.NS, f'{state}:seq:{int(i)}')
+class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
+    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
+    collection = collections['extractions']
 
-class MongoTranslation(MongoETBase, TranslationBackend):
-    collection = collections['translations']
-    ordering = ['id']
-    clean_keys = ['_id', 'row']
-    stat_clean_keys = ['row']
-    lookup_id_key = 'id'
-
+    @override
     async def update(self, source):
-        await self.create_indexes()
-        coll = await self.get_collection()
-        return await update_collection(coll, source, self.get_replace_filter)
+        await self.clean()
+        return await super().update(source)
 
-    def get_replace_filter(self, entry: Doc) -> Doc:
-        return {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
+    @override
+    def get_save_doc(self, inst, i) -> Doc:
+        inst.i = i
+        inst.state = self.state
+        inst.id = uuid5(self.NS, f'{inst.state}:seq:{int(i)}')
+        return super().get_save_doc(inst, i)
+
+
+class MongoTranslation(MongoETBase[Translation], TranslationBackend):
+    collection = collections['translations']
+
+    @override
+    def get_replace_filter(self, doc: Doc) -> Doc:
+        return {
+            '$or': [
+                super().get_replace_filter(doc),
+                {'values_id': doc['values_id']}]}
+
+from .. import search
+
 
 class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
     collections: ClassVar[Mapping[str, AbstractMongoCollection]] = search.mapped_collections

@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, ClassVar, Mapping
+from typing import Any, ClassVar, Mapping
 from uuid import UUID
 
 import yaml
 
-from .. import utils
-from ..backends import etl
+from .. import orm, utils
+from ..backends import etl, mongo
+from ..backends.mongo import Search, filters
+from ..models import *
+from ..pipeline import Pipeline
+from ..translators import translators
 from .base import AP, AppCommand, BaseCommand
 from .mongo import ClientControlCommand
-
-if TYPE_CHECKING:
-    from ..models import PipelineLog
 
 logger = utils.get_logger('etl')
 
@@ -34,9 +35,11 @@ class OneCommand(BaseCommand):
 
     class Base(EtlBaseCommand):
         label: ClassVar[str] = '?'
+        collection: ClassVar[mongo.MongoCollection]
 
         @classmethod
         def add_arguments(cls, parser: AP):
+            parser.add_argument('--save', '-s', action='store_true', help='Save the result')
             parser.add_argument('--yaml', action='store_true', help='Output yaml')
             parser.add_argument('id', type=UUID, help=f'The {cls.label} doc id')
             super().add_arguments(parser)
@@ -45,50 +48,53 @@ class OneCommand(BaseCommand):
             print(self.objtext(obj))
 
         def objtext(self, obj: Any) -> str:
-            obj = self.jsondoc(obj)
             if self.opts.yaml:
                 text = yaml.safe_dump(obj, sort_keys=False)
             else:
                 text = json.dumps(obj, indent=2)
             return text
 
-        @staticmethod
-        def jsondoc(obj: Any) -> Any:
-            return json.loads(json.dumps(obj, default=str))
+        def get_filter(self):
+            return filters[self.collection.data_model](id=[self.opts.id])
+
+        async def get_inst(self):
+            res = Search(self.get_filter(), limit=1, context=self.context)
+            if not await res.count():
+                raise ValueError(f'Doc not found: {self.opts.id}')
+            return await anext(res.objs())
 
     class Trone(Base):
         'Run translations for a single extraction doc, and print the result'
         label = 'extraction'
+        collection = etl.MongoExtraction.collection
 
         async def run(self):
-            from ..backends import etl
-            from ..translators import translators
-            state, doc = await etl.MongoExtraction.doc_lookup(
-                self.opts.id,
-                context=self.context)
-            it = translators[state]().entries(doc)
-            it = utils.as_aiter(it)
-            res = [x async for x in it]
-            self.printobj(res)
+            inst = await self.get_inst()
+            doc = inst.model_dump(mode='json')
+            it = translators[inst.state]().entries(doc)
+            it = (x.model_dump(mode='json', exclude_unset=True) for x in it)
+            docs = list(it)
+            self.printobj(docs)
+            if self.opts.save:
+                backend = etl.MongoTranslation(inst.state, context=self.context)
+                await backend.update(docs)
 
     class Ldone(Base):
         'Run load operations for a single translation doc, and print the result'
         label = 'translation'
+        collection = etl.MongoTranslation.collection
 
         async def run(self):
-            from .. import orm
-            from ..backends import etl
-            from ..pipeline import Pipeline
-            state, doc = await etl.MongoTranslation.doc_lookup(
-                self.opts.id,
-                context=self.context)
-            pipeline = Pipeline(state, context=self.context)
+            inst = await self.get_inst()
+            doc = inst.model_dump(mode='json', exclude=['_id'])
+            pipeline = Pipeline(inst.state, context=self.context)
             with orm.SessionLocal() as session:
                 pipeline.session = session
                 pipeline.artifact_cache = {}
                 report, save = pipeline.save(doc)
                 if report is not None:
-                    report, = orm.Report.map_reduce([(report, report, None, None)])
+                    row = (report, report, None, None)
+                    report, = orm.Report.map_reduce([row])
                     report = report.model_dump(mode='json')
                 session.rollback()
             self.printobj(dict(save=save, report=report))
@@ -100,6 +106,7 @@ class LogCommand(BaseCommand):
 
     class Show(EtlBaseCommand):
         'Show pipeline log'
+
         summary_methods: ClassVar[dict[str, str]] = {
             'short': 'get_short',
             'runs': 'get_runs',
@@ -137,7 +144,6 @@ class LogCommand(BaseCommand):
 
         def setup(self, opts):
             super().setup(opts)
-            from ..backends import etl
             self.summary: str|None = self.opts.summary
             self.output: str = self.opts.output
             if not self.summary and self.output == 'table':
@@ -186,7 +192,6 @@ class LogCommand(BaseCommand):
 
         def setup(self, opts):
             super().setup(opts)
-            from ..backends import etl
             self.src = etl.MongoPipelineLog(context=self.context)
             self.dst = etl.MongoPipelineLog(context={next(iter(self.context)): opts.dest})
 
@@ -214,7 +219,6 @@ class LogCommand(BaseCommand):
 
         def setup(self, opts):
             super().setup(opts)
-            from ..backends import etl
             self.backend = etl.MongoPipelineLog(context=self.context)
 
         async def run(self):

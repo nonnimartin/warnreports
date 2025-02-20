@@ -5,12 +5,11 @@ import functools
 import operator
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from threading import Thread
 from types import MappingProxyType as MapProxy
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
@@ -27,18 +26,6 @@ if TYPE_CHECKING:
 logger = utils.get_logger('pipeline')
 
 class Pipeline:
-    fields: ClassVar[tuple[str, ...]] = (
-        'id',
-        'company',
-        'location',
-        'reported',
-        'starting',
-        'employees',
-        'action',
-        'url',
-        'naics',
-        'industry',
-        'artifacts')
     required_fields: ClassVar[tuple[str, ...]] = (
         'company',
         'reported')
@@ -51,10 +38,6 @@ class Pipeline:
         'action',
         'url',
         'company_norm_id')
-    json_types: ClassVar[Mapping[str, Callable[[Any], Any]]] = MapProxy({
-        'id': uuid.UUID,
-        'reported': datetime.fromisoformat,
-        'starting': datetime.fromisoformat})
     BACKENDS: ClassVar[Mapping[Stage, type[StageBackend]]] = MapProxy(
         StageBackend.registry['mongo'])
 
@@ -182,7 +165,8 @@ class Pipeline:
         async with source.reader() as reader:
             with SessionLocal() as session:
                 self.translator.session = session
-                it = utils.amap(self.translator.entries, reader)
+                it = (x.model_dump(mode='json') async for x in reader)
+                it = utils.amap(self.translator.entries, it)
                 it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
             self.translator.session = None
@@ -200,8 +184,8 @@ class Pipeline:
                 self.session = session
                 if clean:
                     await self.clean(Stage.Load)
-                async for entry in reader:
-                    counts[self.save(entry)[1]] += 1
+                async for translation in reader:
+                    counts[self.save(translation)[1]] += 1
                 stat = session.get(StateStat, self.state)
                 stat = stat or StateStat(id=self.state)
                 stat.self_update(session)
@@ -238,11 +222,9 @@ class Pipeline:
             totals['nochange'] += count - created - updated
         return dict(nochange=nochange, counts=counts, totals=dict(totals))
 
-    def save(self, entry: dict) -> tuple[Report|None, SaveType]:
+    def save(self, translation: Translation) -> tuple[Report|None, SaveType]:
         save = SaveType.Nochange
-        record = {
-            field: self.from_json(field, entry[field])
-            for field in self.fields if field in entry}
+        record = translation.model_dump(exclude_unset=True)
         if not all(map(record.get, self.required_fields)):
             return None, save.Skip
         uid = record.pop('id')
@@ -387,14 +369,6 @@ class Pipeline:
                 trims[field] = len(value) - limit
                 record[field] = value[:limit]
         return trims
-
-    @classmethod
-    def from_json(cls, field: str, value: Any) -> Any:
-        if isinstance(value, str) and field in cls.json_types:
-            value = cls.json_types[field](value)
-        if isinstance(value, datetime) and not value.tzinfo:
-            value = value.replace(tzinfo=timezone.utc)
-        return value
    
 class PipelineRunner:
     GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({

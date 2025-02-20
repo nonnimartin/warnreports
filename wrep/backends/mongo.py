@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
-from datetime import timedelta, timezone
+from datetime import timedelta
 from typing import Any, AsyncIterator, ClassVar, Iterable
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
@@ -13,10 +13,8 @@ from pymongo.operations import IndexModel
 from .. import settings, utils
 from ..models import DataModel, FilterModel, Limit, Offset
 
-type FilterType[DM: DataModel] = MongoFilter|FilterModel[DM]
-type FiltersType[DM: DataModel] = dict[type[DM], type[FilterType[DM]]]
+filters: dict[type[DataModel], type[FilterModel[DataModel]]] = {}
 logger = utils.get_logger('backends.mongo')
-filters: FiltersType = {}
 
 @dataclasses.dataclass
 class MongoClient:
@@ -55,8 +53,13 @@ class MongoClient:
         db = db or await self.get_default_database_name()
         return self.client.get_database(db)
 
+    async def get_context_database(self, context: dict[str, Any]) -> AsyncIOMotorDatabase:
+        db = await self.get_database(context.get(self.dbname_key))
+        context[self.dbname_key] = db.name
+        return db
+
     async def get_default_database_name(self) -> str:
-        now = utils.now(tz=timezone.utc)
+        now = utils.utcnow()
         if self.dbname_cache['name'] and self.dbname_cache['expiry'] > now:
             return self.dbname_cache['name']
         doc = await self.get_doc()
@@ -82,7 +85,7 @@ class MongoClient:
 
     async def set_dbname(self, dbname: str, ttl: utils.Delta|None = None) -> dict[str, Any]:
         'Set the control dbname'
-        now = utils.now(tz=timezone.utc)
+        now = utils.utcnow()
         doc = dict(
             _id=self.doc_id,
             key=self.dbname_key,
@@ -109,7 +112,7 @@ class MongoClient:
     async def set_ttl(self, ttl: utils.Delta) -> dict[str, Any]:
         'Set the control TTL only'
         ttl = utils.deltaparse(ttl, default_unit='seconds')
-        now = utils.now(tz=timezone.utc)
+        now = utils.utcnow()
         doc = await self.get_doc()
         doc.update(
             ttl=f'{int(ttl.total_seconds())}s',
@@ -153,7 +156,7 @@ class AbstractMongoCollection(AbstractCollection):
 class MongoCollection(AbstractMongoCollection):
     client: MongoClient
     name: str
-    data_model: type[DataModel]|None = None
+    data_model: type[DataModel]
     indexes: list[IndexModel] = dataclasses.field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -184,10 +187,10 @@ class MongoQueryFilter(MongoFilter):
 
 @dataclasses.dataclass
 class Search[DM: DataModel]:
-    filter: FilterType[DM]
+    filter: FilterModel[DM]|MongoFilter
     limit: Limit|None = None
     offset: Offset = 0
-    dbname: str|None = None
+    context: dict[str, Any]|None = None
 
     @property
     def model(self) -> type[DM]:
@@ -206,18 +209,17 @@ class Search[DM: DataModel]:
         return self.filter.get_query()
 
     def __post_init__(self) -> None:
+        if self.context is None:
+            self.context = {}
         if self.limit == 0:
             self.orders = []
         else:
             self.orders = list(self.filter.get_ordering())
             if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
                 self.orders.append(('_id', 1))
-        self._db = None
 
     async def db(self) -> AsyncIOMotorDatabase:
-        if self._db is None:
-            self._db = await self.client.get_database(self.dbname)
-        return self._db
+        return await self.client.get_context_database(self.context)
 
     async def get_collection(self) -> AsyncIOMotorCollection:
         return (await self.db()).get_collection(self.collection.name)

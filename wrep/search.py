@@ -9,7 +9,7 @@ from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
 from .backends.mongo import (AbstractCollection, AbstractMongoCollection,
-                             MongoClient, MongoFilter,
+                             MongoClient, MongoFilter, MongoQueryFilter,
                              Search, filters)
 from .models import *
 
@@ -245,4 +245,39 @@ class MongoArtifactsFilter(ArtifactsFilter, DefaultMongoFilter):
             value = getattr(self, field)
             if value:
                 yield {field: value}
+        yield from super().get_filters()
+
+from .backends import etl
+
+class MongoExtractionFilter(ExtractionFilter, MongoQueryFilter):
+    collection: ClassVar = etl.collections['extractions']
+
+    def get_filters(self):
+        if self.id is not None:
+            yield {'_id': {'$in': self.id}}
+        if self.state is not None:
+            yield {'states': {'$in': self.state}}
+        yield from super().get_filters()
+
+class MongoTranslationFilter(TranslationFilter, MongoQueryFilter):
+    collection: ClassVar = etl.collections['translations']
+
+    def get_filters(self):
+        if self.id is not None:
+            yield {'id': {'$in': self.id}}
+        if self.state is not None:
+            yield {'states': {'$in': self.state}}
+        yield from super().get_filters()
+
+class MongoPipelineLogFilter(PipelineLogFilter, MongoQueryFilter):
+    collection: ClassVar = etl.collections['pipelinelogs']
+    minmax_fields: ClassVar = ('start', 'end', 'elapsed', 'errors_count')
+
+    def get_filters(self):
+        if self.id is not None:
+            yield {'_id': {'$in': self.id}}
+        if self.states is not None:
+            yield {'states': {'$in': self.states}}
+        if self.stages is not None:
+            yield {'stages': {'$in': self.stages}}
         yield from super().get_filters()

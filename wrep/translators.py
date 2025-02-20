@@ -1,4 +1,5 @@
 from __future__ import annotations
+from itertools import chain
 
 import inspect
 import json
@@ -13,7 +14,7 @@ from typing import Any, ClassVar, Iterable
 from pydantic import HttpUrl
 
 from . import orm, utils
-from .models import ValidationError
+from .models import ValidationError, Extraction, Translation
 from .orm import Report, ReportMod
 from .ref.tz import zoneinfos
 
@@ -54,10 +55,10 @@ class Translator:
     )
     session: orm.Session|None = None
 
-    def entries(self, row: Row) -> Iterable[Entry]:
+    def entries(self, row: Row) -> Iterable[Translation]:
         yield self.entry(row)
 
-    def entry(self, row: Row) -> Entry:
+    def entry(self, row: Row) -> Translation:
         'Translate a source row to an entry'
         entry = {}
         for header, fields in self.headermap.items():
@@ -72,7 +73,7 @@ class Translator:
                 if value is not None and value != '':
                     entry[field] = value
         self.finish(entry, row)
-        return entry
+        return Translation.model_validate(entry)
 
     def value(self, field: str, value: str, row: Row) -> Any:
         'Translate a field value'
@@ -232,10 +233,11 @@ class Translator:
         yield from filter(self.parse_date, value.split())
 
     def values_hash_uuid(self, row: Row) -> uuid.UUID:
-        if self.values_hash_exclude:
-            row = dict(row)
-            for header in self.values_hash_exclude:
-                row.pop(header, None)
+        row = dict(row)
+        for header in chain(
+            self.values_hash_exclude,
+            Extraction.values_hash_exclude_fields):
+            row.pop(header, None)
         return uuid.uuid5(self.namespace, json.dumps(list(row.values())))
 
     def __init_subclass__(cls) -> None:
