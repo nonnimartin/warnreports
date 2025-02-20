@@ -144,6 +144,175 @@ class CompanyDetail(DataModel):
 # ----------------------------
 
 __all__ += [
+    'Extraction',
+    'PipelineBatchOpts',
+    'PipelineLog',
+    'PipelineOpts',
+    'PipelineRunError',
+    'PipelineRunDetail',
+    'ScraperOpts',
+    'Translation']
+
+class Extraction(DataModel):
+    id: UUID = Field(alias='_id', default=None)
+    state: StateCode|None = Field(default=None)
+    i: int|None = Field(alias='_i', default=None,)
+    values_hash_exclude_fields: ClassVar[tuple[str, ...]] = ('id', 'state', 'i')
+    stat_exclude_fields: ClassVar = ('scrape_time', 'NAICS Codes')
+    model_config=ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
+
+class Translation(DataModel):
+    id: UUID = Field(alias='_id')
+    values_id: UUID
+    state: StateCode
+    company: CompanyName|None = None
+    reported: datetime|None = None
+    location: str|None = None
+    employees: int|None = None
+    starting: datetime|None = None
+    action: str|None = None
+    url: str|None = None
+    industry: str|None = None
+    scrape_time: datetime|None = None
+    report_id: str|None = None
+    naics: list[int]|None = None
+    artifacts: dict[str, str]|None = None
+    row: Extraction
+    stat_exclude_fields: ClassVar = ('row',)
+    stat_exclude_fields: ClassVar[tuple[str, ...]] = ()
+    model_config=ConfigDict(populate_by_name=True, from_attributes=True)
+
+    tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
+
+    @field_serializer('scrape_time')
+    def utcreplace(self, dt: datetime|None, _info=None) -> datetime|None:
+        if dt and not dt.tzinfo:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+class PipelineRunDetail(DataModel):
+    state: StateCode
+    stage: Stage
+    start: datetime|None = None
+    end: datetime|None = None
+    elapsed: float = 0
+    failed: bool = False
+    error: PipelineRunError|None = None
+    result: dict[str, Any]|None = None
+
+    @property
+    def ischange(self) -> bool:
+        return bool(self.result and not self.result.get('nochange'))
+
+class PipelineRunError(DataModel):
+    type: str
+    message: str
+    state: StateCode|None = None
+    stage: Stage|None = None
+
+    @classmethod
+    def fromexc(cls, exc: Exception, **kw) -> Self:
+        return cls(type=type(exc).__name__, message=str(exc), **kw)
+
+class PipelineBatchOpts(DataModel):
+    clean: bool = False
+    clean_only: bool = False
+    stat_only: bool = False
+    fail: bool = False
+    incremental: bool = False
+    concurrent: bool = False
+    max_workers: int = settings.ETL_DEFAULT_WORKERS
+    max_threads: int = settings.ETL_DEFAULT_THREADS
+
+    @model_validator(mode='after')
+    def check_flags(self) -> Self:
+        if self.clean_only and (self.clean or self.incremental or self.stat_only):
+            raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
+        if self.stat_only and (self.clean or self.incremental or self.clean_only):
+            raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
+        return self
+
+class ScraperOpts(DataModel):
+    selenium_max_procs: int = settings.SELENIUM_MAX_PROCS
+
+class PipelineOpts(ScraperOpts):
+    lazy: bool = True
+
+class PipelineLog(DataModel):
+    id: UUID = Field(alias='_id')
+    stages: list[Stage] = Field(default_factory=list)
+    states: list[StateCode] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    batch_opts: PipelineBatchOpts = Field(default_factory=PipelineBatchOpts)
+    pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
+    start: datetime|None = None
+    end: datetime|None = None
+    elapsed: float = 0
+    errors: list[PipelineRunError] = Field(default_factory=list)
+    runs: list[PipelineRunDetail] = Field(default_factory=list)
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    def sync(self) -> None:
+        if self.start:
+            until = self.end or utils.utcnow()
+            self.elapsed = (until - self.start).total_seconds()
+
+    def stageruns(self, stage: Stage):
+        for run in self.runs:
+            if stage == run.stage:
+                yield run
+        
+    def get_load_changes(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.stageruns(Stage.Load):
+            if not run.ischange:
+                continue
+            counts = run.result['counts']
+            body.append(dict(
+                state=run.state,
+                created=counts['create'],
+                updated=counts['update']))
+        body.sort(key=lambda x: x['state'])
+        return body
+
+    def get_scrape_stats(self) -> list[dict[str, Any]]:
+        body = []
+        for run in self.stageruns(Stage.Scrape):
+            elapsed = run.elapsed if run.end else None
+            body.append(dict(state=run.state, elapsed=elapsed))
+        body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
+        return body
+
+    def get_runs(self) -> list[dict[str, Any]]:
+        return [
+            dict(
+                stage=run.stage[0].upper(),
+                state=run.state,
+                elapsed=run.elapsed,
+                failed=run.failed,
+                nochange=run.result and run.result.get('nochange'))
+            for run in self.runs]
+
+    def get_short(self) -> dict[str, Any]:
+        mapping = dict(
+            id=str(self.id),
+            stages=''.join(s[0].upper() for s in self.stages),
+            states=len(self.states),
+            runs=len(self.runs),
+            elapsed=self.elapsed)
+        if self.errors:
+            mapping.update(errors=len(self.errors))
+        for key, value in self.batch_opts.model_dump().items():
+            if value is True:
+                mapping[key] = value
+        for key, value in self.context.items():
+            if value:
+                mapping[f'context.{key}'] = value
+        return mapping
+
+# ----------------------------
+
+__all__ += [
     'ArtifactsFilter',
     'CompaniesFilter',
     'FilterModel',
@@ -249,177 +418,6 @@ class ArtifactsFilter(FilterModel[ArtifactDetail]):
     result_model: ClassVar = ArtifactDetail
     order_fields: ClassVar = {'name'}
     default_ordering: ClassVar = [('name', 1)]
-
-# ----------------------------
-
-__all__ += [
-    'Extraction',
-    'PipelineBatchOpts',
-    'PipelineLog',
-    'PipelineOpts',
-    'PipelineRunError',
-    'PipelineRunDetail',
-    'ScraperOpts',
-    'Translation']
-
-class PipelineRunDetail(DataModel):
-    state: StateCode
-    stage: Stage
-    start: datetime|None = None
-    end: datetime|None = None
-    elapsed: float = 0
-    failed: bool = False
-    error: PipelineRunError|None = None
-    result: dict[str, Any]|None = None
-
-class PipelineRunError(DataModel):
-    type: str
-    message: str
-    state: StateCode|None = None
-    stage: Stage|None = None
-
-    @classmethod
-    def fromexc(cls, exc: Exception, **kw) -> Self:
-        return cls(type=type(exc).__name__, message=str(exc), **kw)
-
-class PipelineBatchOpts(DataModel):
-    clean: bool = False
-    clean_only: bool = False
-    stat_only: bool = False
-    fail: bool = False
-    incremental: bool = False
-    concurrent: bool = False
-    max_workers: int = settings.ETL_DEFAULT_WORKERS
-    max_threads: int = settings.ETL_DEFAULT_THREADS
-
-    @model_validator(mode='after')
-    def check_flags(self) -> Self:
-        if self.clean_only and (self.clean or self.incremental or self.stat_only):
-            raise ValueError(f'Cannot specify clean_only with clean, incremental, or stat_only')
-        if self.stat_only and (self.clean or self.incremental or self.clean_only):
-            raise ValueError(f'Cannot specify stat_only with clean, incremental, or clean_only')
-        return self
-
-class ScraperOpts(DataModel):
-    selenium_max_procs: int = settings.SELENIUM_MAX_PROCS
-
-class PipelineOpts(ScraperOpts):
-    lazy: bool = True
-
-class PipelineLog(DataModel):
-    id: UUID = Field(alias='_id')
-    stages: list[Stage] = Field(default_factory=list)
-    states: list[StateCode] = Field(default_factory=list)
-    context: dict[str, Any] = Field(default_factory=dict)
-    batch_opts: PipelineBatchOpts = Field(default_factory=PipelineBatchOpts)
-    pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
-    start: datetime|None = None
-    end: datetime|None = None
-    elapsed: float = 0
-    errors: list[PipelineRunError] = Field(default_factory=list)
-    runs: list[PipelineRunDetail] = Field(default_factory=list)
-    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
-
-    def sync(self) -> None:
-        if self.start:
-            until = self.end or utils.utcnow()
-            self.elapsed = (until - self.start).total_seconds()
-
-    def get_load_changes(self) -> list[dict[str, Any]]:
-        body = []
-        for run in self.runs:
-            if run.stage is not run.stage.Load:
-                continue
-            if not run.result or run.result['nochange']:
-                continue
-            counts = run.result['counts']
-            body.append(dict(
-                state=run.state,
-                created=counts['create'],
-                updated=counts['update']))
-        body.sort(key=lambda x: x['state'])
-        return body
-
-    def get_scrape_stats(self) -> list[dict[str, Any]]:
-        body = []
-        for run in self.runs:
-            if run.stage is not run.stage.Scrape:
-                continue
-            if run.end:
-                elapsed = run.elapsed
-            else:
-                elapsed = None
-            body.append(dict(
-                state=run.state,
-                elapsed=elapsed))
-        body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
-        return body
-
-    def get_runs(self) -> list[dict[str, Any]]:
-        body = []
-        for run in self.runs:
-            body.append(dict(
-                stage=run.stage[0].upper(),
-                state=run.state,
-                elapsed=run.elapsed,
-                failed=run.failed,
-                nochange=run.result and run.result.get('nochange')))
-        return body
-
-    def get_short(self) -> dict[str, Any]:
-        mapping = dict(
-            id=str(self.id),
-            stages=''.join(s[0].upper() for s in self.stages),
-            states=len(self.states),
-            runs=len(self.runs),
-            elapsed=self.elapsed)
-        if self.errors:
-            mapping.update(errors=len(self.errors))
-        for key, value in self.batch_opts.model_dump().items():
-            if value is True:
-                mapping[key] = value
-        for key, value in self.context.items():
-            if value:
-                mapping[f'context.{key}'] = value
-        return mapping
-
-class ETBase(DataModel):
-    model_config=ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
-    stat_exclude_fields: ClassVar[tuple[str, ...]] = ()
-
-class Extraction(ETBase):
-    id: UUID = Field(alias='_id', default=None)
-    state: StateCode|None = Field(default=None)
-    i: int|None = Field(alias='_i', default=None,)
-    values_hash_exclude_fields: ClassVar[tuple[str, ...]] = ('id', 'state', 'i')
-    stat_exclude_fields: ClassVar = ('scrape_time', 'NAICS Codes')
-
-class Translation(ETBase):
-    id: UUID = Field(alias='_id')
-    values_id: UUID
-    state: StateCode
-    company: CompanyName|None = None
-    reported: datetime|None = None
-    location: str|None = None
-    employees: int|None = None
-    starting: datetime|None = None
-    action: str|None = None
-    url: str|None = None
-    industry: str|None = None
-    scrape_time: datetime|None = None
-    report_id: str|None = None
-    naics: list[int]|None = None
-    artifacts: dict[str, str]|None = None
-    row: Extraction
-    stat_exclude_fields: ClassVar = ('row',)
-
-    tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
-
-    @field_serializer('scrape_time')
-    def utcreplace(self, dt: datetime|None, _info=None) -> datetime|None:
-        if dt and not dt.tzinfo:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
 
 # ----------------------------
 
