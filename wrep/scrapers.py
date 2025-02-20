@@ -103,7 +103,6 @@ class Scraper:
         return rep
 
     async def request(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
-        print(f'{url=}')
         if self.request_delay and self.metrics['request_count']:
             await asyncio.sleep(self.request_delay)
         url = self.absurl(url)
