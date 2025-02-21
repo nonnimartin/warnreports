@@ -237,7 +237,7 @@ class MongoETBase[DM: (Extraction, Translation)](StageBackend, MongoContextColle
         return await update_collection(coll, it, self.get_replace_filter)
 
     def get_save_doc(self, inst: DM, i: int) -> Doc:
-        return inst.as_doc(exclude_unset=True, exclude_none=True)
+        return inst.model_dump(by_alias=True, exclude_unset=True, exclude_none=True)
 
     def get_select_filter(self) -> Doc:
         return dict(state=self.state)

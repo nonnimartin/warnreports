@@ -17,7 +17,7 @@ from pydantic import HttpUrl
 
 from . import orm, utils
 from .models import Extraction, Translation, ValidationError
-from .orm import Report, ReportMod
+from .orm import ReportMod
 from .ref.dt import MONTHNAME_REWRITES
 from .ref.tz import zoneinfos
 
@@ -63,7 +63,7 @@ class Translator:
     session: orm.Session|None = None
 
     def translate(self, data: Data) -> Iterable[Translation]:
-        inst = Translation(state=self.state, row=data)
+        inst = Translation(state=self.state, extraction=data)
         info = TranslateInfo(MapProxy(data))
         self.prepare(inst, info)
         self.populate(inst, info)
@@ -93,17 +93,17 @@ class Translator:
             args.append(info)
         self.finish(*args)
         inst.url = inst.url or self.default_url
-        base = inst.row.model_dump(
-            include=set(inst.row.model_extra),
+        base = inst.extraction.model_dump(
+            include=set(inst.extraction.model_extra),
             exclude=self.values_hash_exclude)
         sourcestr = json.dumps(list(base.values()))
-        inst.values_id = uuid.uuid5(self.namespace, sourcestr)
+        inst.values_id = uuid.uuid5(inst.ns, sourcestr)
         if inst.report_id:
             self._extend_report_id(inst)
-            inst.id = uuid.uuid5(self.namespace, inst.report_id)
+            inst.id = uuid.uuid5(inst.ns, inst.report_id)
         else:
             inst.id = inst.values_id
-        self._fill_mod(inst)
+        self._fill_mod(inst, info)
 
     if TYPE_CHECKING:
         @overload
@@ -188,9 +188,6 @@ class Translator:
             artifacts[path] = url
         return artifacts
 
-    def value_scrape_time(self, value: str, info: TranslateInfo) -> datetime|None:
-        return utils.parse_date(value)
-
     def sanitize(self, value: str) -> str:
         return value.translate(ASCII_TRANS).strip()
 
@@ -211,19 +208,19 @@ class Translator:
                 parts.append(PAT_NONALPHANUM.sub('', value).upper())
         inst.report_id = '_'.join(parts)
 
-    def _fill_mod(self, inst: Translation) -> None:
-        if not inst.scrape_time:
+    def _fill_mod(self, inst: Translation, info: TranslateInfo) -> None:
+        if not (scrape_time := utils.parse_date(info.data.get('scrape_time'))):
             return
         stmt = orm.select(ReportMod).where(ReportMod.id == inst.id)
         with orm.ensure_session(self.session) as session:
             repmod = session.scalar(stmt)
             if not repmod:
-                repmod = ReportMod(id=inst.id, ns=self.namespace)
-                if not repmod.first_scraped or inst.scrape_time < repmod.first_scraped:
-                    repmod.first_scraped = inst.scrape_time
+                repmod = ReportMod(id=inst.id, ns=inst.ns)
+            if not repmod.first_scraped or scrape_time < repmod.first_scraped:
+                repmod.first_scraped = scrape_time
                     session.add(repmod)
                     session.commit()
-        inst.scrape_time = None
+        inst.first_scraped = repmod.first_scraped
         if inst.reported and repmod.first_scraped < inst.reported:
             inst.reported = repmod.first_scraped.replace(tzinfo=self.tz)
             offset = inst.reported.utcoffset()
@@ -276,7 +273,6 @@ class Translator:
         if len(state := cls.__name__.upper()) == 2:
             cls.state = state
             cls.tz = zoneinfos[state]
-            cls.namespace = uuid.uuid5(Report.NS, state)
             translators[state] = cls
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
@@ -442,12 +438,13 @@ class CT(Translator):
             (_r(r'^Yes.*'), 'Closing'),
         ]
     )
+    urlfmt = '{}/warn{}.htm'
 
     def finish(self, inst: Translation):
         if not inst.url and inst.reported:
             year = inst.reported.year
             if year >= 2015:
-                inst.url = f'{self.base_url}/warn{year}.htm'
+                inst.url = self.urlfmt.format(self.base_url, year)
 
 class DC(Translator):
     base_url = 'https://does.dc.gov'
@@ -513,7 +510,13 @@ class DE(Translator):
 
 class FL(Translator):
     base_url = 'https://reactwarn.floridajobs.org'
-    default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
+    default_url = (
+        'https://floridajobs.org'
+        '/office-directory'
+        '/division-of-workforce-services'
+        '/workforce-programs'
+        '/reemployment-and-emergency-assistance-coordination-team-react'
+        '/warn-notices')
     headermap = {
         'Company Name': 'company',
         'State Notification Date': 'reported',
@@ -533,6 +536,7 @@ class FL(Translator):
     )
     values_hash_exclude = ['download', 'artifacts_json']
 
+    urlfmt = '{}/WarnList/{}?year={}'
     def finish(self, inst: Translation, info: TranslateInfo):
         if inst.company and not inst.location:
             if (text := info.data.get('Company Name')) and '\n' in text:
@@ -546,7 +550,7 @@ class FL(Translator):
         if inst.reported and not inst.url:
             if (year := inst.reported.year) > 2017:
                 action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
-                inst.url = f'{self.base_url}/WarnList/{action}?year={year}' 
+                inst.url = self.urlfmt.format(self.base_url, action, year)
 
 class GA(Translator):
     default_url = 'https://www.tcsg.edu/warn-public-view/'
@@ -953,7 +957,7 @@ class NJ(Translator):
         'City': 'location',
         'Effective Date': 'starting',
         'Workforce Affected': 'employees',
-        'scrape_time': 'scrape_time',
+        # 'scrape_time': 'scrape_time',
     }
     values_hash_exclude = ['scrape_time']
     rewrites = dict(
@@ -964,17 +968,18 @@ class NJ(Translator):
 
     def finish(self, inst: Translation, info: TranslateInfo):
         month = info.data.get('Month Posted')
-        if month:
+        if not month:
+            return
             year = int(info.data['worksheet_name'][:4])
             datestr = f'{month} 1, {year}'
-            reported = self.parse_date(datestr)
-            if reported:
+        inst.reported = self.parse_date(datestr)
+        if inst.reported:
                 for days in reversed(range(28, 31)):
-                    dt = reported + timedelta(days=days)
-                    if dt.month == reported.month:
-                        reported = dt
+                dt = inst.reported + timedelta(days=days)
+                if dt.month == inst.reported.month:
+                    inst.reported = dt
                         break
-            if inst.starting and inst.starting < reported:
+        if inst.starting and (not inst.reported or inst.starting < inst.reported):
                 inst.reported = inst.starting
 
 class NM(Translator):
@@ -1122,7 +1127,7 @@ class PA(Translator):
     headermap = {
         'company': 'company',
         'location': 'location',
-        'scrape_time': 'scrape_time',
+        # 'scrape_time': 'scrape_time',
         'EFFECTIVE DATE': 'starting',
         'EFFECTIVE DATES': 'starting',
         '# AFFECTED': 'employees',
@@ -1325,7 +1330,7 @@ class UT(Translator):
         'Date of Notice': ['reported', 'starting'],
         'Location': 'location',
         'Affected Workers': 'employees',
-        'scrape_time': 'scrape_time',
+        # 'scrape_time': 'scrape_time',
     }
     values_hash_exclude = ['scrape_time']
     rewrites = dict(

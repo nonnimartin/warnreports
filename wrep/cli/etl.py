@@ -71,7 +71,8 @@ class OneCommand(BaseCommand):
 
         async def run(self):
             inst: Extraction = await self.get_inst()
-            objs = list(translators[inst.state]().translate(inst.model_extra))
+            data = inst.model_dump(exclude_unset=True, exclude_none=True)
+            objs = list(translators[inst.state]().translate(data))
             docs = [
                 x.model_dump(mode='json', exclude_unset=True, exclude_none=True)
                 for x in objs]
@@ -88,10 +89,10 @@ class OneCommand(BaseCommand):
             filter = filters[Translation](id=[self.opts.id])
             res = Search(filter, limit=1, context=self.context)
             try:
-                translation = await anext(res.objs())
+                translation: Translation = await anext(res.objs())
             except StopAsyncIteration:
                 raise ValueError(f'Doc not found: {self.opts.id}')
-            self.opts.id = translation.row.id
+            self.opts.id = translation.extraction.id
             return await super().get_inst()
 
     class Ldone(Base):

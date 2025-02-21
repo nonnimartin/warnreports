@@ -3,8 +3,9 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import datetime, timezone
+from functools import cached_property
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
-from uuid import UUID
+from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
@@ -91,6 +92,7 @@ class ReportData(DataModel):
         description='Associated NAICS details')
     artifacts: list[ArtifactData] = Field(default_factory=list)
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'Report')
 
     @field_serializer('reported', 'starting')
     def tzreplace(self, dt: datetime|None) -> datetime|None:
@@ -183,11 +185,11 @@ class Translation(DataModel):
     action: str|None = None
     url: UrlType|None = None
     industry: str|None = None
-    scrape_time: datetime|None = None
+    first_scraped: datetime|None = None
     report_id: str|None = None
     naics: list[NaicsId]|None = None
     artifacts: dict[str, UrlType]|None = None
-    row: Extraction = None
+    extraction: Extraction = None
     stat_exclude_fields: ClassVar = ('row',)
     model_config = ConfigDict(
         populate_by_name=True,
@@ -197,12 +199,16 @@ class Translation(DataModel):
 
     tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
 
-    @field_serializer('scrape_time')
+    @field_serializer('first_scraped')
     def utcreplace(self, dt: datetime|None) -> datetime|None:
         if dt and not dt.tzinfo:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
 
+    @cached_property
+    def ns(self):
+        return uuid5(ReportData.NS, self.state)
+    
 class PipelineRunDetail(DataModel):
     state: StateCode
     stage: Stage

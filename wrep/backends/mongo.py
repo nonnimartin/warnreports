@@ -14,7 +14,8 @@ from pymongo.operations import IndexModel
 from .. import settings, utils
 from ..models import DataModel, FilterModel, Limit, Offset, Fi
 
-filters: dict[type[DataModel], type[FilterModel[DataModel]]] = {}
+type Filts[DM] = dict[type[DM: DataModel], type[FilterModel[DM: DataModel]]]
+filters: Filts = {}
 logger = utils.get_logger('backends.mongo')
 
 @dataclasses.dataclass

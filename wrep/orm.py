@@ -137,7 +137,7 @@ ArtifactReport = Table(
 nowopts = dict(server_default=func.now(), default=utils.now)
 
 class Report(MapReduceBase[ReportData, ReportRowType]):
-    NS: ClassVar[uuid.UUID] = uuid.uuid5(settings.NAMESPACE, 'Report')
+    NS: ClassVar[uuid.UUID] = ReportData.NS
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm_id: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
