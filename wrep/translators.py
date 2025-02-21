@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import json
 import re
@@ -8,13 +9,16 @@ from datetime import datetime, timedelta, timezone
 from html import unescape as html_unescape
 from pathlib import Path
 from re import compile as _r
-from typing import Any, ClassVar, Iterable
+from types import MappingProxyType as MapProxy
+from typing import (TYPE_CHECKING, Any, ClassVar, Iterable, Mapping, Self,
+                    overload)
 
 from pydantic import HttpUrl
 
 from . import orm, utils
 from .models import Extraction, Translation, ValidationError
 from .orm import Report, ReportMod
+from .ref.dt import MONTHNAME_REWRITES
 from .ref.tz import zoneinfos
 
 PAT_NONALPHANUM = _r(r'[^a-z0-9]+', re.I)
@@ -33,10 +37,15 @@ ASCII_TRANS = {
     0x201c: '"',
     0x201d: '"',
 }
+
 logger = utils.get_logger('translators')
 translators: dict[str, type[Translator]] = {}
-type Entry = dict[str, Any]
-type Row = dict[str, str]
+type Data = dict[str, str]
+
+@dataclasses.dataclass
+class TranslateInfo:
+    data: Mapping[str, str|None]
+    memo: dict = dataclasses.field(default_factory=dict)
 
 class Translator:
     tz: ClassVar = timezone.utc
@@ -50,75 +59,105 @@ class Translator:
             (_r(r'\d{1,2}/\d{1,2}/\d{2,4}'), ''), # remove dates M/D/Y
             (_r(r'\d{1,2}/\d{2,4}'), ''), # remove dates M/Y
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
-        ]
-    )
+        ])
     session: orm.Session|None = None
 
-    def entries(self, row: Row) -> Iterable[Translation]:
-        yield self.entry(row)
+    def translate(self, data: Data) -> Iterable[Translation]:
+        inst = Translation(state=self.state, row=data)
+        info = TranslateInfo(MapProxy(data))
+        self.prepare(inst, info)
+        self.populate(inst, info)
+        self.finalize(inst, info)
+        yield Translation.model_validate(inst)
 
-    def entry(self, row: Row) -> Translation:
-        'Translate a source row to an entry'
-        entry = dict(state=self.state)
+    def prepare(self, inst: Translation, info: TranslateInfo) -> None:
+        pass
+
+    def populate(self, inst: Translation, info: TranslateInfo) -> None:
         for header, fields in self.headermap.items():
-            if header not in row or row[header] is None:
+            if info.data.get(header) is None:
                 continue
             if isinstance(fields, str):
                 fields = [fields]
             for field in fields:
-                if field in entry:
+                if getattr(inst, field) is not None:
                     continue
-                value = self.value(field, row[header], row)
+                value = self.value(field, info.data[header], inst, info)
                 if value is not None and value != '':
-                    entry[field] = value
-        tran = Translation(**entry, row=row)
-        self.finish(tran)
-        return Translation.model_validate(tran)
+                    setattr(inst, field, value)
 
-    def value(self, field: str, value: str, row: Row) -> Any:
+    def finalize(self, inst: Translation, info: TranslateInfo) -> None:
+        args = [inst]
+        np = len(inspect.signature(self.finish).parameters)
+        if np > 1:
+            args.append(info)
+        self.finish(*args)
+        inst.url = inst.url or self.default_url
+        base = inst.row.model_dump(
+            include=set(inst.row.model_extra),
+            exclude=self.values_hash_exclude)
+        sourcestr = json.dumps(list(base.values()))
+        inst.values_id = uuid.uuid5(self.namespace, sourcestr)
+        if inst.report_id:
+            self._extend_report_id(inst)
+            inst.id = uuid.uuid5(self.namespace, inst.report_id)
+        else:
+            inst.id = inst.values_id
+        self._fill_mod(inst)
+
+    if TYPE_CHECKING:
+        @overload
+        def finish(self: Self, inst: Translation) -> None: ...
+        @overload
+        def finish(self: Self, inst: Translation, info: TranslateInfo) -> None: ...
+    else:
+        def finish(self, inst: Translation, info: TranslateInfo) -> None:
+            pass
+
+    def value(self, field: str, value: str, inst: Translation, info: TranslateInfo) -> Any:
         'Translate a field value'
         value = self.sanitize(value)
         value = self.rewrite(field, value)
         method = f'value_{field}'
         if (func := getattr(self, method, None)):
-            args = (value,)
-            if len(inspect.signature(func).parameters) > 1:
-                args += (row,)
+            args = [value]
+            np = len(inspect.signature(func).parameters)
+            if np > 1:
+                args.append(info)
             value = func(*args)
         return value
 
-    def value_reported(self, value: str) -> datetime|None:
+    def value_reported(self, value: str, info: TranslateInfo) -> datetime|None:
         return max(self.parse_dates(value), default=None)
 
-    def value_starting(self, value: str) -> datetime|None:
+    def value_starting(self, value: str, info: TranslateInfo) -> datetime|None:
         return min(self.parse_dates(value), default=None)
 
-    def value_employees(self, value: str) -> int|None:
+    def value_employees(self, value: str, info: TranslateInfo) -> int|None:
         num = utils.parse_int(value)
         if num is not None:
             return num
         it = map(utils.parse_int, PAT_NONDIGITS.split(value))
         return max(filter(None, it), default=None)
 
-    def value_company(self, value: str) -> str:
+    def value_company(self, value: str, info: TranslateInfo) -> str:
         value = ' '.join(value.split())
         value = value.strip()
         return value
 
-    def value_action(self, value: str) -> str:
+    def value_action(self, value: str, info: TranslateInfo) -> str:
         return value
 
-    def value_location(self, value: str) -> str:
+    def value_location(self, value: str, info: TranslateInfo) -> str:
         return value
 
-    def value_url(self, value: str) -> str|None:
+    def value_url(self, value: str, info: TranslateInfo) -> HttpUrl|None:
         try:
-            HttpUrl(value)
+            return HttpUrl(value)
         except ValidationError:
-            value = None
-        return value
+            pass
 
-    def value_naics(self, value: str) -> list[int]:
+    def value_naics(self, value: str, info: TranslateInfo) -> list[int]:
         values = set()
         for value in PAT_NAICSSPLIT.split(value):
             if value in ('31-33', '44-45', '48-49'):
@@ -130,7 +169,7 @@ class Translator:
                 values.add(value)
         return sorted(values)
 
-    def value_artifacts(self, value: str) -> dict[str, str]:
+    def value_artifacts(self, value: str, info: TranslateInfo) -> dict[str, str]:
         try:
             data = dict(json.loads(value))
         except json.JSONDecodeError:
@@ -149,7 +188,7 @@ class Translator:
             artifacts[path] = url
         return artifacts
 
-    def value_scrape_time(self, value: str) -> datetime|None:
+    def value_scrape_time(self, value: str, info: TranslateInfo) -> datetime|None:
         return utils.parse_date(value)
 
     def sanitize(self, value: str) -> str:
@@ -160,57 +199,41 @@ class Translator:
             value = utils.rewrite_all(value, self.rewrites[field])
         return value
 
-    def finish(self, tran: Translation) -> None:
-        tran.url = tran.url or self.default_url
-        base = tran.row.model_dump(
-            include=set(tran.row.model_extra),
-            exclude=self.values_hash_exclude)
-        sourcestr = json.dumps(list(base.values()))
-        tran.values_id = uuid.uuid5(self.namespace, sourcestr)
-        # old = self.values_hash_uuid(tran.row.model_extra)
-        logger.info(f'finish: {list(base.values())} base: {base}')
-        if tran.report_id:
-            self._extend_report_id(tran)
-            tran.id = uuid.uuid5(self.namespace, tran.report_id)
-        else:
-            tran.id = tran.values_id
-        self._fill_mod(tran)
-
-    def _extend_report_id(self, tran: Translation) -> None:
-        parts = [tran.report_id]
+    def _extend_report_id(self, inst: Translation) -> None:
+        parts = [inst.report_id]
         for field in self.report_id_extra:
-            value = getattr(tran, field)
+            value = getattr(inst, field)
             if isinstance(value, datetime):
                 parts.append(value.strftime(f'%Y-%m-%d'))
             elif isinstance(value, int):
                 parts.append(str(value))
             elif isinstance(value, str):
                 parts.append(PAT_NONALPHANUM.sub('', value).upper())
-        tran.report_id = '_'.join(parts)
+        inst.report_id = '_'.join(parts)
 
-    def _fill_mod(self, tran: Translation) -> None:
-        if not tran.scrape_time:
+    def _fill_mod(self, inst: Translation) -> None:
+        if not inst.scrape_time:
             return
-        stmt = orm.select(ReportMod).where(ReportMod.id == tran.id)
+        stmt = orm.select(ReportMod).where(ReportMod.id == inst.id)
         with orm.ensure_session(self.session) as session:
             repmod = session.scalar(stmt)
             if not repmod:
-                repmod = ReportMod(id=tran.id, ns=self.namespace)
-                if not repmod.first_scraped or tran.scrape_time < repmod.first_scraped:
-                    repmod.first_scraped = tran.scrape_time
+                repmod = ReportMod(id=inst.id, ns=self.namespace)
+                if not repmod.first_scraped or inst.scrape_time < repmod.first_scraped:
+                    repmod.first_scraped = inst.scrape_time
                     session.add(repmod)
                     session.commit()
-        tran.scrape_time = None
-        if tran.reported and repmod.first_scraped < tran.reported:
-            tran.reported = repmod.first_scraped.replace(tzinfo=self.tz)
-            offset = tran.reported.utcoffset()
+        inst.scrape_time = None
+        if inst.reported and repmod.first_scraped < inst.reported:
+            inst.reported = repmod.first_scraped.replace(tzinfo=self.tz)
+            offset = inst.reported.utcoffset()
             if offset:
-                tran.reported += offset
-            tran.reported = tran.reported.replace(
-                    hour=0,
-                    minute=0,
-                    second=0,
-                    microsecond=0)
+                inst.reported += offset
+            inst.reported = inst.reported.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0)
 
     def parse_date(self, value: str) -> datetime|None:
         dt = utils.parse_date(value)
@@ -230,8 +253,19 @@ class Translator:
         if self.parse_date(value):
             yield value
             return
-        value = PAT_DATESTRCLEAN.sub(' ', value).strip(' /-')
-        yield from filter(self.parse_date, value.split())
+        # For cases like TN:
+        #   June 12, 2023 - August 11, 2023
+        v2 = utils.rewrite_all(value, MONTHNAME_REWRITES)
+        if v2 != value:
+            # Only try this strategy if we matched a month name
+            if len(parts := value.split(' - ')) > 1:
+                it = list(filter(self.parse_date, parts))
+                if it:
+                    yield from it
+        else:
+            # Fallback strategy
+            value = PAT_DATESTRCLEAN.sub(' ', value).strip(' /-')
+            yield from filter(self.parse_date, value.split())
 
     def __init_subclass__(cls) -> None:
         cls.rewrites = Translator.rewrites | cls.rewrites
@@ -252,20 +286,6 @@ REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')
 REWRITE_DOUBLE_SLASH = (_r('//'), '/')
 
 REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
-
-class ReportedYearToUrl(Translator):
-
-    def is_valid_url_year(self, year: int) -> bool:
-        return True
-
-    def get_reported_year_url(self, year: int) -> str|None:
-        pass
-
-    def finish(self, tran: Translation) -> None:
-        if not tran.url:
-            if tran.reported and self.is_valid_url_year(tran.reported.year):
-                tran.url = self.get_reported_year_url(tran.reported.year)
-        super().finish(tran)
 
 class AK(Translator):
     default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
@@ -384,7 +404,7 @@ class CO(Translator):
         ]
     )
 
-class CT(ReportedYearToUrl):
+class CT(Translator):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
     default_url = f'{base_url}/warnreports.htm'
     headermap = {
@@ -396,9 +416,7 @@ class CT(ReportedYearToUrl):
         'layoff_date': 'starting',
         'artifacts_json': 'artifacts',
     }
-
     values_hash_exclude = ['download', 'artifacts_json']
-
     rewrites = dict(
         company=[
             (_r(r'\*'), ''),
@@ -425,13 +443,13 @@ class CT(ReportedYearToUrl):
         ]
     )
 
-    def get_reported_year_url(self, year: int) -> str | None:
-        return f'{self.base_url}/warn{year}.htm'
+    def finish(self, inst: Translation):
+        if not inst.url and inst.reported:
+            year = inst.reported.year
+            if year >= 2015:
+                inst.url = f'{self.base_url}/warn{year}.htm'
 
-    def is_valid_url_year(self, year: int) -> bool:
-        return year >= 2015
-
-class DC(ReportedYearToUrl):
+class DC(Translator):
     base_url = 'https://does.dc.gov'
     default_url = f'{base_url}/page/rapid-response'
     headermap = {
@@ -462,12 +480,13 @@ class DC(ReportedYearToUrl):
             ('2', 'Permanent Closure'),
         ],
     )
+    urlfmt = '{}/page/industry-closings-and-layoffs-warn-notifications-{}'
 
-    def get_reported_year_url(self, year: int) -> str:
-        return f'{self.base_url}/page/industry-closings-and-layoffs-warn-notifications-{year}'
-
-    def is_valid_url_year(self, year: int) -> bool:
-        return year >= 2012 and year != 2014
+    def finish(self, inst: Translation):
+        if not inst.url and inst.reported:
+            year = inst.reported.year
+            if year >= 2012 and year != 2014:
+                inst.url = self.urlfmt.format(self.base_url, year)
 
 class DE(Translator):
     base_url = 'https://joblink.delaware.gov'
@@ -492,7 +511,7 @@ class DE(Translator):
         ]
     )
 
-class FL(ReportedYearToUrl):
+class FL(Translator):
     base_url = 'https://reactwarn.floridajobs.org'
     default_url = 'https://floridajobs.org/office-directory/division-of-workforce-services/workforce-programs/reemployment-and-emergency-assistance-coordination-team-react/warn-notices'
     headermap = {
@@ -514,25 +533,20 @@ class FL(ReportedYearToUrl):
     )
     values_hash_exclude = ['download', 'artifacts_json']
 
-    def finish(self, tran):
-        if tran.company and not tran.location:
-            row = tran.row.model_extra
-            if (text := row.get('Company Name')) and '\n' in text:
+    def finish(self, inst: Translation, info: TranslateInfo):
+        if inst.company and not inst.location:
+            if (text := info.data.get('Company Name')) and '\n' in text:
                 if '\n\n' in text:
                     addrtext = text.rsplit('\n\n', 1)[-1]
                 else:
                     addrtext = text.split('\n', 1)[-1]
                 addrtext = ' '.join(addrtext.split())
                 if addrtext:
-                    tran.location = addrtext
-        super().finish(tran)
-
-    def get_reported_year_url(self, year: int) -> str:
-        action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
-        return f'{self.base_url}/WarnList/{action}?year={year}'
-
-    def is_valid_url_year(self, year: int) -> bool:
-        return year >= 2017
+                    inst.location = addrtext
+        if inst.reported and not inst.url:
+            if (year := inst.reported.year) > 2017:
+                action = 'viewPreviousYearsPDF' if year <= 2018 else 'Records'
+                inst.url = f'{self.base_url}/WarnList/{action}?year={year}' 
 
 class GA(Translator):
     default_url = 'https://www.tcsg.edu/warn-public-view/'
@@ -563,7 +577,7 @@ class GA(Translator):
     report_id_extra = ['company']
     values_hash_exclude = ['artifacts_json']
 
-    def finish(self, tran) -> None:
+    def finish(self, inst: Translation, info: TranslateInfo):
         """
         Best effort to populated reported date:
 
@@ -576,13 +590,12 @@ class GA(Translator):
         
         3. If reported and starting are more than five years apart, discard.
         """
-        if not tran.row.model_extra.get('submitted_date'):
-            it = (tran.reported, tran.starting)
-            tran.reported = min(filter(None, it), default=None)
-        if tran.reported and tran.starting:
-            if abs(tran.reported.year - tran.starting.year) > 5:
-                tran.reported = None
-        super().finish(tran)
+        if not info.data.get('submitted_date'):
+            it = (inst.reported, inst.starting)
+            inst.reported = min(filter(None, it), default=None)
+        if inst.reported and inst.starting:
+            if abs(inst.reported.year - inst.starting.year) > 5:
+                inst.reported = None
 
 class HI(Translator):
     # TODO: starting
@@ -638,10 +651,9 @@ class IA(Translator):
         ],
     )
 
-    def finish(self, tran):
-        row = tran.row.model_extra
+    def finish(self, inst: Translation, info: TranslateInfo):
         addrkeys = ('Address Line 1', 'City', 'St', 'ZIP')
-        addrvals = list(map(row.get, addrkeys))
+        addrvals = list(map(info.data.get, addrkeys))
         if all(addrvals):
             addrvals = list(map(self.sanitize, addrvals))
             if all(addrvals):
@@ -649,8 +661,7 @@ class IA(Translator):
                 location = ' '.join(location.split())
                 location = self.rewrite('location', location)
                 if location:
-                    tran.location = location
-        super().finish(tran)
+                    inst.location = location
 
 class ID(Translator):
     default_url = 'https://www.labor.idaho.gov/warnnotice/'
@@ -887,7 +898,6 @@ class ME(Translator):
 
 class MI(Translator):
     default_url = 'https://milmi.org/warn/'
-
     headermap = {
         'Company Name': 'company',
         'City': 'location',
@@ -952,11 +962,10 @@ class NJ(Translator):
         ],
     )
 
-    def finish(self, tran) -> None:
-        row = tran.row.model_extra
-        month: str|None = row.get('Month Posted')
+    def finish(self, inst: Translation, info: TranslateInfo):
+        month = info.data.get('Month Posted')
         if month:
-            year = int(row['worksheet_name'][:4])
+            year = int(info.data['worksheet_name'][:4])
             datestr = f'{month} 1, {year}'
             reported = self.parse_date(datestr)
             if reported:
@@ -965,9 +974,8 @@ class NJ(Translator):
                     if dt.month == reported.month:
                         reported = dt
                         break
-            if tran.starting and tran.starting < reported:
-                tran.reported = tran.starting
-        super().finish(tran)
+            if inst.starting and inst.starting < reported:
+                inst.reported = inst.starting
 
 class NM(Translator):
     default_url = 'https://www.dws.state.nm.us/Portals/0/DM/Business/2024_WARN.pdf'
@@ -1136,25 +1144,21 @@ class PA(Translator):
         starting=[
             repl_ol,
             repl_phase,
+            (_r(r'-', re.MULTILINE), '/'),
         ]
     )
 
-    def value_location(self, value):
-        return ', '.join(filter(None, super().value_location(value).splitlines()))
+    def finish(self, inst: Translation):
+        if inst.location:
+            inst.location = ', '.join(filter(None, inst.location.splitlines()))
 
-    def value_starting(self, value: str, row: Row):
-        year = int(row['reported_month'].split()[1])
+    def value_starting(self, value: str, info: TranslateInfo):
+        year = int(info.data['reported_month'].split()[1])
         it = self.parseable_date_strings(value)
-        it = (self._fill_date_string(x, year) for x in it)
-        return super().value_starting(' '.join(it))
+        it = (f'{x}/{year}' if x.count('/') == 1 else x for x in it)
+        return min(map(self.parse_date, it), default=None)
 
-    def _fill_date_string(self, value: str, year: int) -> str:
-        value = value.replace('-', '/')
-        if value.count('/') == 1:
-            value += f'/{year}'
-        return value
-
-    def value_reported(self, value):
+    def value_reported(self, value: str):
         month, year = value.split()
         reported = self.parse_date(f'{month} 1, {year}')
         if reported:
@@ -1225,11 +1229,11 @@ class SC(Translator):
     )
     values_hash_exclude = ['url']
 
-    def value_artifacts(self, value):
+    def value_artifacts(self, value: str):
         year = int(value.split('/')[-1][:4])
         return {f'{year}.pdf': value}
 
-    def finish(self, tran) -> None:
+    def finish(self, inst: Translation, info: TranslateInfo):
         """
         Best effort to populated reported date:
 
@@ -1238,10 +1242,10 @@ class SC(Translator):
         2. For historical reports, use Dec. 31 of the year. However, if the
         starting date is earlier, use that.
         """
-        if not tran.row.model_extra.get('Notice Date'):
-            it = (tran.reported, tran.starting)
-            tran.reported = min(filter(None, it), default=None)
-        super().finish(tran)
+        if not info.data.get('Notice Date'):
+            it = (inst.reported, inst.starting)
+            inst.reported = min(filter(None, it), default=None)
+
 
 class SD(Translator):
     default_url = 'https://dlr.sd.gov/workforce_services/businesses/warn_notices.aspx'
@@ -1250,7 +1254,6 @@ class SD(Translator):
         'Location' : 'location',
         'Date Received' : 'reported',
         'Employees Affected' : 'employees',
-
     }
 
 class TN(Translator):
@@ -1309,11 +1312,11 @@ class TX(Translator):
         ],
     )
 
-    def finish(self, tran) -> None:
-        if tran.reported and tran.starting:
-            if tran.starting.year == 2027 and tran.reported.year == 2017:
-                tran.starting = tran.starting.replace(year=tran.reported.year)
-        super().finish(tran)
+    def finish(self, inst: Translation):
+        if inst.reported and inst.starting:
+            if inst.starting.year == 2027 and inst.reported.year == 2017:
+                inst.starting = inst.starting.replace(year=inst.reported.year)
+
 
 class UT(Translator):
     default_url = 'https://jobs.utah.gov/employer/business/warnnotices.html'
@@ -1361,12 +1364,6 @@ class VA(Translator):
             (_r(r' $'), ''),
         ]
     )
-
-    # def finish(self, entry: Entry, row: Row) -> None:
-    #     entry['action'] = '/'.join(
-    #         v for v in self.action_headers
-    #         if row.get(v) == 'Yes')
-    #     super().finish(entry, row)
 
 class VT(Translator):
     default_url = 'https://www.vermontjoblink.com/search/warn_lookups/new'

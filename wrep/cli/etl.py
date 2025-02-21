@@ -71,7 +71,7 @@ class OneCommand(BaseCommand):
 
         async def run(self):
             inst: Extraction = await self.get_inst()
-            objs = list(translators[inst.state]().entries(inst.model_extra))
+            objs = list(translators[inst.state]().translate(inst.model_extra))
             docs = [
                 x.model_dump(mode='json', exclude_unset=True, exclude_none=True)
                 for x in objs]

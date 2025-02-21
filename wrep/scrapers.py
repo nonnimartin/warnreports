@@ -11,6 +11,7 @@ from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime
 from html import unescape as _u
+from importlib import import_module
 from itertools import chain, filterfalse
 from pathlib import Path
 from re import compile as _r
@@ -23,24 +24,22 @@ from requests.exceptions import HTTPError
 from starlette.datastructures import URL
 from typing_extensions import Buffer
 
-import warn.utils
-
 from . import Stage, settings, utils
 from .backends import webdrivers
 from .backends.files import ArtifactStore, FileCache, clean_filename
-from .models import ScraperOpts
+from .models import ScraperOpts, StateCode
 from .tools import dom, pdfs, xlsx
 from .tools.dom import Soup, bs
 
 scrapers: dict[str, type[Scraper]] = {}
 
 class Scraper:
-    state: str
-    base_url: str|None = None
-    user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
-    request_delay = 0
-    ssl_verify = True
-    retry = dict(total=3, backoff_factor=2)
+    state: ClassVar[StateCode]
+    base_url: ClassVar[str|None] = None
+    user_agent: ClassVar[str] = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
+    request_delay: ClassVar[int] = 0
+    ssl_verify: ClassVar[bool] = True
+    retry: ClassVar[dict] = dict(total=3, backoff_factor=2)
 
     def __init__(self, *, opts: ScraperOpts|dict|None = None):
         self.opts = ScraperOpts.model_validate(opts or {})
@@ -1571,7 +1570,7 @@ class SC(Scraper):
     def read_records(self) -> Iterator[dict[str, str]]:
         for year, url in self.load_index():
             headers = self.get_header_species(year) + self.extra_headers
-            extra = [str(year), url]
+            extra = [str(year), self.absurl(url)]
             it = self.read_table(self.cache/f'{year}.pdf')
             next(it)
             for row in it:
@@ -1780,17 +1779,18 @@ class VA(Scraper):
     async def scrape(self):
         await self.download(self.runner.file, self.csv_url)
 
-class Runner(warn.Runner):
+class Runner:
 
     def __init__(self, state: str):
         self.state = state.upper()
-        cache_dir = settings.BUILD_DIR/Stage.Scrape
-        data_dir = cache_dir/self.state.lower()
-        self.file = data_dir/f'{self.state.lower()}.csv'
-        super().__init__(data_dir, cache_dir)
+        self.logger = utils.get_logger(f'scrapers.{self.state}')
+        self.cache_dir = settings.BUILD_DIR/Stage.Scrape
+        self.data_dir = self.cache_dir/self.state.lower()
+        self.file = self.data_dir/f'{self.state.lower()}.csv'
 
     def scrape(self) -> None:
-        super().scrape(self.state.lower())
+        mod = import_module(f"warn.scrapers.{self.state.lower()}")
+        mod.scrape(self.data_dir, self.cache_dir)
 
 def absurl(base_url: str|None, url: str) -> None:
     if base_url and not any(map(url.startswith, ('http://', 'https://'))):
@@ -1824,6 +1824,6 @@ def hashstat(it: Iterable[Path|str|Buffer|dom.PageElement]) -> dict[str, str|int
 scrapers.update({
     state: type(state, (Scraper,), {})
     for state in (
-    x.stem.upper() for x in
-    (settings.REPODIR/'warn/scrapers').glob('??.py'))
+        x.stem.upper() for x in
+        (settings.REPODIR/'warn/scrapers').glob('??.py'))
     if state not in scrapers})

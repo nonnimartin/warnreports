@@ -7,10 +7,11 @@ from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from annotated_types import Le
+from annotated_types import Gt, Le, Lt
 from pydantic import BaseModel as DataModel
-from pydantic import (ConfigDict, Field, NonNegativeInt, StringConstraints,
-                      field_serializer, model_validator)
+from pydantic import (ConfigDict, Field, HttpUrl, NonNegativeInt,
+                      PlainSerializer, StringConstraints, field_serializer,
+                      model_validator)
 from pydantic_core import ValidationError as ValidationError
 
 from . import Stage, settings, utils
@@ -34,10 +35,18 @@ __all__ = [
     'StateDetail',
     'ValidationError']
 
-Limit = Annotated[NonNegativeInt, Le(1000)]
+Limit = Annotated[NonNegativeInt, Le(1_000)]
 Offset: TypeAlias = NonNegativeInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
 StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
+UrlType = Annotated[HttpUrl, PlainSerializer(str, return_type=str)]
+NaicsId = Annotated[NonNegativeInt, Gt(10), Lt(100_000)]
+NaicsRootId = Annotated[NonNegativeInt, Gt(10), Lt(100)]
+
+@dataclasses.dataclass
+class Fi:
+    oper: str
+    alias: str|None = None
 
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
     return dt and dt.replace(hour=0, tzinfo=tzinfo)
@@ -68,13 +77,13 @@ class ReportData(DataModel):
     starting: datetime|None = Field(
         default=None,
         description='The effective start date')
-    employees: int|None = Field(
+    employees: NonNegativeInt|None = Field(
         default=None,
         description='The projected number of employees to be affected')
     action: str|None = Field(
         default=None,
         description='The action (layoff, closure, etc.)')
-    url: str = Field(
+    url: UrlType = Field(
         title='URL',
         description='Source link to the report or state agency')
     naics: list[NaicsData] = Field(
@@ -89,35 +98,35 @@ class ReportData(DataModel):
 
 class ArtifactData(DataModel):
     id: UUID = Field(alias='_id')
-    url: str
+    url: UrlType
     name: str
-    size: int
+    size: NonNegativeInt
     media_type: str
     sha1: str
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 class ArtifactDetail(ArtifactData):
     path: str
-    reports_count: int = 0
+    reports_count: NonNegativeInt = 0
     created: datetime
     modified: datetime
 
 class NaicsData(DataModel):
-    id: int = Field(description='The 2 to 6 digit NAICS code')
+    id: NaicsId = Field(description='The 2 to 6 digit NAICS code')
     code: str = Field(description='The code string')
     title: str = Field(description='The NAICS industry title')
-    parent: int|None = Field(description='The parent NAICS code, if any')
+    parent: NaicsId|None = Field(description='The parent NAICS code, if any')
     depth: int = Field(description='The tree depth')
-    root: int = Field(description='The root NAICS code')
+    root: NaicsRootId = Field(description='The root NAICS code')
     is_leaf: bool = Field(description='Whether this is a leaf node', default=False)
     model_config = ConfigDict(from_attributes=True)
 
 class NaicsDetail(NaicsData):
     states: list[StateCode] = Field(default_factory=list)
-    reports_count: int = 0
-    companies_count: int = 0
-    employees_sum: int = 0
-    states_count: int = 0
+    reports_count: NonNegativeInt = 0
+    companies_count: NonNegativeInt = 0
+    employees_sum: NonNegativeInt = 0
+    states_count: NonNegativeInt = 0
     last_reported: datetime|None = None
     last_report_state: StateCode|None = None
     last_report_id: UUID|None = None
@@ -125,7 +134,7 @@ class NaicsDetail(NaicsData):
 class StateDetail(DataModel):
     id: StateCode
     last_reported: datetime|None = None
-    reports_count: int = 0
+    reports_count: NonNegativeInt = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 class CompanyDetail(DataModel):
@@ -134,12 +143,12 @@ class CompanyDetail(DataModel):
     aliases: list[CompanyName] = Field(default_factory=list)
     states: list[StateCode] = Field(default_factory=list)
     naics: list[NaicsData] = Field(default_factory=list)
-    reports_count: int = 0
+    reports_count: NonNegativeInt = 0
     last_reported: datetime|None = None
     last_report_state: StateCode|None = None
     last_report_id: UUID|None = None
-    employees_sum: int = 0
-    states_count: int = 0
+    employees_sum: NonNegativeInt = 0
+    states_count: NonNegativeInt = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 # ----------------------------
@@ -157,10 +166,10 @@ __all__ += [
 class Extraction(DataModel):
     id: UUID = Field(alias='_id', default=None)
     state: StateCode|None = Field(default=None)
-    i: int|None = Field(alias='_i', default=None,)
+    i: NonNegativeInt|None = Field(alias='_i', default=None,)
     values_hash_exclude_fields: ClassVar[tuple[str, ...]] = ('id', 'state', 'i')
     stat_exclude_fields: ClassVar = ('scrape_time', 'NAICS Codes')
-    model_config=ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
+    model_config = ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
 
 class Translation(DataModel):
     id: UUID = Field(None, alias='_id')
@@ -169,18 +178,18 @@ class Translation(DataModel):
     company: CompanyName|None = None
     reported: datetime|None = None
     location: str|None = None
-    employees: int|None = None
+    employees: NonNegativeInt|None = None
     starting: datetime|None = None
     action: str|None = None
-    url: str|None = None
+    url: UrlType|None = None
     industry: str|None = None
     scrape_time: datetime|None = None
     report_id: str|None = None
-    naics: list[int]|None = None
-    artifacts: dict[str, str]|None = None
+    naics: list[NaicsId]|None = None
+    artifacts: dict[str, UrlType]|None = None
     row: Extraction = None
     stat_exclude_fields: ClassVar = ('row',)
-    model_config=ConfigDict(
+    model_config = ConfigDict(
         populate_by_name=True,
         from_attributes=True,
         validate_assignment=True,
@@ -225,8 +234,8 @@ class PipelineBatchOpts(DataModel):
     fail: bool = False
     incremental: bool = False
     concurrent: bool = False
-    max_workers: int = settings.ETL_DEFAULT_WORKERS
-    max_threads: int = settings.ETL_DEFAULT_THREADS
+    max_workers: NonNegativeInt = settings.ETL_DEFAULT_WORKERS
+    max_threads: NonNegativeInt = settings.ETL_DEFAULT_THREADS
 
     @model_validator(mode='after')
     def check_flags(self) -> Self:
@@ -237,7 +246,7 @@ class PipelineBatchOpts(DataModel):
         return self
 
 class ScraperOpts(DataModel):
-    selenium_max_procs: int = settings.SELENIUM_MAX_PROCS
+    selenium_max_procs: NonNegativeInt = settings.SELENIUM_MAX_PROCS
 
 class PipelineOpts(ScraperOpts):
     lazy: bool = True
@@ -347,10 +356,6 @@ class FilterModel[DM: DataModel](DataModel):
             if allowed is None or field in allowed:
                 yield field, dir_
 
-@dataclasses.dataclass
-class Fi:
-    oper: str
-    alias: str|None = None
 
 class ReportsFilter(FilterModel[ReportData]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
@@ -361,21 +366,21 @@ class ReportsFilter(FilterModel[ReportData]):
     state: Annotated[list[StateCode]|None, Fi('$in')] = None
     location: Annotated[str|None, Fi('$contains')] = None
     action: Annotated[str|None, Fi('$contains')] = None
-    naics: Annotated[list[int]|None, Fi('$naics')] = None
+    naics: Annotated[list[NaicsId]|None, Fi('$naics')] = None
     reported_min: Annotated[datetime|None, Fi('$gte', 'reported')] = None
     reported_max: Annotated[datetime|None, Fi('$lte', 'reported')] = None
     starting_min: Annotated[datetime|None, Fi('$gte', 'starting')] = None
     starting_max: Annotated[datetime|None, Fi('$lte', 'starting')] = None
-    employees_min: Annotated[int|None, Fi('$gte', 'employees')] = None
-    employees_max: Annotated[int|None, Fi('$lte', 'employees')] = None
+    employees_min: Annotated[NonNegativeInt|None, Fi('$gte', 'employees')] = None
+    employees_max: Annotated[NonNegativeInt|None, Fi('$lte', 'employees')] = None
     order_fields: ClassVar = {
         'reported', 'company', 'state', 'employees', 'starting', 'action'}
     default_ordering: ClassVar = [('reported', -1), ('company', 1), ('state', 1)]
     result_model: ClassVar = ReportData
 
 class NaicsStatesFilterMixin:
-    reports_count_min: Annotated[int|None, Fi('$gte', 'reports_count')] = None
-    reports_count_max: Annotated[int|None, Fi('$lte', 'reports_count')] = None
+    reports_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'reports_count')] = None
+    reports_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'reports_count')] = None
     last_reported_min: Annotated[datetime|None, Fi('$gte', 'last_reported')] = None
     last_reported_max: Annotated[datetime|None, Fi('$lte', 'last_reported')] = None
 
@@ -387,33 +392,33 @@ class StatesFilter(FilterModel[StateDetail], NaicsStatesFilterMixin):
 
 class NaicsCompaniesFilterMixin(NaicsStatesFilterMixin):
     state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
-    states_count_min: Annotated[int|None, Fi('$gte', 'states_count')] = None
-    states_count_max: Annotated[int|None, Fi('$lte', 'states_count')] = None
-    employees_sum_min: Annotated[int|None, Fi('$gte', 'employees_sum')] = None
-    employees_sum_max: Annotated[int|None, Fi('$lte', 'employees_sum')] = None
+    states_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'states_count')] = None
+    states_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'states_count')] = None
+    employees_sum_min: Annotated[NonNegativeInt|None, Fi('$gte', 'employees_sum')] = None
+    employees_sum_max: Annotated[NonNegativeInt|None, Fi('$lte', 'employees_sum')] = None
 
 class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
     text: Annotated[str|None, Fi('$search')] = None
     name: Annotated[list[CompanyName]|None, Fi('$in', 'aliases')] = None
-    naics: Annotated[list[int]|None, Fi('$naics')] = None
+    naics: Annotated[list[NaicsId]|None, Fi('$naics')] = None
     order_fields: ClassVar = {
         'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
     default_ordering: ClassVar = [('name', 1)]
     result_model: ClassVar = CompanyDetail
 
 class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
-    id: Annotated[list[int]|None, Fi('$in')] = None
-    prefix: Annotated[list[int]|None, Fi('$naics', '')] = None
+    id: Annotated[list[NaicsId]|None, Fi('$in')] = None
+    prefix: Annotated[list[NaicsId]|None, Fi('$naics', '')] = None
     title: Annotated[str|None, Fi('$contains')] = None
-    root: Annotated[list[int]|None, Fi('$in')] = None
-    parent: Annotated[list[int]|None, Fi('$in')] = None
+    root: Annotated[list[NaicsRootId]|None, Fi('$in')] = None
+    parent: Annotated[list[NaicsId]|None, Fi('$in')] = None
     is_leaf: Annotated[bool|None, Fi('$eq')] = None
-    includes: list[int]|None = None
-    depth_min: Annotated[int|None, Fi('$gte', 'depth')] = None
-    depth_max: Annotated[int|None, Fi('$lte', 'depth')] = None
-    companies_count_min: Annotated[int|None, Fi('$gte', 'companies_count')] = None
-    companies_count_max: Annotated[int|None, Fi('$lte', 'companies_count')] = None
+    includes: list[NaicsId]|None = None
+    depth_min: Annotated[NonNegativeInt|None, Fi('$gte', 'depth')] = None
+    depth_max: Annotated[NonNegativeInt|None, Fi('$lte', 'depth')] = None
+    companies_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'companies_count')] = None
+    companies_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'companies_count')] = None
     order_fields: ClassVar = (
         {'id', 'code', 'title', 'root', 'depth', 'companies_count'} |
         {'reports_count', 'states_count', 'last_reported', 'employees_sum'})
@@ -456,7 +461,7 @@ class PipelineLogFilter(FilterModel[PipelineLog]):
     start_max: Annotated[datetime|None, Fi('$lte', 'start')] = None
     end_min: Annotated[datetime|None, Fi('$gte', 'end')] = None
     end_max: Annotated[datetime|None, Fi('$lte', 'end')] = None
-    elapsed_min: Annotated[int|None, Fi('$gte', 'elapsed')] = None
-    elapsed_max: Annotated[int|None, Fi('$lte', 'elapsed')] = None
+    elapsed_min: Annotated[NonNegativeInt|None, Fi('$gte', 'elapsed')] = None
+    elapsed_max: Annotated[NonNegativeInt|None, Fi('$lte', 'elapsed')] = None
     default_ordering: ClassVar = [('start', -1)]
     result_model: ClassVar = PipelineLog

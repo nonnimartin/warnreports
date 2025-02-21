@@ -166,7 +166,7 @@ class Pipeline:
             with SessionLocal() as session:
                 self.translator.session = session
                 it = (x.model_dump(mode='json') async for x in reader)
-                it = utils.amap(self.translator.entries, it)
+                it = utils.amap(self.translator.translate, it)
                 it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
             self.translator.session = None
@@ -257,6 +257,8 @@ class Pipeline:
                 self.session.add(report)
             elif company_save is not save.Nochange:
                 save = save.Update
+        if save is not save.Nochange:
+            logger.debug(f'{save=} {report.id}')
         return report, save
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
