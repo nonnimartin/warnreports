@@ -47,6 +47,53 @@ class TranslateInfo:
     data: Mapping[str, str|None]
     memo: dict = dataclasses.field(default_factory=dict)
 
+
+class TranslationFactory:
+    session: orm.Session|None = None
+
+    def translate(self, data: Data) -> Iterable[Translation]:
+        inst = Translation(state=self.state, extraction=data)
+        info = TranslateInfo(MapProxy(data))
+        self.prepare(inst, info)
+        self.populate(inst, info)
+        self.finalize(inst, info)
+        yield Translation.model_validate(inst)
+
+    def prepare(self, inst: Translation, info: TranslateInfo) -> None:
+        pass
+
+    def populate(self, inst: Translation, info: TranslateInfo) -> None:
+        for header, fields in self.headermap.items():
+            if info.data.get(header) is None:
+                continue
+            if isinstance(fields, str):
+                fields = [fields]
+            for field in fields:
+                if getattr(inst, field) is not None:
+                    continue
+                value = self.value(field, info.data[header], inst, info)
+                if value is not None and value != '':
+                    setattr(inst, field, value)
+
+    def finalize(self, inst: Translation, info: TranslateInfo) -> None:
+        args = [inst]
+        np = len(inspect.signature(self.finish).parameters)
+        if np > 1:
+            args.append(info)
+        self.finish(*args)
+        inst.url = inst.url or self.default_url
+        base = inst.extraction.model_dump(
+            include=set(inst.extraction.model_extra),
+            exclude=self.values_hash_exclude)
+        sourcestr = json.dumps(list(base.values()))
+        inst.values_id = uuid.uuid5(self.namespace, sourcestr)
+        if inst.report_id:
+            self._extend_report_id(inst)
+            inst.id = uuid.uuid5(self.namespace, inst.report_id)
+        else:
+            inst.id = inst.values_id
+        self._fill_mod(inst)
+
 class Translator:
     tz: ClassVar = timezone.utc
     headermap: ClassVar[dict[str, str|list[str]]] = {}
@@ -218,8 +265,8 @@ class Translator:
                 repmod = ReportMod(id=inst.id, ns=inst.ns)
             if not repmod.first_scraped or scrape_time < repmod.first_scraped:
                 repmod.first_scraped = scrape_time
-                    session.add(repmod)
-                    session.commit()
+                session.add(repmod)
+                session.commit()
         inst.first_scraped = repmod.first_scraped
         if inst.reported and repmod.first_scraped < inst.reported:
             inst.reported = repmod.first_scraped.replace(tzinfo=self.tz)
@@ -970,17 +1017,17 @@ class NJ(Translator):
         month = info.data.get('Month Posted')
         if not month:
             return
-            year = int(info.data['worksheet_name'][:4])
-            datestr = f'{month} 1, {year}'
+        year = int(info.data['worksheet_name'][:4])
+        datestr = f'{month} 1, {year}'
         inst.reported = self.parse_date(datestr)
         if inst.reported:
-                for days in reversed(range(28, 31)):
+            for days in reversed(range(28, 31)):
                 dt = inst.reported + timedelta(days=days)
                 if dt.month == inst.reported.month:
                     inst.reported = dt
-                        break
+                    break
         if inst.starting and (not inst.reported or inst.starting < inst.reported):
-                inst.reported = inst.starting
+            inst.reported = inst.starting
 
 class NM(Translator):
     default_url = 'https://www.dws.state.nm.us/Portals/0/DM/Business/2024_WARN.pdf'
