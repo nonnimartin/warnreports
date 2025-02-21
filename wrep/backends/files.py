@@ -43,6 +43,7 @@ class FileCache:
             return infile.read()
 
     def write(self, key: str, content: str) -> None:
+        self.mkpdir(key)
         with open(self/key, 'w', newline='') as file:
             file.write(content)
 
@@ -65,9 +66,8 @@ class FileCache:
         return self.topath(key).open(*args, **kw)
 
     def write_json(self, key: str, obj: Any, **kw) -> None:
-        file = self.topath(key)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        with file.open('w') as file:
+        self.mkpdir(key)
+        with self.open(key, 'w') as file:
             json.dump(obj, file, **kw)
 
     def read_json(self, key: str, **kw) -> Any:
@@ -83,6 +83,9 @@ class FileCache:
 
     def mkdir(self, key: str|None = None) -> None:
         self.topath(key or '.').mkdir(parents=True, exist_ok=True)
+
+    def mkpdir(self, key: str) -> None:
+        (self/key).parent.mkdir(parents=True, exist_ok=True)
 
     def subcache(self, key: str) -> Self:
         return type(self)(self/key)

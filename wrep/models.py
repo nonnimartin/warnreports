@@ -40,7 +40,7 @@ Offset: TypeAlias = NonNegativeInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
 StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
 UrlType = Annotated[HttpUrl, PlainSerializer(str, return_type=str)]
-NaicsId = Annotated[NonNegativeInt, Gt(10), Lt(100_000)]
+NaicsId = Annotated[NonNegativeInt, Gt(10), Lt(1_000_000)]
 NaicsRootId = Annotated[NonNegativeInt, Gt(10), Lt(100)]
 
 @dataclasses.dataclass
