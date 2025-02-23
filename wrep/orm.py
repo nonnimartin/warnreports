@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import csv
-import glob
 import hashlib
 import io
-import json
 import shutil
 import uuid
 from collections import defaultdict
@@ -13,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Iterable, Iterator
 
-import yaml
 from sqlalchemy import (UUID, BigInteger, Column, DateTime, ForeignKey,
                         Integer, Select, String, Table, create_engine)
 from sqlalchemy import delete as delete
@@ -22,19 +19,19 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, aliased
 from sqlalchemy.orm import joinedload as joinedload
 from sqlalchemy.orm import (mapped_column, relationship, selectinload,
                             sessionmaker)
-from sqlalchemy.orm.exc import NoResultFound as NoResultFound
+from sqlalchemy.orm.exc import NoResultFound
 from sqlalchemy.sql import func
 from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 
 from . import settings, utils
-from .models import (ArtifactData, ArtifactDetail, CompanyDetail, DataModel,
-                     NaicsData, NaicsDetail, ReportData, StateDetail)
+from .models import *
 from .ref import normls
 
 __all__ = [
     'Artifact',
     'Company',
     'Naics',
+    'NoResultFound',
     'Report',
     'ReportMod',
     'SessionLocal',
@@ -136,10 +133,10 @@ ArtifactReport = Table(
     Column('artifact_id', ForeignKey('artifact.id', ondelete='CASCADE'), primary_key=True),
     Column('report_id', ForeignKey('report.id', ondelete='CASCADE'), primary_key=True))
 
-nowopts = dict(server_default=func.now(), default=utils.now)
+nowopts = dict(server_default=func.now(), default=utils.utcnow)
 
 class Report(MapReduceBase[ReportData, ReportRowType]):
-    NS: ClassVar[uuid.UUID] = uuid.uuid5(settings.NAMESPACE, 'Report')
+    NS: ClassVar[uuid.UUID] = ReportData.NS
     id: Mapped[uuid.UUID] = mapped_column(UUID(), primary_key=True)
     company: Mapped[str] = mapped_column(String(512), index=True)
     company_norm_id: Mapped[uuid.UUID] = mapped_column(UUID(), index=True)
@@ -176,7 +173,7 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
         return inst
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         naics, artifact = row[2:]
         if naics and naics.id not in memo['naics']:
             inst.naics.append(NaicsData.model_validate(naics))
@@ -186,7 +183,7 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
             memo['artifacts'].add(artifact.id)
 
     @classmethod
-    def reduce_finish(cls, inst, memo):
+    def reduce_finish(cls, inst, memo) -> None:
         inst.naics.sort(key=lambda x: str(x.id))
 
 class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
@@ -194,7 +191,7 @@ class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
     last_reported: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     reports_count: Mapped[int] = mapped_column(Integer(), default=0)
 
-    def self_update(self, session: Session):
+    def self_update(self, session: Session) -> None:
         cond = Report.state == self.id
         stmt = select(func.count('*')).where(cond)
         self.reports_count = session.execute(stmt).scalar_one()
@@ -236,7 +233,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
         return row[0].name_norm_id == inst.id
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         company, report, naics = row
         if company.name_canon not in memo['canon']:
             inst.name = next(iter(
@@ -266,7 +263,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
             memo['naics'].add(naics.id)
 
     @classmethod
-    def reduce_finish(cls, inst, memo):
+    def reduce_finish(cls, inst, memo) -> None:
         inst.aliases.sort(key=lambda x: (x.lower(), x))
         inst.naics.sort(key=lambda x: str(x.id))
         inst.states.sort()
@@ -314,7 +311,7 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
         return stmt
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         report = row[1]
         if report and report.id not in memo['reports']:
             inst.reports_count += 1
@@ -352,6 +349,10 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     def name(self) -> str:
         return Path(self.path).name
 
+    @property
+    def state(self) -> StateCode:
+        return self.path[:2].upper()
+
     @staticmethod
     def path_to_id(value: str) -> uuid.UUID:
         return uuid.uuid5(settings.NAMESPACE, f'artifact:{value}')
@@ -367,7 +368,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
         return stmt
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         if (report := row[1]) and report.id not in memo['reports']:
             inst.reports_count += 1
             memo['reports'].add(report.id)
@@ -484,204 +485,3 @@ def dump_update(table: Table|str, file: Path|None = None) -> None:
             tmp.rename(file)
     finally:
         tmp.unlink(missing_ok=True)
-
-class NaicsCommand(utils.FuncCommand(load_naics, utils.AppCommand)):
-    pass
-
-class DumpCommand(utils.FuncCommand(dump_update, utils.AppCommand)):
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            'table',
-            metavar='table',
-            choices=Base.metadata.tables,
-            help=f'The table ({'|'.join(sorted(Base.metadata.tables))})')
-        arg(
-            'file',
-            nargs='?',
-            type=Path,
-            help=('The output file, default BUILD_DIR/dump/[table].csv'))
-        super().add_arguments(parser)
-
-class MroneCommand(utils.AppCommand):
-    description = """
-    Run map-reduce for a single object and print the resulting data model object
-
-    Examples
-    --------
-
-    Report
-    $ {prog} 9445518b-3192-5eb2-b5ce-710c18f24368
-
-    Company
-    $ {prog} -m company 3224e161-3705-5f5e-9661-abcfe0e3f24e
-    $ {prog} -m company Safeway
-    $ {prog} -m company 'Safeway, Inc.'
-
-    State
-    $ {prog} -m state CA
-
-    Naics
-    $ {prog} -m naics 44511
-
-    Artifact
-    $ {prog} -m artifact 0ab65afb-2d9f-5754-b1ad-e03d99cac511
-    $ {prog} -m artifact ca/warn_report1.xlsx
-    ------------------------------------------------------------
-    """
-    mrclasses = [
-        cls for cls in MapReduceBase.__subclasses__()
-        if not cls.__abstract__]
-    mrclasses.sort(key=lambda x: x.__name__)
-
-    @classmethod
-    def modelopt(cls, value: str) -> type[MapReduceBase]:
-        if value.lower() == 'state':
-            value = 'StateStat'
-        for model in cls.mrclasses:
-            if model.__name__.lower() == value.lower():
-                return model
-        raise ValueError
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            '--model', '-m',
-            type=cls.modelopt,
-            default=Report,
-            help=(f'The ORM model name, default Report '
-                  f'({'|'.join(x.__name__ for x in cls.mrclasses)})'))
-        arg(
-            '--yaml',
-            action='store_true',
-            help='Output yaml')
-        arg(
-            'id',
-            help='The object primary key (see examples)')
-        super().add_arguments(parser)
-
-    def setup(self, opts):
-        super().setup(opts)
-        self.model: type[MapReduceBase] = opts.model
-        if self.model is Company:
-            field = 'name_norm_id'
-        else:
-            field = 'id'
-        value = opts.id
-        if self.model is Company:
-            try:
-                value = uuid.UUID(value)
-            except ValueError:
-                from .ref.normls import company_name_norm
-                value = uuid.uuid5(Company.NS, company_name_norm(value))
-        elif self.model is Artifact and '/' in value:
-            value = Artifact.path_to_id(value)
-        elif self.model is StateStat:
-            value = str(value).upper()
-        elif self.model is Naics:
-            value = int(value)
-        else:
-            value = uuid.UUID(value)
-        self.filterkw = {field: value}
-        self.filter = getattr(self.model, field) == value
-
-    def run(self):
-        with SessionLocal() as session:
-            res = tuple(self.model.map_reduce_exec(session, self.filter, lazy=False))
-        if not res:
-            raise ValueError(f'Not found: {self.filterkw}')
-        obj, = res
-        objdict = self.dumpobj(obj)
-        text = self.dictstr(objdict)
-        print(text)
-
-    def dumpobj(self, obj: DataModel) -> dict[str, Any]:
-        return obj.model_dump(mode='json')
-
-    def dictstr(self, objdict: dict[str, Any]) -> str:
-        if self.opts.yaml:
-            return yaml.safe_dump(objdict, sort_keys=False)
-        return json.dumps(objdict, indent=2)
-
-class ArtifactsCommand(utils.BaseCommand):
-    'Artifacts maintenance'
-
-    class Base(utils.AppCommand):
-
-        @classmethod
-        def add_arguments(cls, parser):
-            arg = parser.add_argument
-            arg(
-                '--check-only', '-c',
-                action='store_false',
-                dest='change',
-                help='Check only, do not make changes')
-            arg(
-                'dir',
-                nargs='?',
-                type=Path,
-                help=f'Alternate artifacts dir')
-            super().add_arguments(parser)
-
-        def setup(self, opts):
-            super().setup(opts)
-            self.root: Path = opts.dir or settings.ARTIFACTS_DIR
-
-    class Prune(Base):
-        'Delete orphan artifacts from file system'
-
-        async def run(self):
-            it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
-            with SessionLocal() as session:
-                for path in it:
-                    file = self.root/path
-                    if path.endswith('.sha1'):
-                        logger.info(f'Cruft {path=}')
-                        if self.opts.change:
-                            file.unlink()
-                        continue
-                    id = Artifact.path_to_id(path)
-                    try:
-                        session.get(Artifact, id)
-                    except NoResultFound:
-                        logger.info(f'Orphan {path=} {id=}')
-                        if self.opts.change:
-                            file.unlink()
-                            utils.digestfile(file).unlink(missing_ok=True)
-                    else:
-                        logger.debug(f'Found {path=} {id=}')
-
-    class Update(Base):
-        'Update artifacts in DB from files'
-
-        async def run(self):
-            stmt = select(Artifact)
-            with SessionLocal() as session:
-                for art in session.scalars(stmt):
-                    file = self.root/art.path
-                    if file.exists():
-                        logger.debug(f'Found path={art.path} id={art.id}')
-                        if art.self_update(root=self.root):
-                            logger.info(f'Updated path={art.path} id={art.id}')
-                            session.add(art)
-                    else:
-                        logger.warning(f'Missing path={art.path} id={art.id}')
-                if self.opts.change:
-                    session.commit()
-                else:
-                    session.rollback()
-
-    commands = dict(
-        update=Update,
-        prune=Prune)
-
-class Command(utils.BaseCommand):
-    'ORM/SQL commands'
-    commands = dict(
-        artifacts=ArtifactsCommand,
-        mrone=MroneCommand,
-        dump=DumpCommand,
-        naics=NaicsCommand)

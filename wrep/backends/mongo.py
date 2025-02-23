@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 import dataclasses
-import json
+import re
 import uuid
-from datetime import timedelta, timezone
-from typing import Any, AsyncIterator, ClassVar, Iterable, Self
+from datetime import timedelta
+from typing import Any, AsyncIterator, ClassVar, Iterable, Literal
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorDatabase)
-from pydantic import Field
+from pydantic import SerializationInfo, SerializerFunctionWrapHandler, model_serializer
 from pymongo.operations import IndexModel
 
 from .. import settings, utils
-from ..models import DataModel, FilterModel, Limit, Offset
+from ..models import DataModel, FilterModel, Limit, Offset, Fi
 
-type FilterType[DM: DataModel] = MongoFilter|FilterModel[DM]
-type FiltersType[DM: DataModel] = dict[type[DM], type[FilterType[DM]]]
+type Filts[DM] = dict[type[DM: DataModel], type[FilterModel[DM: DataModel]]]
+filters: Filts = {}
 logger = utils.get_logger('backends.mongo')
-filters: FiltersType = {}
 
 @dataclasses.dataclass
 class MongoClient:
@@ -56,8 +55,13 @@ class MongoClient:
         db = db or await self.get_default_database_name()
         return self.client.get_database(db)
 
+    async def get_context_database(self, context: dict[str, Any]) -> AsyncIOMotorDatabase:
+        db = await self.get_database(context.get(self.dbname_key))
+        context[self.dbname_key] = db.name
+        return db
+
     async def get_default_database_name(self) -> str:
-        now = utils.now(tz=timezone.utc)
+        now = utils.utcnow()
         if self.dbname_cache['name'] and self.dbname_cache['expiry'] > now:
             return self.dbname_cache['name']
         doc = await self.get_doc()
@@ -83,7 +87,7 @@ class MongoClient:
 
     async def set_dbname(self, dbname: str, ttl: utils.Delta|None = None) -> dict[str, Any]:
         'Set the control dbname'
-        now = utils.now(tz=timezone.utc)
+        now = utils.utcnow()
         doc = dict(
             _id=self.doc_id,
             key=self.dbname_key,
@@ -110,7 +114,7 @@ class MongoClient:
     async def set_ttl(self, ttl: utils.Delta) -> dict[str, Any]:
         'Set the control TTL only'
         ttl = utils.deltaparse(ttl, default_unit='seconds')
-        now = utils.now(tz=timezone.utc)
+        now = utils.utcnow()
         doc = await self.get_doc()
         doc.update(
             ttl=f'{int(ttl.total_seconds())}s',
@@ -126,10 +130,15 @@ class MissingControlDoc(Exception):
 class AbstractCollection:
     name: str
     data_model: type[DataModel]
+    filter_class: type[FilterModel]
 
 class AbstractMongoCollection(AbstractCollection):
     indexes: list[IndexModel]
     client: MongoClient
+
+    @property
+    def filter_class(self) -> type[MongoFilterModel]:
+        return filters[self.data_model]
 
     async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, str|int]:
         'Get collection stats'
@@ -154,21 +163,49 @@ class AbstractMongoCollection(AbstractCollection):
 class MongoCollection(AbstractMongoCollection):
     client: MongoClient
     name: str
-    data_model: type[DataModel]|None = None
+    data_model: type[DataModel]
     indexes: list[IndexModel] = dataclasses.field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.indexes = list(map(IndexModel, self.indexes))
 
-class MongoFilter:
-    collection: ClassVar[AbstractMongoCollection]
+class MongoFilterModel[DM: DataModel](FilterModel[DM]):
+    collection: ClassVar[MongoCollection]
 
-    def get_query(self) -> dict[str, Any]:
-        filts = tuple(self.get_filters())
-        return {'$and': filts} if filts else {}
+    def get_query(self):
+        q = self.model_dump(context={'tofilter': True})
+        if (filts := list(self.get_filters())):
+            q.setdefault('$and', []).extend(filts)
+        return q
 
     def get_filters(self) -> Iterable[dict[str, Any]]:
         yield from ()
+
+    @model_serializer(mode='wrap')
+    def serialize_filter(self, nxt: SerializerFunctionWrapHandler, info: SerializationInfo):
+        if not (info.context and info.context.get('tofilter')):
+            return nxt(self)
+        result = {}
+        prepped = []
+        data = self.model_dump(exclude_none=True, exclude=['order'])
+        for name, value in data.items():
+            field = self.model_fields[name]
+            if (meta := field.metadata) and isinstance(anno := meta[0], Fi):
+                alias = anno.alias
+                if alias is None:
+                    alias = name
+                if anno.oper == '$naics':
+                    prepped.append(get_naics_filter(value, alias))
+                    continue
+                if anno.oper == '$contains':
+                    oper = '$regex'
+                    value = wc_contains(value)
+                else:
+                    oper = anno.oper
+                prepped.append({alias: {oper: value}})
+        if prepped:
+            result['$and'] = prepped
+        return result
 
     def __init_subclass__(cls, **kw) -> None:
         super().__init_subclass__(**kw)
@@ -176,19 +213,12 @@ class MongoFilter:
             if issubclass(model, DataModel):
                 filters[model] = cls
 
-class MongoQueryFilter(MongoFilter):
-    q: dict[str, Any] = Field(default_factory=dict)
-
-    def get_filters(self):
-        if self.q:
-            yield self.q
-
 @dataclasses.dataclass
 class Search[DM: DataModel]:
-    filter: FilterType[DM]
+    filter: MongoFilterModel[DM]
     limit: Limit|None = None
     offset: Offset = 0
-    dbname: str|None = None
+    context: dict[str, Any]|None = None
 
     @property
     def model(self) -> type[DM]:
@@ -207,18 +237,17 @@ class Search[DM: DataModel]:
         return self.filter.get_query()
 
     def __post_init__(self) -> None:
+        if self.context is None:
+            self.context = {}
         if self.limit == 0:
             self.orders = []
         else:
             self.orders = list(self.filter.get_ordering())
             if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
                 self.orders.append(('_id', 1))
-        self._db = None
 
     async def db(self) -> AsyncIOMotorDatabase:
-        if self._db is None:
-            self._db = await self.client.get_database(self.dbname)
-        return self._db
+        return await self.client.get_context_database(self.context)
 
     async def get_collection(self) -> AsyncIOMotorCollection:
         return (await self.db()).get_collection(self.collection.name)
@@ -250,62 +279,16 @@ class Search[DM: DataModel]:
             cur = cur.limit(self.limit)
         return cur
 
-class ControlBaseCommand(utils.AppCommand):
-    mongo: MongoClient
+def wc_contains(text: str) -> re.Pattern:
+    return re.compile(f'.*{re.escape(text)}.*', re.I)
 
-    @classmethod
-    def parser_fmtargs(cls, parser):
-        return super().parser_fmtargs(parser) | dict(client=cls.mongo)
+def wc_startswith(text: str) -> re.Pattern:
+    return re.compile(f'^{re.escape(text)}.*', re.I)
 
-    @classmethod
-    def fromclient(cls, client: MongoClient) -> type[Self]:
-        return type(cls.__name__, (cls,), dict(mongo=client))
-
-class ControlGetCommand(ControlBaseCommand):
-    'Get the mongo control doc for {client.dbname_key}'
-
-    async def run(self):
-        doc = await self.mongo.get_doc()
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlSetCommand(ControlBaseCommand):
-    'Update the mongo control doc for {client.dbname_key}'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            '--ttl',
-            type=utils.deltaopt('seconds'),
-            default=None,
-            help='Override the TTL')
-        arg(
-            'name',
-            help='The database name')
-
-    async def run(self):
-        doc = await self.mongo.set_dbname(self.opts.name, ttl=self.opts.ttl)
-        print(json.dumps(doc, indent=2, default=str))
-
-class ControlTtlCommand(ControlBaseCommand):
-    'Update the mongo control doc TTL only for {client.dbname_key}'
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg(
-            'ttl',
-            type=utils.deltaopt('seconds'),
-            help='The TTL')
-
-    async def run(self):
-        doc = await self.mongo.set_ttl(self.opts.ttl)
-        print(json.dumps(doc, indent=2, default=str))
-
-def ClientControlCommand(client: MongoClient) -> type[utils.AppCommand]:
-    return type('MongoClientControlCommand', (utils.AppCommand,), dict(
-        __doc__=f'Mongo control doc commands for {client.dbname_key}',
-        commands=dict(
-            get=ControlGetCommand.fromclient(client),
-            set=ControlSetCommand.fromclient(client),
-            ttl=ControlTtlCommand.fromclient(client))))
+def get_naics_filter(naics: list[int], prefix: str = 'naics') -> dict[Literal['$or'], list[dict[str, Any]]]:
+    if prefix:
+        prefix = prefix.removesuffix('.') + '.'
+    rxs = (
+        {f'{prefix}code': {'$regex': wc_startswith(str(code))}}
+        for code in naics)
+    return {'$or': [*rxs, {f'{prefix}id': {'$in': naics}}]}

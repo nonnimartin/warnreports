@@ -72,7 +72,3 @@ class FrontentBuilder:
 async def frontend_build() -> None:
     'Build frontend web assets'
     await FrontentBuilder().build()
-
-
-class Command(utils.FuncCommand(frontend_build, utils.AppCommand)):
-    pass

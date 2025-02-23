@@ -6,49 +6,40 @@ import dataclasses
 import hashlib
 import json
 import re
-import shutil
 import uuid
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime
 from html import unescape as _u
+from importlib import import_module
 from itertools import chain, filterfalse
 from pathlib import Path
 from re import compile as _r
-from typing import (TYPE_CHECKING, Any, ClassVar, Generator, Iterable,
-                    Iterator, Self)
+from typing import Any, ClassVar, Generator, Iterable, Iterator
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
-import openpyxl
-import openpyxl.worksheet
-import openpyxl.worksheet.worksheet
-import pdfplumber
 import requests
-from bs4 import BeautifulSoup as Soup
-from bs4.element import PageElement, ResultSet, Tag
-from openpyxl.worksheet.worksheet import Worksheet
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
 from starlette.datastructures import URL
 from typing_extensions import Buffer
 
-import warn.cache
-import warn.runner
-import warn.utils
-
-from . import SaveType, Stage, settings, utils
+from . import Stage, settings, utils
 from .backends import webdrivers
-from .models import ScraperOpts
+from .backends.files import ArtifactStore, FileCache, clean_filename
+from .models import ScraperOpts, StateCode
+from .tools import dom, pdfs, xlsx
+from .tools.dom import Soup, bs
 
 scrapers: dict[str, type[Scraper]] = {}
 
 class Scraper:
-    state: str
-    base_url: str|None = None
-    user_agent = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
-    request_delay = 0
-    ssl_verify = True
-    retry = dict(total=3, backoff_factor=2)
+    state: ClassVar[StateCode]
+    base_url: ClassVar[str|None] = None
+    user_agent: ClassVar[str] = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
+    request_delay: ClassVar[int] = 0
+    ssl_verify: ClassVar[bool] = True
+    retry: ClassVar[dict] = dict(total=3, backoff_factor=2)
 
     def __init__(self, *, opts: ScraperOpts|dict|None = None):
         self.opts = ScraperOpts.model_validate(opts or {})
@@ -57,9 +48,11 @@ class Scraper:
         retry = Retry(**self.retry)
         self.session.mount('https://', HTTPAdapter(max_retries=retry))
         self.session.headers['User-Agent'] = self.user_agent
-        self.cache = Cache(self.state, Stage.Scrape)
-        self.extract_cache = Cache(self.state, Stage.Extract)
-        self.artifacts = Artifacts(self.state)
+        self.cache = FileCache(settings.BUILD_DIR/Stage.Scrape/self.state.lower())
+        self.extract_cache = FileCache(settings.BUILD_DIR/Stage.Extract/self.state.lower())
+        self.artifacts = ArtifactStore(
+            settings.ARTIFACTS_DIR/self.state.lower(),
+            self.cache.dir)
         self.metrics = defaultdict(int)
         self.logger = utils.get_logger(f'scrapers.{self.state}')
 
@@ -73,7 +66,7 @@ class Scraper:
         return hashstat(self.statobjs())
 
     def statobjs(self) -> Iterable[Any]:
-        yield from self.runner.statobjs()
+        yield self.runner.file
 
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
@@ -94,7 +87,7 @@ class Scraper:
 
     async def download(self, key: str, url: str, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
-        dest = self.cache.topath(key)
+        dest = self.cache/key
         if missing_only and dest.exists():
             return
         self.logger.debug(f'Downloading {url} to {dest}')
@@ -125,7 +118,6 @@ class Scraper:
                 status = None
             self.logger.error(f'Failed to get {url=} {status=}')
             raise
-        self.metrics['request_count'] += 1
         if not kw.get('stream'):
             self.metrics['request_bytes'] += len(rep.content)
             await asyncio.sleep(0)
@@ -406,9 +398,6 @@ class DE(Scraper):
     def load_index(self) -> list[dict[str, str]]:
         return self.cache.read_json('index.json')
 
-    def list_page_files(self) -> list[Path]:
-        return sorted(self.cache.glob('*.html'), reverse=True)
-
     def list_record_files(self) -> list[Path]:
         return sorted(self.cache.glob('records/*.html'), reverse=True)
 
@@ -619,17 +608,41 @@ class GA(Scraper):
         shortcode_atts=dict(id=77460))
 
 class IL(Scraper):
-    # Scrape time: ~20s
-    # Extract time: ~7s
-    source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export?search=&layoffTypes=&trade=0&dateReportedStart=Invalid%20Date&dateReportedEnd=Invalid%20Date&statuses=4&reasons=&eventCauses=&naicsCodes=1&naicIndustries=&naics=&unionsInvolved=0&geolocation=1&cities=&counties=&lwias=&includeAdditionalLwias=false&edrs=&lat=0&lng=0&distance=.5&memberType=1&users=&accessList=&bookmarked=false'
+    source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export'
+    source_params = [
+        ('search', ''),
+        ('layoffTypes', ''),
+        ('trade', '0'),
+        ('dateReportedStart', 'Invalid Date'),
+        ('dateReportedEnd', 'Invalid Date'),
+        ('statuses', '4'),
+        ('reasons', ''),
+        ('eventCauses', ''),
+        ('naicsCodes', '1'),
+        ('naicIndustries', ''),
+        ('naics', ''),
+        ('unionsInvolved', '0'),
+        ('geolocation', '1'),
+        ('cities', ''),
+        ('counties', ''),
+        ('lwias', ''),
+        ('includeAdditionalLwias', 'false'),
+        ('edrs', ''),
+        ('lat', '0'),
+        ('lng', '0'),
+        ('distance', '.5'),
+        ('memberType', '1'),
+        ('users', ''),
+        ('accessList', ''),
+        ('bookmarked', 'false')]
 
     async def scrape(self):
-        await self.download('export.xlsx', self.source_url)
+        await self.download('export.xlsx', self.source_url, params=self.source_params)
 
     def statobjs(self):
         file = self.cache/'export.xlsx'
         if file.exists():
-            for row in extract_xlsx(file):
+            for row in xlsx.extract_workbook(file):
                 row.pop('NAICS Codes', None)
                 yield json.dumps(row)
 
@@ -638,7 +651,7 @@ class IL(Scraper):
 
     @contextmanager
     def extract(self):
-        yield extract_xlsx(self.cache/'export.xlsx')
+        yield xlsx.extract_workbook(self.cache/'export.xlsx')
 
 class IN(Scraper):
     # Scrape time: < 2s
@@ -813,7 +826,7 @@ class KY(Scraper):
         class WorkerHelper:
             downloader: KY.ArtifactDownloader
             driver: webdrivers.Chrome
-            cache: Cache
+            cache: FileCache
 
             @property
             def scraper(self) -> KY:
@@ -1128,13 +1141,13 @@ class NJ(Scraper):
     def extract(self):
         file = self.cache.topath('latest.xlsx')
         extra = dict(scrape_time=utils.file_mtime(file).isoformat())
-        wb = openpyxl.load_workbook(file, read_only=True)
+        wb = xlsx.load_workbook(file, read_only=True)
         it = chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
         yield (row|extra for row in it)
 
-    def extract_xlsx_worksheet(self, ws: openpyxl.worksheet.worksheet.Worksheet):
+    def extract_xlsx_worksheet(self, ws: xlsx.Worksheet):
         extra = dict(worksheet_name=ws.title)
-        it = extract_xlsx_worksheet(ws)
+        it = xlsx.extract_worksheet(ws)
         return (row|extra for row in it)
 
 class NY(Scraper):
@@ -1185,7 +1198,7 @@ class NY(Scraper):
 
     def read_xlsx_file(self, file: Path|str) -> Iterator[dict[str, str]]:
         "Extract records from historical xlsx file"
-        return extract_xlsx(self.cache/file)
+        return xlsx.extract_workbook(self.cache/file)
 
     def read_html_file(self, file: Path|str) -> Iterator[dict[str, str]]:
         "Extract records from HTML page"
@@ -1248,7 +1261,7 @@ class NY(Scraper):
         file = self.cache/file
         textkey = f'{self.cache.tokey(file)}.txt'
         if not self.extract_cache.exists(textkey):
-            with pdfplumber.open(file) as pdf:
+            with pdfs.open(file) as pdf:
                 text = '\n'.join(page.extract_text() for page in pdf.pages)
             self.extract_cache.write(textkey, text)
         return self.extract_cache.read(textkey)
@@ -1256,7 +1269,10 @@ class NY(Scraper):
 class OH(Scraper):
     base_url = 'https://jfs.ohio.gov'
     archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
-    latest_url = '/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures'
+    latest_url = (
+        '/wps/portal/gov/jfs/job-services-and-unemployment/job-services'
+        '/job-programs-and-services/submit-a-warn-notice'
+        '/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures')
     request_delay = 1
     atext_pat = _r(r'^\s*(\d{4}) Public Notices')
     legacy_header_map = {
@@ -1288,6 +1304,9 @@ class OH(Scraper):
             (_r(r'\*'), ''),
         ]
     )
+    archived_sources = [
+        ('2024.html.json', 'https://archive.warnreports.org/s/OH/2024.html.json')
+    ]
 
     async def scrape(self):
         await self.download('oh_historical.csv', self.archive_url, missing_only=True)
@@ -1306,6 +1325,9 @@ class OH(Scraper):
                     self.extract_json(bs(self.cache.read(key))),
                     indent=2)
             sources.append((f'{key}.json', self.absurl(a['href'])))
+        for key, url in self.archived_sources:
+            await self.download(key, url, missing_only=True)
+            sources.append((key, url))
         self.cache.write_json('sources.json', dict(sorted(sources)), indent=2)
         self.cache.write_json('index.json', index := self.build_index(), indent=2)
         for key, url in chain.from_iterable(map(dict.items, index.values())):
@@ -1337,7 +1359,8 @@ class OH(Scraper):
         headers = next(it)[:9]
         for values in filter(any, it):
             raw = dict(zip(headers, values))
-            raw['URL'] = source
+            if self.base_url in source:
+                raw['URL'] = source
             ids = raw['Notice ID'].split(' and ')
             for notice_id in map(self.normalize_notice_id, ids):
                 row = dict(raw)
@@ -1557,7 +1580,7 @@ class SC(Scraper):
     def read_records(self) -> Iterator[dict[str, str]]:
         for year, url in self.load_index():
             headers = self.get_header_species(year) + self.extra_headers
-            extra = [str(year), url]
+            extra = [str(year), self.absurl(url)]
             it = self.read_table(self.cache/f'{year}.pdf')
             next(it)
             for row in it:
@@ -1570,7 +1593,7 @@ class SC(Scraper):
         return self.headers_species[None]
 
     def read_table(self, path: Path) -> Iterator[list[str]]:
-        with pdfplumber.open(path) as pdf:
+        with pdfs.open(path) as pdf:
             it = [page.extract_tables() for page in pdf.pages]
         it = chain.from_iterable(it)
         it = map(self.process_table, it)
@@ -1712,7 +1735,7 @@ class TX(Scraper):
         extra = {}
         if self.year_pat.match(file.name):
             extra.update(artifact_url=self.absurl(file.name))
-        for row in extract_xlsx(file):
+        for row in xlsx.extract_workbook(file):
             row.update(extra)
             yield row
 
@@ -1766,165 +1789,25 @@ class VA(Scraper):
     async def scrape(self):
         await self.download(self.runner.file, self.csv_url)
 
-class Cache(warn.cache.Cache):
-
-    def __init__(self, state: str, stage: Stage) -> None:
-        data_dir = settings.BUILD_DIR/Stage(stage)
-        super().__init__(data_dir/state.lower())
-        self.dir = Path(self.path)
-        self.path = str(self.dir)
-
-    def delete(self, *keys: str, glob: bool = False) -> None:
-        for key in keys:
-            if glob and isinstance(key, str):
-                paths = self.glob(key)
-            else:
-                paths = (self.topath(key),)
-            for path in paths:
-                path.unlink(missing_ok=True)
-    
-    def topath(self, key: str) -> Path:
-        return Path(self.dir, key)
-
-    def tokey(self, file: Path) -> str:
-        return str(self.topath(file).relative_to(self.path))
-
-    def open(self, key: str, *args, **kw):
-        return self.topath(key).open(*args, **kw)
-
-    def write_json(self, key: str, obj: Any, **kw) -> None:
-        file = self.topath(key)
-        file.parent.mkdir(parents=True, exist_ok=True)
-        with file.open('w') as file:
-            json.dump(obj, file, **kw)
-
-    def read_json(self, key: str, **kw) -> Any:
-        with self.open(key) as file:
-            return json.load(file, **kw)
-
-    def glob(self, *globs) -> Iterator[Path]:
-        return chain.from_iterable(
-            map(self.topath, self.files('.', glob))
-            for glob in globs)
-
-    def nuke(self) -> None:
-        if self.dir.exists():
-            shutil.rmtree(self.dir)
-
-    def mkdir(self, key: str|None = None) -> None:
-        self.topath(key or '.').mkdir(parents=True, exist_ok=True)
-
-    def subcache(self, key: str) -> Self:
-        key = self.tokey(key)
-        inst = type(self)('XX', 'scrape')
-        inst.dir = self.dir/key
-        inst.path = str(inst.dir)
-        return inst
-
-    def __truediv__(self, other: str|Path) -> Path:
-        return self.dir/other
-
-    _path_from_env = str(settings.BUILD_DIR)
-    _path_default = str(settings.BUILD_DIR)
-
-class Artifacts:
+class Runner:
 
     def __init__(self, state: str):
         self.state = state.upper()
-        self.dir = settings.ARTIFACTS_DIR/state.lower()
-        self.src = settings.BUILD_DIR/Stage.Scrape/state.lower()
-        self.metrics = defaultdict(int)
-
-    def add(self, key: str, file: Path|None = None) -> tuple[SaveType, int]:
-        key = key.strip('/')
-        file = file or self.src/key
-        dest = self.dir/key
-        digfile = utils.digestfile(dest)
-        sta = file.stat()
-        if dest.exists():
-            stb = dest.stat()
-            a = (int(sta.st_mtime), sta.st_size)
-            b = (int(stb.st_mtime), stb.st_size)
-            if a == b:
-                save = SaveType.Nochange
-            elif a[1] == b[1]:
-                with file.open('rb') as f:
-                    diga = hashlib.file_digest(f, 'sha1').hexdigest()
-                if digfile.exists():
-                    digb = digfile.read_text().strip()
-                else:
-                    with dest.open('rb') as f:
-                        digb = hashlib.file_digest(f, 'sha1').hexdigest()
-                    digfile.write_text(digb)
-                    shutil.copystat(file, digfile)
-                if diga == digb:
-                    save = SaveType.Nochange
-                else:
-                    save = SaveType.Update
-            else:
-                save = SaveType.Update
-        else:
-            save = SaveType.Create
-            dest.parent.mkdir(parents=True, exist_ok=True)
-        if save is not save.Nochange:
-            digfile.unlink(missing_ok=True)
-            shutil.copyfile(file, dest)
-            shutil.copystat(file, dest)
-            with dest.open('rb') as f:
-                digest = hashlib.file_digest(f, 'sha1').hexdigest()
-            digfile.write_text(digest)
-            shutil.copystat(file, digfile)
-            self.metrics['bytes_written'] += sta.st_size
-        self.metrics[str(save)] += 1
-        self.metrics['total'] += 1
-        self.metrics['bytes_total'] += sta.st_size
-        return save, sta.st_size
-
-class Runner(warn.Runner):
-
-    def __init__(self, state: str):
-        self.state = state.upper()
-        cache_dir = settings.BUILD_DIR/Stage.Scrape
-        data_dir = cache_dir/self.state.lower()
-        self.file = data_dir/f'{self.state.lower()}.csv'
-        super().__init__(data_dir, cache_dir)
+        self.logger = utils.get_logger(f'scrapers.{self.state}')
+        self.cache_dir = settings.BUILD_DIR/Stage.Scrape
+        self.data_dir = self.cache_dir/self.state.lower()
+        self.file = self.data_dir/f'{self.state.lower()}.csv'
 
     def scrape(self) -> None:
-        super().scrape(self.state.lower())
-
-    def statobjs(self) -> Iterable[Any]:
-        yield self.file
+        mod = import_module(f"warn.scrapers.{self.state.lower()}")
+        mod.scrape(self.data_dir, self.cache_dir)
 
 def absurl(base_url: str|None, url: str) -> None:
     if base_url and not any(map(url.startswith, ('http://', 'https://'))):
         url = base_url.rstrip('/') + '/' + url.lstrip('/')
     return url
 
-def bs(markup: Any, features='html.parser', **kw):
-    if isinstance(markup, Path):
-        markup = markup.read_bytes()
-    return Soup(markup, features, **kw)
-
-def extract_xlsx(file: Path) -> Iterator[dict[str, str]]:
-    worksheet = openpyxl.load_workbook(file, read_only=True).worksheets[0]
-    return extract_xlsx_worksheet(worksheet)
-
-def extract_xlsx_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
-    it = ([cell.value for cell in row] for row in ws.rows)
-    headers = next(it)
-    for values in filter(any, it):
-        row = {}
-        for k, v in filter(any, zip(headers, values)):
-            if v is None:
-                v = ''
-            elif isinstance(v, datetime):
-                v = v.strftime(f'%Y-%m-%d')
-            else:
-                v = str(v)
-            row[k] = v
-        yield row
-
-def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
+def hashstat(it: Iterable[Path|str|Buffer|dom.PageElement]) -> dict[str, str|int|None]:
     h = hashlib.sha1()
     size = 0
     for obj in it:
@@ -1938,7 +1821,7 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
             continue
         if isinstance(obj, str):
             buf = obj.encode()
-        elif isinstance(obj, PageElement):
+        elif isinstance(obj, dom.PageElement):
             buf = obj.text.encode()
         else:
             buf = obj
@@ -1948,37 +1831,9 @@ def hashstat(it: Iterable[Path|str|Buffer]) -> dict[str, str|int|None]:
     hash = h.hexdigest() if size else None
     return dict(hash=hash, size=size)
 
-clean_filename_subs = [
-    (_r(r'[^a-z\d_]', re.I), '-'),
-    (_r(r'([-_])+'), r'\1'),
-]
-clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
-
-def clean_filename[T](value: str, default: T = None) -> str|T:
-    parts = value.rsplit('.', 1)
-    clean = utils.rewrite_all(parts[0], clean_filename_subs)
-    clean = clean.strip('_-')
-    if clean:
-        if len(parts) == 2:
-            ext = utils.rewrite_all(parts[1], clean_extension_subs)
-            clean = f'{clean}.{ext}'
-        return clean
-    return default
-
 scrapers.update({
     state: type(state, (Scraper,), {})
-    for state in map(str.upper, warn.utils.get_all_scrapers())
+    for state in (
+        x.stem.upper() for x in
+        (settings.REPODIR/'warn/scrapers').glob('??.py'))
     if state not in scrapers})
-
-if TYPE_CHECKING:
-    from typing import overload
-    class Soup(Soup):
-        @overload
-        def find_all(
-            self,
-            name:str|Any=...,
-            attrs: dict[str, Any]=...,
-            recursive:bool=True,
-            string:str|Any=...,
-            limit:int|None=...,
-            **kwargs) -> ResultSet[Soup|PageElement|Tag]: ...

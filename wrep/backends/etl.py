@@ -5,17 +5,16 @@ import json
 from abc import abstractmethod
 from contextlib import asynccontextmanager
 from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar,
-                    Mapping)
+                    Mapping, override)
 from uuid import UUID, uuid5
 
-import yaml
 from motor.motor_asyncio import AsyncIOMotorCollection
 
-from .. import Stage, search, settings, utils
+from .. import Stage, settings, utils
 from ..models import *
 from ..utils import EitherIterable
-from .mongo import (AbstractMongoCollection, ClientControlCommand, MongoClient,
-                    MongoCollection, MongoQueryFilter, Search, filters)
+from .mongo import (AbstractMongoCollection, MongoClient, MongoCollection,
+                    MongoFilterModel, Search)
 
 __all__ = [
     'ExtractionBackend',
@@ -37,12 +36,14 @@ collections: dict[str, MongoCollection] = dict(
     extractions=MongoCollection(
         client=client,
         name='extractions',
+        data_model=Extraction,
         indexes=[
             {'state': 1},
             {'_i': 1}]),
     translations=MongoCollection(
         client=client,
         name='translations',
+        data_model=Translation,
         indexes=[
             {'id': 1},
             {'values_id': 1},
@@ -57,12 +58,6 @@ collections: dict[str, MongoCollection] = dict(
             {'start': -1},
             {'end': -1},
             {'elapsed': -1}]))
-
-class ReaderMixin:
-
-    @abstractmethod
-    @asynccontextmanager
-    async def reader(self) -> AsyncGenerator[AsyncIterable[Doc]]: ...
 
 class ContextMixin:
 
@@ -85,9 +80,6 @@ class PipelineLogBackend(ContextMixin):
     async def fetch_latest(self) -> PipelineLog: ...
 
     @abstractmethod
-    async def findall(self, limit: Limit|None = None, offset: Offset = 0) -> AsyncIterable[PipelineLog]: ...
-
-    @abstractmethod
     async def update(self, source: EitherIterable[PipelineLog]) -> tuple[int, int, int]: ...
 
     @abstractmethod
@@ -103,36 +95,41 @@ class StageBackend(ContextMixin):
     stage: ClassVar[Stage]
     engine: ClassVar[str]
 
-    def __init__(self, state: StateCode, context: Doc|None = None) -> None:
-        super().__init__(context)
-        self.state = state.upper()
-
-    @abstractmethod
-    async def clean(self) -> None: ...
-
-    async def stat(self) -> dict:
-        return {}
-
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
         if hasattr(cls, 'engine') and hasattr(cls, 'stage'):
             cls.registry.setdefault(cls.engine, {})[cls.stage] = cls
 
-class ExtractionBackend(StageBackend, ReaderMixin):
+class ETBase[DM: (Extraction, Translation)](StageBackend):
+
+    @abstractmethod
+    @asynccontextmanager
+    async def reader(self, filt: Any, /, *, limit: Limit|None = None, offset: Offset = 0) -> AsyncGenerator[AsyncIterable[DM]]: ...
+
+    @abstractmethod
+    async def stat(self, filt: Any) -> dict: ...
+
+    @abstractmethod
+    async def clean(self, filt: Any) -> int: ...
+
+    @abstractmethod
+    async def update(self, source: EitherIterable[DM|Doc]) -> tuple[int, int, int]: ...
+
+class ExtractionBackend(ETBase[Extraction]):
     stage = Stage.Extract
 
-    @abstractmethod
-    async def update(self, source: EitherIterable[Doc]) -> tuple[int, int, int]: ...
-
-class TranslationBackend(StageBackend, ReaderMixin):
+class TranslationBackend(ETBase[Translation]):
     stage = Stage.Translate
-
-    @abstractmethod
-    async def update(self, source: EitherIterable[Doc]) -> tuple[int, int, int]: ...
 
 class SearchIndexBackend(StageBackend):
     stage = Stage.Index
     collections: ClassVar[Mapping[str, search.AbstractMappedCollection]]
+
+    @abstractmethod
+    async def stat(self, name: str, filt: Any) -> dict: ...
+
+    @abstractmethod
+    async def clean(self, name: str, filt: Any) -> int: ...
 
     @abstractmethod
     async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
@@ -140,31 +137,32 @@ class SearchIndexBackend(StageBackend):
 class MongoContextMixin(ContextMixin):
     engine = 'mongo'
     client: ClassVar[MongoClient]
-    _db = None
 
     async def db(self):
-        if self._db is None:
-            self._db = await self.client.get_database(self.context.get(self.client.dbname_key))
-            self.context[self.client.dbname_key] = self._db.name
-        return self._db
+        return await self.client.get_context_database(self.context)
 
 class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
     collection: ClassVar[MongoCollection]
-    _coll = None
     _indexes_created = False
 
+    def search(self, filter: Any, limit: Limit|None = None, offset: Offset = 0) -> Search[DM]:
+        filter = self.filter_class.model_validate(filter)
+        return Search(filter, limit=limit, offset=offset, context=self.context)
+
     @property
-    def model(self) -> type[DM]|None:
+    def model(self) -> type[DM]:
         return self.collection.data_model
 
     @property
     def client(self) -> MongoClient:
         return self.collection.client
 
+    @property
+    def filter_class(self) -> type[MongoFilterModel[DM]]:
+        return self.collection.filter_class
+
     async def get_collection(self):
-        if self._coll is None:
-            self._coll = (await self.db()).get_collection(self.collection.name)
-        return self._coll
+        return (await self.db()).get_collection(self.collection.name)
 
     async def create_indexes(self) -> None:
         if not self._indexes_created:
@@ -173,35 +171,30 @@ class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
             self._indexes_created = True
 
 class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineLog]):
-    collection = collections['pipelinelogs']
+    collection: ClassVar = collections['pipelinelogs']
 
     async def save(self, log):
-        doc = log.as_doc()
+        doc = log.model_dump(by_alias=True)
         await self.create_indexes()
         coll = await self.get_collection()
-        res = await coll.replace_one({'_id': doc['_id']}, doc, True)
+        await coll.replace_one({'_id': doc['_id']}, doc, True)
 
     async def fetch(self, id):
-        filter: FilterModel[PipelineLog] = filters[self.model](q={'_id': id})
-        db = await self.db()
-        res = Search(filter, 1, dbname=db.name)
-        if await res.count():
+        res = self.search(dict(id=[id]), limit=1)
+        try:
             return await anext(res.objs())
-        raise ValueError(f'Not found {id=}')
+        except StopAsyncIteration:
+            raise ValueError(f'Not found {id=}')
 
     async def fetch_latest(self):
-        async for log in await self.findall(limit=1):
-            return log
-        raise ValueError(f'No entries found')
-
-    async def findall(self, limit: Limit|None = None, offset: Offset = 0):
-        filter: FilterModel[PipelineLog] = filters[self.model]()
-        db = await self.db()
-        res = Search(filter, limit=limit, offset=offset, dbname=db.name)
-        return res.objs()
+        res = self.search(dict(order='-start'), limit=1)
+        try:
+            return await anext(res.objs())
+        except StopAsyncIteration:
+            raise ValueError(f'No entries found')
 
     async def update(self, source):
-        it = (x.as_doc() async for x in utils.as_aiter(source))
+        it = (x.model_dump(by_alias=True) async for x in utils.as_aiter(source))
         await self.create_indexes()
         return await update_collection(await self.get_collection(), it)
 
@@ -213,138 +206,101 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
         res = await coll.delete_many(filt)
         return res.deleted_count
 
-class PipelineLogFilter(FilterModel[PipelineLog], MongoQueryFilter):
-    result_model: ClassVar = PipelineLog
-    collection: ClassVar = MongoPipelineLog.collection
-    default_ordering: ClassVar = [('start', -1)]
-
-class MongoETBase(StageBackend, MongoContextCollectionMixin):
+class MongoETBase[DM: (Extraction, Translation)](ETBase[DM], MongoContextCollectionMixin[DM]):
     'Common base class for MongoExraction & MongoTranslation'
-    ordering: ClassVar[list[str]] = []
-    clean_keys: ClassVar[list[str]] = []
-    stat_clean_keys: ClassVar[list[str]] = []
-    lookup_id_key: ClassVar[str]
-
-    async def clean(self) -> None:
-        filt = self.get_filter()
-        coll = await self.get_collection()
-        res = await coll.delete_many(filt)
-        logger.debug(f'{filt=} {res=}')
 
     @asynccontextmanager
-    async def reader(self):
+    async def reader(self, filt: Any) -> AsyncGenerator[AsyncIterable[DM]]:
+        yield self.search(filt).objs()
+
+    async def stat(self, filt: Any) -> dict:
+        it = self.search(filt).objs()
+        it = (x.model_dump(by_alias=True) async for x in it)
+        it = utils.amap(self.clean_stat_doc, it)
+        return await docs_stat(it)
+
+    async def clean(self, filt: Any) -> int:
+        q = self.search(filt, limit=0).q
         coll = await self.get_collection()
-        it = coll.find(self.get_filter()).sort(self.ordering)
-        yield utils.amap(self.clean_doc, it)
-
-    async def stat(self):
-        async with self.reader() as reader:
-            it = utils.amap(self.clean_stat_doc, reader)
-            return await docs_stat(it)
-
-    def clean_doc(self, doc: Doc) -> Doc:
-        for key in self.clean_keys:
-            doc.pop(key, None)
-        return doc
-
-    def clean_stat_doc(self, doc: Doc) -> Doc:
-        for key in self.stat_clean_keys:
-            doc.pop(key, None)
-        return doc
-
-    def get_filter(self) -> Doc:
-        return dict(state=self.state)
-
-    @classmethod
-    async def doc_lookup(cls, id: str|UUID, context: Doc|None = None) -> tuple[StateCode, Doc]:
-        filt = {cls.lookup_id_key: UUID(str(id))}
-        self = cls('XX', context=context)
-        coll = await self.get_collection()
-        doc = await coll.find_one(filt)
-        if not doc:
-            raise ValueError(f'doc {id=} not found')
-        self.state = doc['state']
-        return doc['state'], self.clean_doc(doc)
-
-class MongoExtraction(MongoETBase, ExtractionBackend):
-    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
-    collection = collections['extractions']
-    ordering = ['_i']
-    clean_keys = ['_id', '_i', 'state']
-    stat_clean_keys = ['scrape_time', 'NAICS Codes']
-    lookup_id_key = '_id'
+        res = await coll.delete_many(q)
+        return res.deleted_count
 
     async def update(self, source):
-        await self.clean()
         await self.create_indexes()
         coll = await self.get_collection()
-        it = utils.aenumerate(source)
-        it = utils.amap(self._makedoc, it)
+        it = utils.amap(self.model.model_validate, source)
+        it = utils.amap(reversed, utils.aenumerate(it))
+        it = utils.astarmap(self.get_save_doc, it)
         return await update_collection(coll, it, self.get_replace_filter)
 
+    def get_save_doc(self, inst: DM, i: int) -> Doc:
+        return inst.model_dump(by_alias=True, exclude_unset=True, exclude_none=True)
+
     def get_replace_filter(self, doc: Doc) -> Doc:
-        return dict(_i=doc['_i'], state=self.state)
+        return {'_id': doc['_id']}
 
-    def _makedoc(self, item: tuple[int, Doc]) -> Doc:
-        i, doc = item
-        return dict(
-            state=self.state,
-            _i=i,
-            _id=self.state_seq_docid(self.state, i)) | doc
+    def clean_stat_doc(self, doc: Doc) -> Doc:
+        for field in self.model.stat_exclude_fields:
+            doc.pop(field, None)
+        return doc
 
-    @classmethod
-    def state_seq_docid(cls, state: StateCode, i: int) -> UUID:
-        return uuid5(cls.NS, f'{state}:seq:{int(i)}')
+class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
+    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
+    collection: ClassVar = collections['extractions']
 
-class MongoTranslation(MongoETBase, TranslationBackend):
-    collection = collections['translations']
-    ordering = ['id']
-    clean_keys = ['_id', 'row']
-    stat_clean_keys = ['row']
-    lookup_id_key = 'id'
+    @override
+    def get_save_doc(self, inst, i) -> Doc:
+        if not inst.id:
+            inst.i = i
+            inst.id = uuid5(self.NS, f'{inst.state}:seq:{int(i)}')
+        return super().get_save_doc(inst, i)
 
-    async def update(self, source):
-        await self.create_indexes()
-        coll = await self.get_collection()
-        return await update_collection(coll, source, self.get_replace_filter)
+class MongoTranslation(MongoETBase[Translation], TranslationBackend):
+    collection: ClassVar = collections['translations']
 
-    def get_replace_filter(self, entry: Doc) -> Doc:
-        return {'$or': [{'id': entry['id']}, {'values_id': entry['values_id']}]}
+    @override
+    def get_replace_filter(self, doc: Doc) -> Doc:
+        return {
+            '$or': [
+                super().get_replace_filter(doc),
+                {'values_id': doc['values_id']}]}
+
+class MongoExtractionFilter(ExtractionFilter, MongoFilterModel[Extraction]):
+    collection: ClassVar = collections['extractions']
+
+class MongoTranslationFilter(TranslationFilter, MongoFilterModel[Translation]):
+    collection: ClassVar = collections['translations']
+
+class MongoPipelineLogFilter(PipelineLogFilter, MongoFilterModel[PipelineLog]):
+    collection: ClassVar = collections['pipelinelogs']
+
+from .. import search
+
 
 class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
     collections: ClassVar[Mapping[str, AbstractMongoCollection]] = search.mapped_collections
     client = search.client
 
-    async def clean(self) -> None:
-        db = await self.db()
-        for name, collection in self.collections.items():
-            coll = db.get_collection(collection.name)
-            if name == 'naics':
-                coro = coll.drop()
-            elif name == 'artifacts':
-                coro = coll.delete_many(dict(path={'$regex': f'^{self.state.lower()}/'}))
-            elif name == 'companies':
-                coro = coll.delete_many({
-                    '$and': [
-                        {'states': self.state},
-                        {'states': {'$size': 1}}]})
-            elif name == 'states':
-                coro = coll.delete_one(dict(id=self.state))
-            else:
-                coro = coll.delete_many(dict(state=self.state))
-            await coro
-
-    async def stat(self):
-        collection = self.collections['reports']
+    async def clean(self, name, filt: Any) -> int:
+        collection = self.collections[name]
+        filter = collection.filter_class.model_validate(filt)
+        q = Search(filter, limit=0, context=self.context).q
         coll = (await self.db()).get_collection(collection.name)
-        it = coll.find(dict(state=self.state)).sort('id')
-        return await docs_stat(it)
+        res = await coll.delete_many(q)
+        return res.deleted_count
+
+    async def stat(self, name, filt: Any):
+        collection = self.collections[name]
+        filter = collection.filter_class.model_validate(filt)
+        srch = Search(filter, context=self.context)
+        return await docs_stat(await srch.docs())
 
     async def update(self, name, source):
         collection = self.collections[name]
         coll = (await self.db()).get_collection(collection.name)
         await coll.create_indexes(collection.indexes)
-        it = (inst.as_doc() async for inst in utils.as_aiter(source))
+        it = utils.as_aiter(source)
+        it = (x.model_dump(by_alias=True) async for x in it)
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
 
@@ -382,212 +338,3 @@ async def docs_stat(it: EitherIterable[Doc]) -> Doc:
         size=size,
         hash=h.hexdigest() if count else None)
 
-class BaseCommand(utils.AppCommand):
-
-    @classmethod
-    def add_arguments(cls, parser: utils.AP):
-        arg = parser.add_argument
-        arg('--etl-dbname', '-b',
-            default=None,
-            help=f'Alternate mongo etl db name')
-        super().add_arguments(parser)
-
-    def setup(self, opts):
-        super().setup(opts)
-        self.context = {client.dbname_key: opts.etl_dbname}
-
-class OneCommand(utils.BaseCommand):
-
-    class Base(BaseCommand):
-        label: ClassVar[str] = '?'
-
-        @classmethod
-        def add_arguments(cls, parser: utils.AP):
-            parser.add_argument('--yaml', action='store_true', help='Output yaml')
-            parser.add_argument('id', type=UUID, help=f'The {cls.label} doc id')
-            super().add_arguments(parser)
-
-        def printobj(self, obj: Any) -> None:
-            print(self.objtext(obj))
-
-        def objtext(self, obj: Any) -> str:
-            obj = self.jsondoc(obj)
-            if self.opts.yaml:
-                text = yaml.safe_dump(obj, sort_keys=False)
-            else:
-                text = json.dumps(obj, indent=2)
-            return text
-
-        @staticmethod
-        def jsondoc(obj: Any) -> Any:
-            return json.loads(json.dumps(obj, default=str))
-
-    class Trone(Base):
-        'Run translations for a single extraction doc, and print the result'
-        label = 'extraction'
-
-        async def run(self):
-            from ..translators import translators
-            state, doc = await MongoExtraction.doc_lookup(
-                self.opts.id,
-                context=self.context)
-            it = translators[state]().entries(doc)
-            it = utils.as_aiter(it)
-            res = [x async for x in it]
-            self.printobj(res)
-
-    class Ldone(Base):
-        'Run load operations for a single translation doc, and print the result'
-        label = 'translation'
-
-        async def run(self):
-            from .. import orm
-            from ..pipeline import Pipeline
-            state, doc = await MongoTranslation.doc_lookup(
-                self.opts.id,
-                context=self.context)
-            pipeline = Pipeline(state, context=self.context)
-            with orm.SessionLocal() as session:
-                pipeline.session = session
-                pipeline.artifact_cache = {}
-                report, save = pipeline.save(doc)
-                if report is not None:
-                    report, = orm.Report.map_reduce([(report, report, None, None)])
-                    report = report.model_dump(mode='json')
-                session.rollback()
-            self.printobj(dict(save=save, report=report))
-
-    commands = dict(trone=Trone, ldone=Ldone)
-
-class LogCommand(utils.BaseCommand):
-    'Pipeline log commands'
-
-    class Show(BaseCommand):
-        'Show pipeline log'
-        summary_methods: ClassVar[dict[str, str]] = {
-            'short': 'get_short',
-            'runs': 'get_runs',
-            'load-changes': 'get_load_changes',
-            'scrape-stats': 'get_scrape_stats'}
-        summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
-            'short': dict(key=0, value=1),
-            'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
-            'load-changes': ('state', 'created', 'updated'),
-            'scrape-stats': ('state', 'elapsed')}
-
-        @classmethod
-        def add_arguments(cls, parser):
-            arg = parser.add_argument
-            arg(
-                '--summary', '-s',
-                choices=cls.summary_methods,
-                default=None,
-                help=(f'The summary type to show'))
-            arg(
-                '--output', '-o',
-                choices=['json', 'yaml', 'table'],
-                help=f'Output format')
-            arg(
-                '--tablefmt',
-                default='simple',
-                help=f'Table format')
-            arg(
-                'id',
-                type=UUID,
-                nargs='?',
-                default=None,
-                help='The pipeline log ID, default latest')
-            super().add_arguments(parser)
-
-        def setup(self, opts):
-            super().setup(opts)
-            self.summary: str|None = self.opts.summary
-            self.output: str = self.opts.output
-            if not self.summary and self.output == 'table':
-                self.parser.error(f'Table output only supported with summary')
-            self.backend = MongoPipelineLog(context=self.context)
-
-        async def run(self):
-            if self.opts.id:
-                log = await self.backend.fetch(self.opts.id)
-            else:
-                log = await self.backend.fetch_latest()
-            if self.summary:
-                body = getattr(log, self.summary_methods[self.summary])()
-            else:
-                body = self.default_body(log)
-            if self.output == 'table':
-                text = self.output_table(body)
-            elif self.output == 'yaml':
-                text = yaml.safe_dump(body, sort_keys=False)
-            else:
-                text = json.dumps(body, indent=2)
-            print(text)
-
-        def output_table(self, body: Doc) -> str:
-            head = self.summary_fields[self.summary]
-            if not isinstance(head, Mapping):
-                head = dict(zip(head, head))
-            if isinstance(body, Mapping):
-                body = list(body.items())
-            from tabulate import tabulate
-            return tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
-
-        def default_body(self, log: PipelineLog) -> Doc:
-            body = log.model_dump(mode='json')
-            body['runs'] = len(body['runs'])
-            body['states'] = len(body['states'])
-            return body
-
-    class Copy(BaseCommand):
-        'Copy pipeline logs to another db'
-
-        @classmethod
-        def add_arguments(cls, parser):
-            parser.add_argument('dest', help='The destination db name')
-            super().add_arguments(parser)
-
-        def setup(self, opts):
-            super().setup(opts)
-            self.src = MongoPipelineLog(context=self.context)
-            self.dst = MongoPipelineLog(context={next(iter(self.context)): opts.dest})
-
-        async def run(self):
-            src_db = await self.src.db()
-            dst_db = await self.dst.db()
-            if src_db.name == dst_db.name:
-                raise ValueError(f'Source and dest db cannot be the same')
-            logger.info(f'Copying from {src_db.name} to {dst_db.name}')
-            res = await self.dst.update(await self.src.findall())
-            counts = dict(zip(('count', 'created', 'updated'), res))
-            print(counts)
-
-    class Prune(BaseCommand):
-        'Prune old pipeline logs'
-
-        @classmethod
-        def add_arguments(cls, parser):
-            parser.add_argument(
-                '--maxage', '-m',
-                type=utils.deltaopt('days'),
-                default='30d',
-                help='Max age, default 30d')
-            super().add_arguments(parser)
-
-        def setup(self, opts):
-            super().setup(opts)
-            self.backend = MongoPipelineLog(context=self.context)
-
-        async def run(self):
-            res = await self.backend.prune(self.opts.maxage)
-            counts = dict(deleted=res)
-            print(counts)
-
-    commands = dict(show=Show, copy=Copy, prune=Prune)
-
-class Command(utils.BaseCommand):
-    'Misc ETL pipeline commands'
-    commands = dict(
-        log=LogCommand,
-        **OneCommand.commands,
-        control=ClientControlCommand(client))

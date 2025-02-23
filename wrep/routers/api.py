@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID, uuid5
 
 from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
                      Response, status)
-from fastapi.responses import FileResponse
 from pydantic import Field
 from starlette.datastructures import URL
 
 from .. import search, settings, utils
+from ..backends.mongo import Search, filters
 from ..models import *
 from .common import *
 
 logger = utils.get_logger('api')
 router = APIRouter()
-
-artifacts_data = APIRouter()
-@artifacts_data.get('/artifacts/{id}/data')
-async def artifact_data(id: UUID, disposition: Literal['inline', 'download'] = 'download') -> FileResponse:
-    artifact = await retrieve404(ArtifactDetail, id=[id])
-    return FileResponse(
-        settings.ARTIFACTS_DIR/artifact.path,
-        media_type=artifact.media_type,
-        filename=artifact.name,
-        content_disposition_type=disposition)
 
 def search_opts(
     order: Annotated[
@@ -127,8 +117,8 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     if req.method == 'HEAD':
         opts['limit'] = 0
         rep.status_code = status.HTTP_204_NO_CONTENT
-    filter = search.filters[model].model_validate(params)
-    result = search.Search(filter, **opts)
+    filter = filters[model].model_validate(params)
+    result = Search(filter, **opts)
     total = await result.count()
     rep.headers['count'] = str(total)
     if (nexturl := get_next_url(req.url, total, opts['offset'], limit)):
@@ -138,8 +128,8 @@ async def search_response[DM: DataModel](req: Request, rep: Response, model: typ
     return await result.tolist()
 
 async def retrieve404[DM: DataModel](model: type[DM], **params) -> DM:
-    filter = search.filters[model].model_validate(params)
-    result = search.Search(filter, limit=1)
+    filter = filters[model].model_validate(params)
+    result = Search(filter, limit=1)
     if await result.count():
         return await anext(result.objs())
     raise HTTPException(status.HTTP_404_NOT_FOUND)

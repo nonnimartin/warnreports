@@ -5,16 +5,15 @@ import functools
 import operator
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from threading import Thread
 from types import MappingProxyType as MapProxy
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
-from . import SaveType, Stage, orm, settings, utils
+from . import SaveType, Stage, orm, utils
 from .backends.etl import *
 from .models import *
 from .orm import *
@@ -22,23 +21,10 @@ from .ref import normls
 
 if TYPE_CHECKING:
     from .scrapers import Scraper
-    from .translators import Translator
 
 logger = utils.get_logger('pipeline')
 
 class Pipeline:
-    fields: ClassVar[tuple[str, ...]] = (
-        'id',
-        'company',
-        'location',
-        'reported',
-        'starting',
-        'employees',
-        'action',
-        'url',
-        'naics',
-        'industry',
-        'artifacts')
     required_fields: ClassVar[tuple[str, ...]] = (
         'company',
         'reported')
@@ -51,10 +37,6 @@ class Pipeline:
         'action',
         'url',
         'company_norm_id')
-    json_types: ClassVar[Mapping[str, Callable[[Any], Any]]] = MapProxy({
-        'id': uuid.UUID,
-        'reported': datetime.fromisoformat,
-        'starting': datetime.fromisoformat})
     BACKENDS: ClassVar[Mapping[Stage, type[StageBackend]]] = MapProxy(
         StageBackend.registry['mongo'])
 
@@ -72,20 +54,13 @@ class Pipeline:
         from .scrapers import scrapers
         return scrapers[self.state](opts=self.opts)
 
-    @utils.lazyprop
-    def translator(self) -> Translator:
-        from .translators import translators
-        return translators[self.state]()
-
     def backend[B: StageBackend](self, stage: Stage|type[B]) -> StageBackend|B:
         if isinstance(stage, type):
             stage = stage.stage
         try:
             backend = self.backends[stage]
         except KeyError:
-            backend = self.BACKENDS[stage](
-                self.state,
-                context=self.context)
+            backend = self.BACKENDS[stage](context=self.context)
             self.backends[stage] = backend
         return backend
 
@@ -98,10 +73,19 @@ class Pipeline:
 
     async def stat(self, stage: Stage) -> dict:
         stage = Stage(stage)
-        if stage in self.BACKENDS:
-            return await self.backend(stage).stat()
         if stage is stage.Scrape:
             return await self.scraper.stat()
+        if stage is stage.Extract:
+            return await self.backend(ExtractionBackend).stat(dict(state=[self.state]))
+        if stage is stage.Translate:
+            return await self.backend(TranslationBackend).stat(dict(state=[self.state]))
+        if stage is stage.Index:
+            be = self.backend(SearchIndexBackend)
+            coros = dict(
+                reports=be.stat('reports', dict(state=[self.state])),
+                artifacts=be.stat('artifacts', dict(state=[self.state])),
+                companies=be.stat('companies', dict(state=[self.state])))
+            return {k: await v for k, v in coros.items()}
         if stage is stage.Load:
             stat: dict[str, int] = {}
             backend = self.backend(SearchIndexBackend)
@@ -121,12 +105,25 @@ class Pipeline:
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'{self.state}:{stage}:clean')
-        if stage in self.BACKENDS:
-            await self.backend(stage).clean()
-            if stage is stage.Extract:
-                await self.scraper.extract_clean()
-        elif stage is stage.Scrape:
+        if stage is stage.Scrape:
             await self.scraper.clean()
+        elif stage is stage.Extract:
+            await self.backend(ExtractionBackend).clean(dict(state=[self.state]))
+            await self.scraper.extract_clean()
+        elif stage is stage.Translate:
+            await self.backend(TranslationBackend).clean(dict(state=[self.state]))
+        elif stage is stage.Index:
+            be = self.backend(SearchIndexBackend)
+            coros = [
+                be.clean('reports', dict(state=[self.state])),
+                be.clean('artifacts', dict(state=[self.state])),
+                be.clean('companies', dict(
+                    state=[self.state],
+                    states_count_min=1,
+                    states_count_max=1)),
+                be.clean('states', dict(id=[self.state]))]
+            for coro in coros:
+                await coro
         elif stage is stage.Load:
             filters = self.get_orm_clean_filters()
             stmts = (
@@ -135,14 +132,14 @@ class Pipeline:
             with ensure_session(self.session) as session:
                 for stmt in stmts:
                     session.execute(stmt)
-                if not self.session:
+                if not self.session and not self.opts.rollback:
                     session.commit()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {prev}')
+        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         self.scraper.metrics.clear()
@@ -153,7 +150,7 @@ class Pipeline:
             metrics.update(artifacts=dict(self.scraper.artifacts.metrics))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        res = dict(nochange=nochange, prev=prev, cur=cur)
+        res = dict(nochange=nochange, prev=statlog(prev), cur=statlog(cur))
         if metrics:
             res.update(metrics=metrics)
         return res
@@ -162,51 +159,63 @@ class Pipeline:
         stage = Stage.Extract
         backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {prev}')
+        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         async with utils.awith(self.scraper.extract()) as source:
-            count = (await backend.update(source))[0]
+            it = utils.as_aiter(source)
+            it = (dict(state=self.state)|x async for x in it)
+            count, created, updated = await backend.update(it)
+            deleted = await backend.clean(dict(state=[self.state], i_min=count+1))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        return dict(nochange=nochange, count=count, prev=prev, cur=cur)
+        counts = dict(count=count, created=created, updated=updated, deleted=deleted)
+        return dict(nochange=nochange) | counts | dict(prev=statlog(prev), cur=statlog(cur))
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
         backend = self.backend(TranslationBackend)
         source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {prev}')
+        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
-        async with source.reader() as reader:
+        from .translators import TranslationFactory
+        async with source.reader(dict(state=[self.state])) as reader:
             with SessionLocal() as session:
-                self.translator.session = session
-                it = utils.amap(self.translator.entries, reader)
+                translator = TranslationFactory(session)
+                it = (x.model_dump(mode='json') async for x in reader)
+                it = utils.amap(translator.translate, it)
                 it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
-            self.translator.session = None
+                if self.opts.rollback:
+                    session.rollback()
+                else:
+                    session.commit()
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         counts = dict(count=count, created=created, updated=updated)
-        return dict(nochange=nochange) | counts | dict(prev=prev, cur=cur)
+        return dict(nochange=nochange) | counts | dict(prev=statlog(prev), cur=statlog(cur))
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
         source = self.backend(TranslationBackend)
-        async with source.reader() as reader:
+        async with source.reader(dict(state=[self.state])) as reader:
             with SessionLocal() as session:
                 self.session = session
                 if clean:
                     await self.clean(Stage.Load)
-                async for entry in reader:
-                    counts[self.save(entry)[1]] += 1
+                async for translation in reader:
+                    counts[self.save(translation)[1]] += 1
                 stat = session.get(StateStat, self.state)
                 stat = stat or StateStat(id=self.state)
                 stat.self_update(session)
                 session.add(stat)
-                session.commit()
+                if self.opts.rollback:
+                    session.rollback()
+                else:
+                    session.commit()
             self.session = None
         del self.artifact_cache
         count = sum(counts.values())
@@ -238,11 +247,9 @@ class Pipeline:
             totals['nochange'] += count - created - updated
         return dict(nochange=nochange, counts=counts, totals=dict(totals))
 
-    def save(self, entry: dict) -> tuple[Report|None, SaveType]:
+    def save(self, translation: Translation) -> tuple[Report|None, SaveType]:
         save = SaveType.Nochange
-        record = {
-            field: self.from_json(field, entry[field])
-            for field in self.fields if field in entry}
+        record = translation.model_dump(exclude_unset=True)
         if not all(map(record.get, self.required_fields)):
             return None, save.Skip
         uid = record.pop('id')
@@ -275,6 +282,8 @@ class Pipeline:
                 self.session.add(report)
             elif company_save is not save.Nochange:
                 save = save.Update
+        if save is not save.Nochange:
+            logger.debug(f'{save=} {report.id}')
         return report, save
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
@@ -388,14 +397,11 @@ class Pipeline:
                 record[field] = value[:limit]
         return trims
 
-    @classmethod
-    def from_json(cls, field: str, value: Any) -> Any:
-        if isinstance(value, str) and field in cls.json_types:
-            value = cls.json_types[field](value)
-        if isinstance(value, datetime) and not value.tzinfo:
-            value = value.replace(tzinfo=timezone.utc)
-        return value
-   
+def statlog(stat: dict):
+    stat = dict(stat)
+    stat.pop('hash', None)
+    return stat
+
 class PipelineRunner:
     GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({
         Stage.Scrape: 0,
@@ -548,6 +554,7 @@ class PipelineRunner:
             run.failed = True
             self.log.errors.append(run.error)
             if self.opts.fail:
+                logger.error(f'{run.error}')
                 raise
             logger.exception(
                 f'{state}:{stage}:fail error={run.error.model_dump(mode='json')}')
@@ -593,157 +600,3 @@ class PipelineRunner:
                 if run.result:
                     if run.result.get('nochange'):
                         return 'No change'
-
-
-class Command(utils.AppCommand):
-    description = """
-    Run pipeline stages.
-    
-    Basic Examples
-    --------------
-
-    Run single stage for all states:
-    $ {prog} scrape
-
-    Run single stage for some states:
-    $ {prog} extract CA NY
-
-    Run all stages for some states:
-    $ {prog} all FL OH
-
-    Run all stages for all states:
-    $ {prog} all
-
-    Selecting Stages
-    -----------------
-
-    Available stages: """ + ', '.join(Stage) + """
-
-    Specify multiple stages with a comma:
-    $ {prog} scrape,extract [state ...]
-
-    Using first letter with comma:
-    $ {prog} s,e,t [state ...]
-
-    With capital first letters, separator is unnecessary:
-    $ {prog} SETL [state ...]
-
-    Use keyword "all" for all stages:
-    $ {prog} all [state ...]
-
-    Available States
-    ----------------
-    {states}"""
-
-    usage = '{prog} [OPTIONS] <stages> [state ...]'
-
-
-    @classmethod
-    def parser_fmtargs(cls, parser):
-        from .translators import translators
-        return super().parser_fmtargs(parser) | dict(
-            states=' '.join(sorted(translators)))
-
-    @classmethod
-    def add_arguments(cls, parser):
-        arg = parser.add_argument
-        arg('stages',
-            metavar='<stages>',
-            type=cls.stages_opt,
-            help='Stage name(s) (various formats) or "all"')
-        arg('states',
-            nargs='*',
-            metavar='state',
-            help=(
-                'Optionally specify states as additional arguments. '
-                'If not specified, include all states'))
-        arg('--clean', '-c',
-            action='store_true',
-            help='Clean each stage before running')
-        arg('--incremental', '-i',
-            action='store_true',
-            help=(
-                'If a stage indicates no change after running, '
-                'skip subsequent stages for the state'))
-        arg('--concurrent', '-t',
-            action='store_true',
-            help=(
-                'Use multiple async workers when applicable. '
-                'The load stage is always synchronized with one worker'))
-        arg('--nofail', '-n',
-            action='store_false',
-            dest='fail',
-            help=(
-                'Do not fail on error. Instead, log an exception, '
-                'and skip subsequent stages for the state'))
-        arg('--clean-only', '-x',
-            action='store_true',
-            help='Only clean, do not run')
-        arg('--stat-only', '-s',
-            action='store_true',
-            help='Only show stats, do not run')
-        arg('--search-dbname', '-d',
-            default=None,
-            help=f'Alternate mongo search db name')
-        arg('--etl-dbname', '-b',
-            default=None,
-            help=f'Alternate mongo etl db name')
-        arg('--max-workers', '-w',
-            type=int,
-            metavar='<n>',
-            default=settings.ETL_DEFAULT_WORKERS,
-            help=(
-                'Max workers, applicable only when --concurrent is specified, '
-                f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
-        arg('--max-threads', '-T',
-            type=int,
-            metavar='<n>',
-            default=settings.ETL_DEFAULT_THREADS,
-            help=(
-                'Max threads, applicable only when --concurrent is specified, '
-                f'default ETL_DEFAULT_THREADS ({settings.ETL_DEFAULT_THREADS})'))
-        arg('--selenium-max-procs', '-E',
-            type=int,
-            metavar='<n>',
-            default=settings.SELENIUM_MAX_PROCS,
-            help=(
-                'Max number of concurrent web drivers if applicable, '
-                f'default SELENIUM_MAX_PROCS ({settings.SELENIUM_MAX_PROCS})'))
-        arg('--eager', '-e',
-            action='store_false',
-            dest='lazy',
-            help='Use eager loading of SQL result sets. Uses more memory')
-        arg('--idfile',
-            default=None,
-            type=Path,
-            help='Write the pipeline log ID to the given file')
-        super().add_arguments(parser)
-
-    def setup(self, opts):
-        super().setup(opts)
-        from . import search
-        from .backends import etl
-        from .translators import translators
-        opts.states = opts.states or sorted(translators)
-        runner_opts = dict(vars(opts))
-        self.idfile: Path|None = runner_opts.pop('idfile')
-        runner_opts['context'] = {
-            etl.client.dbname_key: runner_opts.pop('etl_dbname'),
-            search.client.dbname_key: runner_opts.pop('search_dbname')}
-        self.runner = PipelineRunner(**runner_opts)
-
-    async def run(self):
-        if self.idfile:
-            logger.info(f'Writing pipeline log ID to {self.idfile}')
-            self.idfile.write_text(str(self.runner.log.id))
-        await self.runner.run()
-
-    @staticmethod
-    def stages_opt(value: str) -> list[Stage]:
-        if value == 'all':
-            return list(Stage)
-        value = value.replace(',', ' ')
-        for stage in Stage:
-            value = value.replace(stage[0].upper(), f' {stage.value} ')
-        trans = {stage[0]: stage for stage in Stage}
-        return [Stage(trans.get(value, value)) for value in value.split()]
