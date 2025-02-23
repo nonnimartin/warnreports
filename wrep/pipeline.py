@@ -118,7 +118,7 @@ class Pipeline:
             with ensure_session(self.session) as session:
                 for stmt in stmts:
                     session.execute(stmt)
-                if not self.session:
+                if not self.session and not self.opts.rollback:
                     session.commit()
         logger.info(f'{self.state}:{stage}:clean:complete')
 
@@ -159,7 +159,9 @@ class Pipeline:
         backend = self.backend(TranslationBackend)
         source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {prev}')
+        prevlog = dict(prev)
+        prevlog.pop('hash', None)
+        logger.info(f'{self.state}:{stage}:stat {prevlog}')
         if clean:
             await self.clean(stage)
         async with source.reader() as reader:
@@ -172,8 +174,9 @@ class Pipeline:
             self.translator.session = None
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
+        cur.pop('hash', None)
         counts = dict(count=count, created=created, updated=updated)
-        return dict(nochange=nochange) | counts | dict(prev=prev, cur=cur)
+        return dict(nochange=nochange) | counts | dict(prev=prevlog, cur=cur)
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
@@ -190,7 +193,10 @@ class Pipeline:
                 stat = stat or StateStat(id=self.state)
                 stat.self_update(session)
                 session.add(stat)
-                session.commit()
+                if self.opts.rollback:
+                    session.rollback()
+                else:
+                    session.commit()
             self.session = None
         del self.artifact_cache
         count = sum(counts.values())
@@ -524,6 +530,7 @@ class PipelineRunner:
             run.failed = True
             self.log.errors.append(run.error)
             if self.opts.fail:
+                logger.error(f'{run.error}')
                 raise
             logger.exception(
                 f'{state}:{stage}:fail error={run.error.model_dump(mode='json')}')

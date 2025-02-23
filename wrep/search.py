@@ -46,7 +46,7 @@ class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
             it = self.orm_model.map_reduce_exec(session, lazy=lazy)
             if self.data_model is not self.orm_model.data_model:
                 it = map(self.data_model.model_validate, it)
-            it = map(self.data_model.as_doc, it)
+            it = (x.model_dump(by_alias=True) for x in it)
             await db.get_collection(self.name).insert_many(it)
         stat = await self.stats(db=db)
         logger.info(f'Built {self.name} {stat=}')
@@ -133,22 +133,5 @@ class MongoCompaniesFilter(CompaniesFilter, MongoFilterModel[CompanyDetail]):
 class MongoNaicsFilter(NaicsFilter, MongoFilterModel[NaicsDetail]):
     collection: ClassVar = mapped_collections['naics']
 
-    def get_filters(self):
-        if self.includes:
-            incs = set()
-            for code in self.includes:
-                s = str(code)
-                for i in range(2, min(6, len(s))):
-                    incs.add(int(s[:i]))
-                incs.add(code)
-            yield {'id': {'$in': sorted(incs)}}
-
 class MongoArtifactsFilter(ArtifactsFilter, MongoFilterModel[ArtifactDetail]):
     collection: ClassVar = mapped_collections['artifacts']
-
-    def get_filters(self):
-        if self.state:
-            it = (re.escape(x.lower()[:2]) for x in self.state)
-            pat = '|'.join(filter(None, dict.fromkeys(it))) or '_'
-            pat = f'^({pat})/.*'
-            yield {'path': {'$regex': re.compile(pat)}}

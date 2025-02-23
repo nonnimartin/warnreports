@@ -49,16 +49,20 @@ class Fi:
     oper: str
     alias: str|None = None
 
+    def __post_init__(self):
+        if self.oper == '$search':
+            self.alias = '$text'
+
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
     return dt and dt.replace(hour=0, tzinfo=tzinfo)
 
+def utcreplace(dt: datetime|None) -> datetime|None:
+    if dt and not dt.tzinfo:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
 class DataModel(DataModel):
-
-    def as_doc(self, **kw) -> dict[str, Any]:
-        return self.model_dump(by_alias=True, **kw)
-
-    def as_jdoc(self, **kw) -> dict[str, Any]:
-        return self.as_doc(mode='json', **kw)
+    pass
 
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
@@ -109,6 +113,7 @@ class ArtifactData(DataModel):
 
 class ArtifactDetail(ArtifactData):
     path: str
+    state: StateCode
     reports_count: NonNegativeInt = 0
     created: datetime
     modified: datetime
@@ -198,12 +203,7 @@ class Translation(DataModel):
         revalidate_instances='always')
 
     tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
-
-    @field_serializer('first_scraped')
-    def utcreplace(self, dt: datetime|None) -> datetime|None:
-        if dt and not dt.tzinfo:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+    utcreplace = field_serializer('first_scraped')(utcreplace)
 
     @cached_property
     def ns(self):
@@ -256,6 +256,7 @@ class ScraperOpts(DataModel):
 
 class PipelineOpts(ScraperOpts):
     lazy: bool = True
+    rollback: bool = False
 
 class PipelineLog(DataModel):
     id: UUID = Field(alias='_id')
@@ -362,6 +363,8 @@ class FilterModel[DM: DataModel](DataModel):
             if allowed is None or field in allowed:
                 yield field, dir_
 
+    def __init_subclass__(cls, **kwargs):
+        return super().__init_subclass__(**kwargs)
 
 class ReportsFilter(FilterModel[ReportData]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
@@ -433,7 +436,7 @@ class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    state: list[StateCode]|None = None
+    state: Annotated[list[StateCode]|None, Fi('$in')] = None
     sha1: Annotated[str|None, Fi('$eq')] = None
     name: Annotated[str|None, Fi('$eq')] = None
     order_fields: ClassVar = {'name'}

@@ -186,17 +186,18 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
         for name, value in data.items():
             field = self.model_fields[name]
             if (meta := field.metadata) and isinstance(anno := meta[0], Fi):
-                if anno.alias is None:
-                    anno.alias = name
+                alias = anno.alias
+                if alias is None:
+                    alias = name
                 if anno.oper == '$naics':
-                    prepped.append(get_naics_filter(value, anno.alias))
+                    prepped.append(get_naics_filter(value, alias))
                     continue
-                if anno.oper == '$search':
-                    anno.alias = '$text'
-                elif anno.oper == '$contains':
-                    anno.oper = '$regex'
+                if anno.oper == '$contains':
+                    oper = '$regex'
                     value = wc_contains(value)
-                prepped.append({anno.alias: {anno.oper: value}})
+                else:
+                    oper = anno.oper
+                prepped.append({alias: {oper: value}})
         if prepped:
             result['$and'] = prepped
         return result
@@ -239,6 +240,7 @@ class Search[DM: DataModel]:
             self.orders = list(self.filter.get_ordering())
             if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
                 self.orders.append(('_id', 1))
+
     async def db(self) -> AsyncIOMotorDatabase:
         return await self.client.get_context_database(self.context)
 

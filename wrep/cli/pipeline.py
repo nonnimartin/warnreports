@@ -119,6 +119,9 @@ class Command(AppCommand):
             action='store_false',
             dest='lazy',
             help='Use eager loading of SQL result sets. Uses more memory')
+        arg('--rollback',
+            action='store_true',
+            help='Rollback SQL transaction on load stage')
         arg('--idfile',
             default=None,
             type=Path,

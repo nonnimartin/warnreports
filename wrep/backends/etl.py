@@ -174,7 +174,7 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
     collection: ClassVar = collections['pipelinelogs']
 
     async def save(self, log):
-        doc = log.as_doc()
+        doc = log.model_dump(by_alias=True)
         await self.create_indexes()
         coll = await self.get_collection()
         await coll.replace_one({'_id': doc['_id']}, doc, True)
@@ -196,7 +196,7 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
         return res.objs()
 
     async def update(self, source):
-        it = (x.as_doc() async for x in utils.as_aiter(source))
+        it = (x.model_dump(by_alias=True) async for x in utils.as_aiter(source))
         await self.create_indexes()
         return await update_collection(await self.get_collection(), it)
 
@@ -220,7 +220,7 @@ class MongoETBase[DM: (Extraction, Translation)](StageBackend, MongoContextColle
 
     async def stat(self):
         async with self.reader() as reader:
-            it = utils.amap(self.model.as_doc, reader)
+            it = (x.model_dump(by_alias=True) async for x in reader)
             it = utils.amap(self.clean_stat_doc, it)
             return await docs_stat(it)
 
@@ -325,7 +325,8 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
         collection = self.collections[name]
         coll = (await self.db()).get_collection(collection.name)
         await coll.create_indexes(collection.indexes)
-        it = (inst.as_doc() async for inst in utils.as_aiter(source))
+        it = utils.as_aiter(source)
+        it = (x.model_dump(by_alias=True) async for x in it)
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
 

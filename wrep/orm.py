@@ -24,8 +24,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 
 from . import settings, utils
-from .models import (ArtifactData, ArtifactDetail, CompanyDetail, DataModel,
-                     NaicsData, NaicsDetail, ReportData, StateDetail)
+from .models import *
 from .ref import normls
 
 __all__ = [
@@ -134,7 +133,7 @@ ArtifactReport = Table(
     Column('artifact_id', ForeignKey('artifact.id', ondelete='CASCADE'), primary_key=True),
     Column('report_id', ForeignKey('report.id', ondelete='CASCADE'), primary_key=True))
 
-nowopts = dict(server_default=func.now(), default=utils.now)
+nowopts = dict(server_default=func.now(), default=utils.utcnow)
 
 class Report(MapReduceBase[ReportData, ReportRowType]):
     NS: ClassVar[uuid.UUID] = ReportData.NS
@@ -174,7 +173,7 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
         return inst
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         naics, artifact = row[2:]
         if naics and naics.id not in memo['naics']:
             inst.naics.append(NaicsData.model_validate(naics))
@@ -184,7 +183,7 @@ class Report(MapReduceBase[ReportData, ReportRowType]):
             memo['artifacts'].add(artifact.id)
 
     @classmethod
-    def reduce_finish(cls, inst, memo):
+    def reduce_finish(cls, inst, memo) -> None:
         inst.naics.sort(key=lambda x: str(x.id))
 
 class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
@@ -192,7 +191,7 @@ class StateStat(MapReduceBase[StateDetail, StateStatRowType]):
     last_reported: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     reports_count: Mapped[int] = mapped_column(Integer(), default=0)
 
-    def self_update(self, session: Session):
+    def self_update(self, session: Session) -> None:
         cond = Report.state == self.id
         stmt = select(func.count('*')).where(cond)
         self.reports_count = session.execute(stmt).scalar_one()
@@ -234,7 +233,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
         return row[0].name_norm_id == inst.id
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         company, report, naics = row
         if company.name_canon not in memo['canon']:
             inst.name = next(iter(
@@ -264,7 +263,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
             memo['naics'].add(naics.id)
 
     @classmethod
-    def reduce_finish(cls, inst, memo):
+    def reduce_finish(cls, inst, memo) -> None:
         inst.aliases.sort(key=lambda x: (x.lower(), x))
         inst.naics.sort(key=lambda x: str(x.id))
         inst.states.sort()
@@ -312,7 +311,7 @@ class Naics(MapReduceBase[NaicsDetail, NaicsRowType]):
         return stmt
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         report = row[1]
         if report and report.id not in memo['reports']:
             inst.reports_count += 1
@@ -350,6 +349,10 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
     def name(self) -> str:
         return Path(self.path).name
 
+    @property
+    def state(self) -> StateCode:
+        return self.path[:2].upper()
+
     @staticmethod
     def path_to_id(value: str) -> uuid.UUID:
         return uuid.uuid5(settings.NAMESPACE, f'artifact:{value}')
@@ -365,7 +368,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
         return stmt
 
     @classmethod
-    def reduce_row(cls, inst, row, memo):
+    def reduce_row(cls, inst, row, memo) -> None:
         if (report := row[1]) and report.id not in memo['reports']:
             inst.reports_count += 1
             memo['reports'].add(report.id)
