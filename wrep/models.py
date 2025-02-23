@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import datetime, timezone
-from functools import cached_property
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
@@ -51,6 +50,8 @@ class Fi:
 
     def __post_init__(self):
         if self.oper == '$search':
+            if self.alias:
+                raise ValueError(f'alias {self.alias} for oper {self.oper}')
             self.alias = '$text'
 
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
@@ -181,8 +182,8 @@ class Extraction(DataModel):
 
 class Translation(DataModel):
     id: UUID = Field(None, alias='_id')
-    values_id: UUID = None
-    state: StateCode = None
+    values_id: UUID = Field(frozen=True)
+    state: StateCode = Field(frozen=True)
     company: CompanyName|None = None
     reported: datetime|None = None
     location: str|None = None
@@ -195,7 +196,7 @@ class Translation(DataModel):
     report_id: str|None = None
     naics: list[NaicsId]|None = None
     artifacts: dict[str, UrlType]|None = None
-    extraction: Extraction = None
+    extraction: Extraction = Field(frozen=True)
     stat_exclude_fields: ClassVar = ('data',)
     model_config = ConfigDict(
         populate_by_name=True,
@@ -206,10 +207,6 @@ class Translation(DataModel):
     tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
     utcreplace = field_serializer('first_scraped')(utcreplace)
 
-    @cached_property
-    def ns(self):
-        return uuid5(ReportData.NS, self.state)
-    
 class PipelineRunDetail(DataModel):
     state: StateCode
     stage: Stage
