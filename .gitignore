@@ -8,3 +8,5 @@ __pycache__
 /build
 issues
 lib/bootstrap
+node_modules
+/frontend
