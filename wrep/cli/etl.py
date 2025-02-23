@@ -58,7 +58,7 @@ class OneCommand(BaseCommand):
             return text
 
         async def get_inst(self):
-            srch = self.backend.search(dict(id=[self.opts.id]))
+            srch = self.backend.search(dict(id=[self.opts.id]), limit=1)
             try:
                 return await anext(srch.objs())
             except StopAsyncIteration:
@@ -71,14 +71,20 @@ class OneCommand(BaseCommand):
 
         async def run(self):
             inst = await self.get_inst()
-            data = inst.model_dump(exclude_unset=True, exclude_none=True)
+            data = inst.model_dump()
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)
                 objs = list(factory.translate(data))
-                docs = [
-                    x.model_dump(mode='json', exclude_unset=True, exclude_none=True)
-                    for x in objs]
-                self.printobj(docs)
+                res = dict(
+                    translations=[
+                        x.model_dump(
+                            mode='json',
+                            exclude_unset=True,
+                            exclude_none=True,
+                            exclude=['extraction'])
+                        for x in objs],
+                    extraction=inst.model_dump(mode='json'))
+                self.printobj(res)
                 if self.opts.save:
                     backend = etl.MongoTranslation(context=self.context)
                     await backend.update(objs)
@@ -92,7 +98,7 @@ class OneCommand(BaseCommand):
             except ValueError:
                 logger.warning(f'Extraction {self.opts.id} not found, checking translations')
             backend = etl.MongoTranslation(context=self.context)
-            srch = backend.search(dict(id=[self.opts.id]))
+            srch = backend.search(dict(id=[self.opts.id]), limit=1)
             try:
                 translation = await anext(srch.objs())
             except StopAsyncIteration:
@@ -116,7 +122,17 @@ class OneCommand(BaseCommand):
                     row = (report, report, None, None)
                     report, = orm.Report.map_reduce([row])
                     report = report.model_dump(mode='json', exclude_unset=True)
-                self.printobj(dict(save=save, report=report))
+                res = dict(save=save, report=report)
+                res.update(
+                    translation=inst.model_dump(
+                        mode='json',
+                        exclude_none=True,
+                        exclude=['extraction']),
+                    extraction=inst.extraction.model_dump(
+                        mode='json',
+
+                    ))
+                self.printobj(res)
                 if self.opts.save and save is not save.Nochange:
                     session.commit()
                 else:

@@ -6,8 +6,10 @@
 **/*.db*
 **/*.pyc
 **/*.sqlite*
+**/node_modules
 build
 Dockerfile
 extra
 lib/bootstrap
 warn
+frontend
