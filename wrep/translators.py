@@ -301,6 +301,7 @@ REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
 
 class AK(Translator):
     default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
+    values_hash_exclude = ['artifacts_json']
     fieldsmap = dict(
         company=['Company'],
         reported=['Notice Date'],
@@ -308,11 +309,11 @@ class AK(Translator):
         employees=['Employees Affected'],
         starting=['Layoff Date'],
         action=['Notes'],
-        url=['url'],
+        url=[],
         industry=[],
         report_id=['url'],
         naics=[],
-        artifacts=[])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         starting=[
             ('June-August 2023', '2023-06-01'),

@@ -144,25 +144,51 @@ class AK(Scraper):
 
     async def scrape(self) -> None:
         await self.download('latest.html', self.latest_url)
+        index = self.build_index()
+        for url, key in index.items():
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
 
     async def clean(self):
-        self.cache.delete('latest.html')
+        self.cache.delete('latest.html', 'index.json')
 
     def statobjs(self):
         if (file := self.cache/'latest.html').exists():
             yield bs(file).find('table')
+        yield self.cache/'index.json'
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         doc = bs(self.cache/'latest.html')
         it = self.read_table(doc.find('table'))
         headers = next(it)
+        headers.append('artifacts_json')
         yield (dict(zip(headers, values)) for values in it)
 
+    def build_index(self) -> dict[str, str]:
+        'Mapping from url to cache key'
+        items: deque[tuple[str, str]] = deque()
+        table = bs(self.cache/'latest.html').find('table')
+        for a in table.find_all('a'):
+            href = a.get('href')
+            if href and href.endswith('.pdf'):
+                url = self.absurl(href)
+                urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
+                filename = clean_filename(f'{Path(href).stem}-{urlid}.pdf')
+                key = f'records/{filename}'
+                items.append((url, key))
+        index = dict(sorted(items))
+        self.cache.write_json('index.json', index, indent=2)
+        return index
+
     def read_table(self, table: Soup) -> Iterator[list[str]]:
+        index: dict[str, str] = self.cache.read_json('index.json')
         for tr in table.find_all('tr'):
-            values = [*self.read_tr(tr), self.parse_url(tr)]
+            url = self.parse_url(tr)
+            values = [*self.read_tr(tr), url]
             if len(values) > 2 and values[0]:
+                if url in index:
+                    values.append(json.dumps({index[url]: url}))
                 yield values
 
     def read_tr(self, tr: Soup) -> Iterator[str]:
