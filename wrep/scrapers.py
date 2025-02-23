@@ -1269,7 +1269,10 @@ class NY(Scraper):
 class OH(Scraper):
     base_url = 'https://jfs.ohio.gov'
     archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
-    latest_url = '/wps/portal/gov/jfs/job-services-and-unemployment/job-services/job-programs-and-services/submit-a-warn-notice/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures'
+    latest_url = (
+        '/wps/portal/gov/jfs/job-services-and-unemployment/job-services'
+        '/job-programs-and-services/submit-a-warn-notice'
+        '/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures')
     request_delay = 1
     atext_pat = _r(r'^\s*(\d{4}) Public Notices')
     legacy_header_map = {
@@ -1301,6 +1304,9 @@ class OH(Scraper):
             (_r(r'\*'), ''),
         ]
     )
+    archived_sources = [
+        ('2024.html.json', 'https://archive.warnreports.org/s/OH/2024.html.json')
+    ]
 
     async def scrape(self):
         await self.download('oh_historical.csv', self.archive_url, missing_only=True)
@@ -1319,6 +1325,9 @@ class OH(Scraper):
                     self.extract_json(bs(self.cache.read(key))),
                     indent=2)
             sources.append((f'{key}.json', self.absurl(a['href'])))
+        for key, url in self.archived_sources:
+            await self.download(key, url, missing_only=True)
+            sources.append((key, url))
         self.cache.write_json('sources.json', dict(sorted(sources)), indent=2)
         self.cache.write_json('index.json', index := self.build_index(), indent=2)
         for key, url in chain.from_iterable(map(dict.items, index.values())):
@@ -1350,7 +1359,8 @@ class OH(Scraper):
         headers = next(it)[:9]
         for values in filter(any, it):
             raw = dict(zip(headers, values))
-            raw['URL'] = source
+            if self.base_url in source:
+                raw['URL'] = source
             ids = raw['Notice ID'].split(' and ')
             for notice_id in map(self.normalize_notice_id, ids):
                 row = dict(raw)
