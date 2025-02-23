@@ -69,9 +69,14 @@ class Scraper:
         yield self.runner.file
 
     @contextmanager
-    def extract(self) -> Generator[Iterable[dict[str, str]]]:
+    def extract(self) -> Generator[Iterable[dict[str, str|None]]]:
+        def rest(row: dict):
+            if '__' in row:
+                row['__'] = json.dumps(row['__'])
+            return row
         with self.runner.file.open() as file:
-            yield csv.DictReader(file, restkey='__')
+            it = csv.DictReader(file, restkey='__')
+            yield map(rest, it)
 
     async def extract_clean(self) -> None:
         self.extract_cache.nuke()
@@ -246,7 +251,7 @@ class CO(Scraper):
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
         with self.cache.open('normalized.csv') as file:
-            yield csv.DictReader(file, restkey='__')
+            yield csv.DictReader(file)
 
 class CT(Scraper):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'

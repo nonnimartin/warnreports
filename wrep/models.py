@@ -174,9 +174,9 @@ class Extraction(DataModel):
     id: UUID = Field(alias='_id', default=None)
     state: StateCode|None = Field(default=None)
     i: NonNegativeInt|None = Field(alias='_i', default=None,)
-    values_hash_exclude_fields: ClassVar[tuple[str, ...]] = ('id', 'state', 'i')
+    data: dict[str, str|None] = Field(default_factory=dict)
     stat_exclude_fields: ClassVar = ('scrape_time', 'NAICS Codes')
-    model_config = ConfigDict(extra='allow', populate_by_name=True, from_attributes=True)
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 class Translation(DataModel):
     id: UUID = Field(None, alias='_id')
@@ -195,7 +195,7 @@ class Translation(DataModel):
     naics: list[NaicsId]|None = None
     artifacts: dict[str, UrlType]|None = None
     extraction: Extraction = None
-    stat_exclude_fields: ClassVar = ('row',)
+    stat_exclude_fields: ClassVar = ('data',)
     model_config = ConfigDict(
         populate_by_name=True,
         from_attributes=True,

@@ -5,7 +5,7 @@ import inspect
 import json
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from html import unescape as html_unescape
 from pathlib import Path
 from re import compile as _r
@@ -38,11 +38,11 @@ ASCII_TRANS = {
 }
 
 logger = utils.get_logger('translators')
-type Data = dict[str, str|None]
+type Data = Mapping[str, str|None]
 
 @dataclasses.dataclass
 class TranslateInfo:
-    data: Mapping[str, str]
+    data: Data
     memo: dict = dataclasses.field(default_factory=dict)
 
 def varcall[T](func: Callable[..., T], *args) -> T:
@@ -56,11 +56,10 @@ class TranslationFactory:
     session: orm.Session|None = None
     translators: ClassVar[dict[StateCode, type[Translator]]] = {}
 
-    def translate(self, data: Data) -> Iterable[Translation]:
+    def translate(self, data: Any) -> Iterable[Translation]:
         extraction = Extraction.model_validate(data)
         inst = Translation(state=extraction.state, extraction=extraction)
-        data = extraction.model_dump(exclude_unset=True, exclude_none=True)
-        info = TranslateInfo(MapProxy(data))
+        info = TranslateInfo(MapProxy(extraction.data))
         translator = self.translators[inst.state]()
         try:
             varcall(translator.prepare, inst, info)
@@ -77,9 +76,10 @@ class TranslationFactory:
             if getattr(inst, field) is not None:
                 continue
             for header in headers:
-                if header not in info.data:
+                value = info.data.get(header)
+                if value is None:
                     continue
-                value = self.value(translator, field, info.data[header], info)
+                value = self.value(translator, field, value, info)
                 if value is not None and value != '':
                     setattr(inst, field, value)
 
@@ -95,9 +95,14 @@ class TranslationFactory:
 
     def finalize(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
         inst.url = inst.url or translator.default_url
-        base = inst.extraction.model_dump(
-            include=set(inst.extraction.model_extra),
-            exclude=translator.values_hash_exclude)
+        base = dict(info.data)
+        for key in translator.values_hash_exclude:
+            base.pop(key, None)
+        if '__' in base:
+            base['__'] = json.loads(base['__'])
+        for key, value in info.data.items():
+            if value is None:
+                base.pop(key, None)
         sourcestr = json.dumps(list(base.values()))
         inst.values_id = uuid.uuid5(inst.ns, sourcestr)
         if inst.report_id:
@@ -272,7 +277,6 @@ class Translator:
         cls.rewrites = Translator.rewrites | cls.rewrites
         cls.values_hash_exclude = sorted({
             *cls.values_hash_exclude,
-            *Extraction.values_hash_exclude_fields,
             *Extraction.stat_exclude_fields})
         if len(state := cls.__name__.upper()) == 2:
             cls.state = state
@@ -378,6 +382,9 @@ class CA(Translator):
         starting=[
             ('03/30/3030', '2020-03-30'),
             ('03/09/2121', '2021-03-09'),
+        ],
+        location=[
+            (_r(r'\s{2,}'), ', '),
         ],
         artifacts=[
             (_r(r'^(.+)$'), r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1'),

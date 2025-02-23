@@ -164,7 +164,7 @@ class Pipeline:
             await self.clean(stage)
         async with utils.awith(self.scraper.extract()) as source:
             it = utils.as_aiter(source)
-            it = (dict(state=self.state)|x async for x in it)
+            it = (dict(state=self.state, data=x) async for x in it)
             count, created, updated = await backend.update(it)
             deleted = await backend.clean(dict(state=[self.state], i_min=count+1))
         cur = await self.stat(stage)

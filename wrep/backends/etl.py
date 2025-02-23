@@ -255,6 +255,10 @@ class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
             inst.id = uuid5(self.NS, f'{inst.state}:seq:{int(i)}')
         return super().get_save_doc(inst, i)
 
+    def clean_stat_doc(self, doc: Doc) -> Doc:
+        super().clean_stat_doc(doc['data'])
+        return doc
+
 class MongoTranslation(MongoETBase[Translation], TranslationBackend):
     collection: ClassVar = collections['translations']
 
