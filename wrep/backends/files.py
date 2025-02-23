@@ -100,9 +100,9 @@ class ArtifactStore:
         self.src = src
         self.metrics = defaultdict(int)
 
-    def add(self, key: str, file: Path|None = None) -> tuple[SaveType, int]:
+    def add(self, key: str) -> tuple[SaveType, int]:
         key = key.strip('/')
-        file = file or self.src/key
+        file = self.src/key
         dest = self.dir/key
         digfile = utils.digestfile(dest)
         sta = file.stat()

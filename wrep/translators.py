@@ -15,7 +15,7 @@ from typing import Any, Callable, ClassVar, Iterable, Mapping
 from pydantic import HttpUrl
 
 from . import orm, utils
-from .models import Extraction, StateCode, Translation, ValidationError
+from .models import *
 from .orm import ReportMod
 from .ref.dt import MONTHNAME_REWRITES
 from .ref.tz import zoneinfos
@@ -38,29 +38,34 @@ ASCII_TRANS = {
 }
 
 logger = utils.get_logger('translators')
-type Data = Mapping[str, str|None]
 
 @dataclasses.dataclass
 class TranslateInfo:
-    data: Data
+    data: Mapping[str, str]
     memo: dict = dataclasses.field(default_factory=dict)
 
 def varcall[T](func: Callable[..., T], *args) -> T:
     return func(*args[:len(inspect.signature(func).parameters)])
-
-def sanitize(value: str) -> str:
-    return value.translate(ASCII_TRANS).strip()
 
 @dataclasses.dataclass
 class TranslationFactory:
     session: orm.Session|None = None
     translators: ClassVar[dict[StateCode, type[Translator]]] = {}
 
-    def translate(self, data: Any) -> Iterable[Translation]:
-        extraction = Extraction.model_validate(data)
-        inst = Translation(state=extraction.state, extraction=extraction)
-        info = TranslateInfo(MapProxy(extraction.data))
-        translator = self.translators[inst.state]()
+    def translate(self, obj: Any) -> Iterable[Translation]:
+        extraction = Extraction.model_validate(obj)
+        translator = self.translators[extraction.state]()
+        # Remove nulls
+        data = MapProxy({
+            key: value for key, value in extraction.data.items()
+            if value is not None})
+        inst = Translation(
+            state=extraction.state,
+            values_id=self.values_id(translator, data),
+            extraction=extraction)
+        # Sanitize
+        info = TranslateInfo(MapProxy({
+            key: self.sanitize(value) for key, value in data.items()}))
         try:
             varcall(translator.prepare, inst, info)
             self.populate(translator, inst, info)
@@ -70,6 +75,19 @@ class TranslationFactory:
         except:
             logger.error(f'{inst}')
             raise
+
+    def values_id(self, translator: Translator, data: Mapping[str, str|None]) -> uuid.UUID:
+        base = dict(data)
+        for key in translator.values_hash_exclude:
+            base.pop(key, None)
+        # Backwards-compatibility
+        if '__' in base:
+            base['__'] = json.loads(base['__'])
+        sourcestr = json.dumps(list(base.values()))
+        return uuid.uuid5(translator.ns, sourcestr)
+
+    def sanitize(self, value: str) -> str:
+        return value.translate(ASCII_TRANS).strip()
 
     def populate(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
         for field, headers in translator.fieldsmap.items():
@@ -85,7 +103,6 @@ class TranslationFactory:
 
     def value(self, translator: Translator, field: str, value: str, info: TranslateInfo) -> Any:
         'Translate a field value'
-        value = sanitize(value)
         if field in translator.rewrites:
             value = utils.rewrite_all(value, translator.rewrites[field])
         method = f'value_{field}'
@@ -95,19 +112,9 @@ class TranslationFactory:
 
     def finalize(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
         inst.url = inst.url or translator.default_url
-        base = dict(info.data)
-        for key in translator.values_hash_exclude:
-            base.pop(key, None)
-        if '__' in base:
-            base['__'] = json.loads(base['__'])
-        for key, value in info.data.items():
-            if value is None:
-                base.pop(key, None)
-        sourcestr = json.dumps(list(base.values()))
-        inst.values_id = uuid.uuid5(inst.ns, sourcestr)
         if inst.report_id:
             self.extend_report_id(translator, inst)
-            inst.id = uuid.uuid5(inst.ns, inst.report_id)
+            inst.id = uuid.uuid5(translator.ns, inst.report_id)
         else:
             inst.id = inst.values_id
         self.fill_mod(translator, inst, info)
@@ -131,7 +138,7 @@ class TranslationFactory:
         with orm.ensure_session(self.session) as session:
             repmod = session.scalar(stmt)
             if not repmod:
-                repmod = ReportMod(id=inst.id, ns=inst.ns)
+                repmod = ReportMod(id=inst.id, ns=translator.ns)
             if not repmod.first_scraped or scrape_time < repmod.first_scraped:
                 repmod.first_scraped = scrape_time
                 session.add(repmod)
@@ -281,6 +288,7 @@ class Translator:
         if len(state := cls.__name__.upper()) == 2:
             cls.state = state
             cls.tz = zoneinfos[cls.state]
+            cls.ns = uuid.uuid5(ReportData.NS, state)
             TranslationFactory.translators[state] = cls
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
@@ -293,6 +301,7 @@ REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
 
 class AK(Translator):
     default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
+    values_hash_exclude = ['artifacts_json']
     fieldsmap = dict(
         company=['Company'],
         reported=['Notice Date'],
@@ -300,11 +309,11 @@ class AK(Translator):
         employees=['Employees Affected'],
         starting=['Layoff Date'],
         action=['Notes'],
-        url=['url'],
+        url=[],
         industry=[],
         report_id=['url'],
         naics=[],
-        artifacts=[])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         starting=[
             ('June-August 2023', '2023-06-01'),
@@ -575,7 +584,6 @@ class FL(Translator):
     def finish(self, inst: Translation, info: TranslateInfo):
         if inst.company and not inst.location:
             if (text := info.data.get('Company Name')) and '\n' in text:
-                text = sanitize(text)
                 if '\n\n' in text:
                     addrtext = text.rsplit('\n\n', 1)[-1]
                 else:
@@ -703,13 +711,11 @@ class IA(Translator):
         addrkeys = ('Address Line 1', 'City', 'St', 'ZIP')
         addrvals = list(map(info.data.get, addrkeys))
         if all(addrvals):
-            addrvals = list(map(sanitize, addrvals))
-            if all(addrvals):
-                location = ', '.join([addrvals[0], ' '.join(addrvals[1:])])
-                location = ' '.join(location.split())
-                location = utils.rewrite_all(location, self.rewrites['location'])
-                if location:
-                    inst.location = location
+            location = ', '.join([addrvals[0], ' '.join(addrvals[1:])])
+            location = ' '.join(location.split())
+            location = utils.rewrite_all(location, self.rewrites['location'])
+            if location:
+                inst.location = location
 
 class ID(Translator):
     default_url = 'https://www.labor.idaho.gov/warnnotice/'

@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import datetime, timezone
-from functools import cached_property
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
@@ -51,6 +50,8 @@ class Fi:
 
     def __post_init__(self):
         if self.oper == '$search':
+            if self.alias:
+                raise ValueError(f'alias {self.alias} for oper {self.oper}')
             self.alias = '$text'
 
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
@@ -156,6 +157,7 @@ class CompanyDetail(DataModel):
     last_report_id: UUID|None = None
     employees_sum: NonNegativeInt = 0
     states_count: NonNegativeInt = 0
+    aliases_count: NonNegativeInt = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 # ----------------------------
@@ -180,8 +182,8 @@ class Extraction(DataModel):
 
 class Translation(DataModel):
     id: UUID = Field(None, alias='_id')
-    values_id: UUID = None
-    state: StateCode = None
+    values_id: UUID = Field(frozen=True)
+    state: StateCode = Field(frozen=True)
     company: CompanyName|None = None
     reported: datetime|None = None
     location: str|None = None
@@ -194,7 +196,7 @@ class Translation(DataModel):
     report_id: str|None = None
     naics: list[NaicsId]|None = None
     artifacts: dict[str, UrlType]|None = None
-    extraction: Extraction = None
+    extraction: Extraction = Field(frozen=True)
     stat_exclude_fields: ClassVar = ('data',)
     model_config = ConfigDict(
         populate_by_name=True,
@@ -205,10 +207,6 @@ class Translation(DataModel):
     tzreplace = field_serializer('reported', 'starting')(ReportData.tzreplace)
     utcreplace = field_serializer('first_scraped')(utcreplace)
 
-    @cached_property
-    def ns(self):
-        return uuid5(ReportData.NS, self.state)
-    
 class PipelineRunDetail(DataModel):
     state: StateCode
     stage: Stage
@@ -411,8 +409,11 @@ class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
     text: Annotated[str|None, Fi('$search')] = None
     name: Annotated[list[CompanyName]|None, Fi('$in', 'aliases')] = None
     naics: Annotated[list[NaicsId]|None, Fi('$naics')] = None
-    order_fields: ClassVar = {
-        'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
+    aliases_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'aliases_count')] = None
+    aliases_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'aliases_count')] = None
+    order_fields: ClassVar = (
+        {'name', 'aliases_count'} |
+        {'reports_count', 'states_count', 'last_reported', 'employees_sum'})
     default_ordering: ClassVar = [('name', 1)]
     result_model: ClassVar = CompanyDetail
 

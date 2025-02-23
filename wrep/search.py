@@ -82,6 +82,8 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'reports_count': -1},
             {'states_count': 1},
             {'states_count': -1},
+            {'aliases_count': 1},
+            {'aliases_count': -1},
             {'employees_sum': -1}]),
     naics=MappedCollection(
         client=client,
