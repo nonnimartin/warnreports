@@ -5,13 +5,13 @@ import inspect
 import json
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from html import unescape as html_unescape
 from pathlib import Path
 from re import compile as _r
 from types import MappingProxyType as MapProxy
 from typing import (TYPE_CHECKING, Any, ClassVar, Iterable, Mapping, Self,
-                    overload, override)
+                    overload)
 
 from pydantic import HttpUrl
 
@@ -39,13 +39,124 @@ ASCII_TRANS = {
 }
 
 logger = utils.get_logger('translators')
-translators: dict[StateCode, type[Translator]] = {}
 type Data = dict[str, str|None]
 
 @dataclasses.dataclass
 class TranslateInfo:
     data: Mapping[str, str]
     memo: dict = dataclasses.field(default_factory=dict)
+
+@dataclasses.dataclass
+class TranslationFactory:
+    session: orm.Session|None = None
+    translators: ClassVar[dict[StateCode, type[Translator]]] = {}
+
+    def translate(self, data: Data) -> Iterable[Translation]:
+        extraction = Extraction.model_validate(data)
+        inst = Translation(state=extraction.state, extraction=extraction)
+        data = extraction.model_dump(exclude_unset=True, exclude_none=True)
+        info = TranslateInfo(MapProxy(data))
+        translator = self.translators[inst.state]()
+        try:
+            translator.prepare(inst, info)
+            self.populate(translator, inst, info)
+            self.finalize(translator, inst, info)
+            yield Translation.model_validate(inst)
+        except:
+            logger.error(f'{inst}')
+            raise
+
+    def populate(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
+        for field, headers in translator.fieldsmap.items():
+            if getattr(inst, field) is not None:
+                continue
+            if isinstance(headers, str):
+                headers = [headers]
+            for header in headers:
+                if header not in info.data:
+                    continue
+                value = self.value(translator, field, info.data[header], info)
+                if value is not None and value != '':
+                    try:
+                        setattr(inst, field, value)
+                    except ValidationError as err:
+                        logger.warning(f'{err!r}')
+                    else:
+                        break
+
+    def value(self, translator: Translator, field: str, value: str, info: TranslateInfo) -> Any:
+        'Translate a field value'
+        value = self.sanitize(value)
+        if field in translator.rewrites:
+            value = utils.rewrite_all(value, translator.rewrites[field])
+        method = f'value_{field}'
+        if (func := getattr(translator, method, None)):
+            args = [value]
+            np = len(inspect.signature(func).parameters)
+            if np > 1:
+                args.append(info)
+            value = func(*args)
+        return value
+
+    def sanitize(self, value: str) -> str:
+        return value.translate(ASCII_TRANS).strip()
+
+    def finalize(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
+        args = [inst]
+        np = len(inspect.signature(translator.finish).parameters)
+        if np > 1:
+            args.append(info)
+        translator.finish(*args)
+        inst.url = inst.url or translator.default_url
+        base = inst.extraction.model_dump(
+            include=set(inst.extraction.model_extra),
+            exclude=translator.values_hash_exclude)
+        sourcestr = json.dumps(list(base.values()))
+        inst.values_id = uuid.uuid5(inst.ns, sourcestr)
+        if inst.report_id:
+            self.extend_report_id(translator, inst)
+            inst.id = uuid.uuid5(inst.ns, inst.report_id)
+        else:
+            inst.id = inst.values_id
+        self.fill_mod(inst, translator, info)
+
+    def extend_report_id(self, translator: Translator, inst: Translation) -> None:
+        parts = [inst.report_id]
+        for field in translator.report_id_extra:
+            value = getattr(inst, field)
+            if isinstance(value, datetime):
+                parts.append(value.strftime(f'%Y-%m-%d'))
+            elif isinstance(value, int):
+                parts.append(str(value))
+            elif isinstance(value, str):
+                parts.append(PAT_NONALPHANUM.sub('', value).upper())
+        inst.report_id = '_'.join(parts)
+
+    def fill_mod(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
+        if not (scrape_time := utils.parse_date(info.data.get('scrape_time'))):
+            return
+        stmt = orm.select(ReportMod).where(ReportMod.id == inst.id)
+        with orm.ensure_session(self.session) as session:
+            repmod = session.scalar(stmt)
+            if not repmod:
+                repmod = ReportMod(id=inst.id, ns=inst.ns)
+            if not repmod.first_scraped or scrape_time < repmod.first_scraped:
+                repmod.first_scraped = scrape_time
+                session.add(repmod)
+                if not self.session:
+                    session.commit()
+        inst.first_scraped = repmod.first_scraped
+        if inst.reported and repmod.first_scraped < inst.reported:
+            inst.reported = repmod.first_scraped.replace(
+                tzinfo=translator.tz)
+            offset = inst.reported.utcoffset()
+            if offset:
+                inst.reported += offset
+            inst.reported = inst.reported.replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0)
 
 class Translator:
     fieldsmap: ClassVar[Mapping[str, list[str]]] = dict(
@@ -60,7 +171,6 @@ class Translator:
         report_id=[],
         naics=[],
         artifacts=[])
-    headermap: ClassVar[dict[str, str|list[str]]] = {}
     default_url: ClassVar[str|None] = None
     values_hash_exclude: ClassVar[list[str]] = []
     report_id_extra: ClassVar[list[str]] = []
@@ -71,61 +181,9 @@ class Translator:
             (_r(r'\d{1,2}/\d{2,4}'), ''), # remove dates M/Y
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
         ])
-    session: orm.Session|None = None
-
-    def translate(self, data: Data) -> Iterable[Translation]:
-        extraction = Extraction.model_validate(data)
-        inst = Translation(state=extraction.state, extraction=extraction)
-        data = extraction.model_dump(exclude_unset=True, exclude_none=True)
-        info = TranslateInfo(MapProxy(data))
-        try:
-            self.prepare(inst, info)
-            self.populate(inst, info)
-            self.finalize(inst, info)
-            yield Translation.model_validate(inst)
-        except:
-            logger.error(f'{inst}')
-            raise
 
     def prepare(self, inst: Translation, info: TranslateInfo) -> None:
         pass
-
-    def populate(self, inst: Translation, info: TranslateInfo) -> None:
-        for field, headers in self.fieldsmap.items():
-            if getattr(inst, field) is not None:
-                continue
-            if isinstance(headers, str):
-                headers = [headers]
-            for header in headers:
-                if header not in info.data:
-                    continue
-                value = self.value(field, info.data[header], inst, info)
-                if value is not None and value != '':
-                    try:
-                        setattr(inst, field, value)
-                    except ValidationError as err:
-                        logger.debug(f'{err!r}')
-                    else:
-                        break
-
-    def finalize(self, inst: Translation, info: TranslateInfo) -> None:
-        args = [inst]
-        np = len(inspect.signature(self.finish).parameters)
-        if np > 1:
-            args.append(info)
-        self.finish(*args)
-        inst.url = inst.url or self.default_url
-        base = inst.extraction.model_dump(
-            include=set(inst.extraction.model_extra),
-            exclude=self.values_hash_exclude)
-        sourcestr = json.dumps(list(base.values()))
-        inst.values_id = uuid.uuid5(inst.ns, sourcestr)
-        if inst.report_id:
-            self._extend_report_id(inst)
-            inst.id = uuid.uuid5(inst.ns, inst.report_id)
-        else:
-            inst.id = inst.values_id
-        self._fill_mod(inst, info)
 
     if TYPE_CHECKING:
         @overload
@@ -135,19 +193,6 @@ class Translator:
     else:
         def finish(self, inst: Translation, info: TranslateInfo) -> None:
             pass
-
-    def value(self, field: str, value: str, inst: Translation, info: TranslateInfo) -> Any:
-        'Translate a field value'
-        value = self.sanitize(value)
-        value = self.rewrite(field, value)
-        method = f'value_{field}'
-        if (func := getattr(self, method, None)):
-            args = [value]
-            np = len(inspect.signature(func).parameters)
-            if np > 1:
-                args.append(info)
-            value = func(*args)
-        return value
 
     def value_reported(self, value: str, info: TranslateInfo) -> datetime|None:
         return max(self.parse_dates(value), default=None)
@@ -191,7 +236,7 @@ class Translator:
                 values.add(value)
         return sorted(values)
 
-    def value_artifacts(self, value: str, info: TranslateInfo) -> dict[str, str]:
+    def value_artifacts(self, value: str, info: TranslateInfo) -> dict[str, HttpUrl]:
         try:
             data = dict(json.loads(value))
         except json.JSONDecodeError:
@@ -203,57 +248,12 @@ class Translator:
         for path, url in data.items():
             path = path.strip('/')
             try:
-                HttpUrl(url)
+                url = HttpUrl(url)
                 Path(path)
             except (ValidationError, ValueError):
                 continue
             artifacts[path] = url
         return artifacts
-
-    def sanitize(self, value: str) -> str:
-        return value.translate(ASCII_TRANS).strip()
-
-    def rewrite(self, field: str, value: str) -> str:
-        if field in self.rewrites:
-            value = utils.rewrite_all(value, self.rewrites[field])
-        return value
-
-    def _extend_report_id(self, inst: Translation) -> None:
-        parts = [inst.report_id]
-        for field in self.report_id_extra:
-            value = getattr(inst, field)
-            if isinstance(value, datetime):
-                parts.append(value.strftime(f'%Y-%m-%d'))
-            elif isinstance(value, int):
-                parts.append(str(value))
-            elif isinstance(value, str):
-                parts.append(PAT_NONALPHANUM.sub('', value).upper())
-        inst.report_id = '_'.join(parts)
-
-    def _fill_mod(self, inst: Translation, info: TranslateInfo) -> None:
-        if not (scrape_time := utils.parse_date(info.data.get('scrape_time'))):
-            return
-        stmt = orm.select(ReportMod).where(ReportMod.id == inst.id)
-        with orm.ensure_session(self.session) as session:
-            repmod = session.scalar(stmt)
-            if not repmod:
-                repmod = ReportMod(id=inst.id, ns=inst.ns)
-            if not repmod.first_scraped or scrape_time < repmod.first_scraped:
-                repmod.first_scraped = scrape_time
-                session.add(repmod)
-                session.commit()
-        inst.first_scraped = repmod.first_scraped
-        if inst.reported and repmod.first_scraped < inst.reported:
-            inst.reported = repmod.first_scraped.replace(
-                tzinfo=zoneinfos[inst.state])
-            offset = inst.reported.utcoffset()
-            if offset:
-                inst.reported += offset
-            inst.reported = inst.reported.replace(
-                hour=0,
-                minute=0,
-                second=0,
-                microsecond=0)
 
     def parse_date(self, value: str) -> datetime|None:
         dt = utils.parse_date(value)
@@ -262,10 +262,8 @@ class Translator:
             not any((dt.hour, dt.minute, dt.second)) and
             # Sane date range
             1980 <= dt.year <= utils.now().year + 10):
-
             if not dt.tzinfo:
                 dt = dt.replace(tzinfo=zoneinfos[self.state])
-
             return dt
 
     def parse_dates(self, value: str) -> list[datetime]:
@@ -296,8 +294,9 @@ class Translator:
             *Extraction.values_hash_exclude_fields,
             *Extraction.stat_exclude_fields})
         if len(state := cls.__name__.upper()) == 2:
-            translators[state] = cls
+            TranslationFactory.translators[state] = cls
             cls.state = state
+            cls.tz = zoneinfos[cls.state]
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
 REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')

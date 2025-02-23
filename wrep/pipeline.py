@@ -21,7 +21,6 @@ from .ref import normls
 
 if TYPE_CHECKING:
     from .scrapers import Scraper
-    from .translators import Translator
 
 logger = utils.get_logger('pipeline')
 
@@ -54,11 +53,6 @@ class Pipeline:
     def scraper(self) -> Scraper:
         from .scrapers import scrapers
         return scrapers[self.state](opts=self.opts)
-
-    @utils.lazyprop
-    def translator(self) -> Translator:
-        from .translators import translators
-        return translators[self.state]()
 
     def backend[B: StageBackend](self, stage: Stage|type[B]) -> StageBackend|B:
         if isinstance(stage, type):
@@ -125,7 +119,9 @@ class Pipeline:
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {prev}')
+        prevlog = dict(prev)
+        prevlog.pop('hash', None)
+        logger.info(f'{self.state}:{stage}:stat {prevlog}')
         if clean:
             await self.clean(stage)
         self.scraper.metrics.clear()
@@ -136,7 +132,8 @@ class Pipeline:
             metrics.update(artifacts=dict(self.scraper.artifacts.metrics))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        res = dict(nochange=nochange, prev=prev, cur=cur)
+        cur.pop('hash', None)
+        res = dict(nochange=nochange, prev=prevlog, cur=cur)
         if metrics:
             res.update(metrics=metrics)
         return res
@@ -145,14 +142,17 @@ class Pipeline:
         stage = Stage.Extract
         backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {prev}')
+        prevlog = dict(prev)
+        prevlog.pop('hash', None)
+        logger.info(f'{self.state}:{stage}:stat {prevlog}')
         if clean:
             await self.clean(stage)
         async with utils.awith(self.scraper.extract()) as source:
             count = (await backend.update(source))[0]
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        return dict(nochange=nochange, count=count, prev=prev, cur=cur)
+        cur.pop('hash', None)
+        return dict(nochange=nochange, count=count, prev=prevlog, cur=cur)
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
@@ -164,14 +164,18 @@ class Pipeline:
         logger.info(f'{self.state}:{stage}:stat {prevlog}')
         if clean:
             await self.clean(stage)
+        from .translators import TranslationFactory
         async with source.reader() as reader:
             with SessionLocal() as session:
-                self.translator.session = session
+                translator = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
-                it = utils.amap(self.translator.translate, it)
+                it = utils.amap(translator.translate, it)
                 it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
-            self.translator.session = None
+                if self.opts.rollback:
+                    session.rollback()
+                else:
+                    session.commit()
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         cur.pop('hash', None)

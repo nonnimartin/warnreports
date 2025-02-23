@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import Stage, settings, utils
-from ..translators import translators
+from ..translators import TranslationFactory
 from .base import AppCommand
 
 logger = utils.get_logger('pipeline')
@@ -46,7 +46,7 @@ class Command(AppCommand):
 
     Available States
     ----------------
-    """ + ' '.join(sorted(translators))
+    """ + ' '.join(sorted(TranslationFactory.translators))
 
     usage = '{prog} [OPTIONS] <stages> [state ...]'
 
@@ -133,7 +133,7 @@ class Command(AppCommand):
         from .. import search
         from ..backends import etl
         from ..pipeline import PipelineRunner
-        opts.states = opts.states or sorted(translators)
+        opts.states = opts.states or sorted(TranslationFactory.translators)
         runner_opts = dict(vars(opts))
         self.idfile: Path|None = runner_opts.pop('idfile')
         runner_opts['context'] = {

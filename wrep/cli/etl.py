@@ -11,7 +11,7 @@ from ..backends import etl, mongo
 from ..backends.mongo import Search, filters
 from ..models import *
 from ..pipeline import Pipeline
-from ..translators import translators
+from ..translators import TranslationFactory
 from .base import AP, AppCommand, BaseCommand
 from .mongo import ClientControlCommand
 
@@ -72,14 +72,19 @@ class OneCommand(BaseCommand):
         async def run(self):
             inst: Extraction = await self.get_inst()
             data = inst.model_dump(exclude_unset=True, exclude_none=True)
-            objs = list(translators[inst.state]().translate(data))
-            docs = [
-                x.model_dump(mode='json', exclude_unset=True, exclude_none=True)
-                for x in objs]
-            self.printobj(docs)
-            if self.opts.save:
-                backend = etl.MongoTranslation(inst.state, context=self.context)
-                await backend.update(objs)
+            with orm.SessionLocal() as session:
+                factory = TranslationFactory(session)
+                objs = list(factory.translate(data))
+                docs = [
+                    x.model_dump(mode='json', exclude_unset=True, exclude_none=True)
+                    for x in objs]
+                self.printobj(docs)
+                if self.opts.save:
+                    backend = etl.MongoTranslation(inst.state, context=self.context)
+                    await backend.update(objs)
+                    session.commit()
+                else:
+                    session.rollback()
 
         async def get_inst(self):
             try:
