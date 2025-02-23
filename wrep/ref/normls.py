@@ -118,6 +118,8 @@ COMPANY_NAMES: NormDefs = {
     ],
     'LSC Communications': _sw,
     'LTF Club Management Company': _sw('LTF Club Management'),
+    "Macy's Systems": _sw,
+    "Macy's": _sw,
     'ManpowerGroup': _sw,
     'Marvell Semiconductor': _sw,
     'Meta Platforms': _sw,

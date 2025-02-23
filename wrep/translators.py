@@ -10,8 +10,7 @@ from html import unescape as html_unescape
 from pathlib import Path
 from re import compile as _r
 from types import MappingProxyType as MapProxy
-from typing import (TYPE_CHECKING, Any, ClassVar, Iterable, Mapping, Self,
-                    overload)
+from typing import Any, Callable, ClassVar, Iterable, Mapping
 
 from pydantic import HttpUrl
 
@@ -46,6 +45,12 @@ class TranslateInfo:
     data: Mapping[str, str]
     memo: dict = dataclasses.field(default_factory=dict)
 
+def varcall[T](func: Callable[..., T], *args) -> T:
+    return func(*args[:len(inspect.signature(func).parameters)])
+
+def sanitize(value: str) -> str:
+    return value.translate(ASCII_TRANS).strip()
+
 @dataclasses.dataclass
 class TranslationFactory:
     session: orm.Session|None = None
@@ -58,8 +63,9 @@ class TranslationFactory:
         info = TranslateInfo(MapProxy(data))
         translator = self.translators[inst.state]()
         try:
-            translator.prepare(inst, info)
+            varcall(translator.prepare, inst, info)
             self.populate(translator, inst, info)
+            varcall(translator.finish, inst, info)
             self.finalize(translator, inst, info)
             yield Translation.model_validate(inst)
         except:
@@ -70,43 +76,24 @@ class TranslationFactory:
         for field, headers in translator.fieldsmap.items():
             if getattr(inst, field) is not None:
                 continue
-            if isinstance(headers, str):
-                headers = [headers]
             for header in headers:
                 if header not in info.data:
                     continue
                 value = self.value(translator, field, info.data[header], info)
                 if value is not None and value != '':
-                    try:
-                        setattr(inst, field, value)
-                    except ValidationError as err:
-                        logger.warning(f'{err!r}')
-                    else:
-                        break
+                    setattr(inst, field, value)
 
     def value(self, translator: Translator, field: str, value: str, info: TranslateInfo) -> Any:
         'Translate a field value'
-        value = self.sanitize(value)
+        value = sanitize(value)
         if field in translator.rewrites:
             value = utils.rewrite_all(value, translator.rewrites[field])
         method = f'value_{field}'
         if (func := getattr(translator, method, None)):
-            args = [value]
-            np = len(inspect.signature(func).parameters)
-            if np > 1:
-                args.append(info)
-            value = func(*args)
+            value = varcall(func, value, info)
         return value
 
-    def sanitize(self, value: str) -> str:
-        return value.translate(ASCII_TRANS).strip()
-
     def finalize(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
-        args = [inst]
-        np = len(inspect.signature(translator.finish).parameters)
-        if np > 1:
-            args.append(info)
-        translator.finish(*args)
         inst.url = inst.url or translator.default_url
         base = inst.extraction.model_dump(
             include=set(inst.extraction.model_extra),
@@ -118,7 +105,7 @@ class TranslationFactory:
             inst.id = uuid.uuid5(inst.ns, inst.report_id)
         else:
             inst.id = inst.values_id
-        self.fill_mod(inst, translator, info)
+        self.fill_mod(translator, inst, info)
 
     def extend_report_id(self, translator: Translator, inst: Translation) -> None:
         parts = [inst.report_id]
@@ -174,7 +161,7 @@ class Translator:
     default_url: ClassVar[str|None] = None
     values_hash_exclude: ClassVar[list[str]] = []
     report_id_extra: ClassVar[list[str]] = []
-    rewrites: ClassVar[dict[str, list[tuple[str|re.Pattern, str]]]] = dict(
+    rewrites: ClassVar[dict[str, list[tuple[str|re.Pattern, str|Callable[[re.Match], str]]]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
             (_r(r'\d{1,2}/\d{1,2}/\d{2,4}'), ''), # remove dates M/D/Y
@@ -182,49 +169,43 @@ class Translator:
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
         ])
 
-    def prepare(self, inst: Translation, info: TranslateInfo) -> None:
+    def prepare(self, inst: Translation) -> None:
         pass
 
-    if TYPE_CHECKING:
-        @overload
-        def finish(self: Self, inst: Translation, info: TranslateInfo) -> None: ...
-        @overload
-        def finish(self: Self, inst: Translation) -> None: ...
-    else:
-        def finish(self, inst: Translation, info: TranslateInfo) -> None:
-            pass
+    def finish(self, inst: Translation) -> None:
+        pass
 
-    def value_reported(self, value: str, info: TranslateInfo) -> datetime|None:
+    def value_reported(self, value: str) -> datetime|None:
         return max(self.parse_dates(value), default=None)
 
-    def value_starting(self, value: str, info: TranslateInfo) -> datetime|None:
+    def value_starting(self, value: str) -> datetime|None:
         return min(self.parse_dates(value), default=None)
 
-    def value_employees(self, value: str, info: TranslateInfo) -> int|None:
+    def value_employees(self, value: str) -> int|None:
         num = utils.parse_int(value)
         if num is not None:
             return num
         it = map(utils.parse_int, PAT_NONDIGITS.split(value))
         return max(filter(None, it), default=None)
 
-    def value_company(self, value: str, info: TranslateInfo) -> str:
+    def value_company(self, value: str) -> str:
         value = ' '.join(value.split())
         value = value.strip()
         return value
 
-    def value_action(self, value: str, info: TranslateInfo) -> str:
+    def value_action(self, value: str) -> str:
         return value
 
-    def value_location(self, value: str, info: TranslateInfo) -> str:
+    def value_location(self, value: str) -> str:
         return value
 
-    def value_url(self, value: str, info: TranslateInfo) -> HttpUrl|None:
+    def value_url(self, value: str) -> HttpUrl|None:
         try:
             return HttpUrl(value)
         except ValidationError:
             pass
 
-    def value_naics(self, value: str, info: TranslateInfo) -> list[int]:
+    def value_naics(self, value: str) -> list[int]:
         values = set()
         for value in PAT_NAICSSPLIT.split(value):
             if value in ('31-33', '44-45', '48-49'):
@@ -236,7 +217,7 @@ class Translator:
                 values.add(value)
         return sorted(values)
 
-    def value_artifacts(self, value: str, info: TranslateInfo) -> dict[str, HttpUrl]:
+    def value_artifacts(self, value: str) -> dict[str, HttpUrl]:
         try:
             data = dict(json.loads(value))
         except json.JSONDecodeError:
@@ -263,7 +244,7 @@ class Translator:
             # Sane date range
             1980 <= dt.year <= utils.now().year + 10):
             if not dt.tzinfo:
-                dt = dt.replace(tzinfo=zoneinfos[self.state])
+                dt = dt.replace(tzinfo=self.tz)
             return dt
 
     def parse_dates(self, value: str) -> list[datetime]:
@@ -294,9 +275,9 @@ class Translator:
             *Extraction.values_hash_exclude_fields,
             *Extraction.stat_exclude_fields})
         if len(state := cls.__name__.upper()) == 2:
-            TranslationFactory.translators[state] = cls
             cls.state = state
             cls.tz = zoneinfos[cls.state]
+            TranslationFactory.translators[state] = cls
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
 REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')
@@ -373,9 +354,6 @@ class AZ(Translator):
 
 class CA(Translator):
     default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
-    rewrite_url = (
-        _r(r'^(.+)$'),
-        r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1')
     fieldsmap = dict(
         company=['company'],
         reported=['notice_date'],
@@ -383,13 +361,11 @@ class CA(Translator):
         employees=['num_employees'],
         starting=['effective_date'],
         action=['layoff_or_closure'],
-        url=['source_file'],
+        url=[],
         industry=[],
         report_id=[],
         naics=[],
-        artifacts=[
-            #'source_file'
-        ])
+        artifacts=['source_file'])
     rewrites = dict(
         company=[
             REWRITE_UNESCAPE_HTML,
@@ -403,11 +379,8 @@ class CA(Translator):
             ('03/30/3030', '2020-03-30'),
             ('03/09/2121', '2021-03-09'),
         ],
-        url=[
-            rewrite_url,
-        ],
         artifacts=[
-            #rewrite_url,
+            (_r(r'^(.+)$'), r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1'),
         ],
     )
 
@@ -482,7 +455,7 @@ class CT(Translator):
     )
     urlfmt = '{}/warn{}.htm'
 
-    def finish(self, inst: Translation):
+    def finish(self, inst):
         if not inst.url and inst.reported:
             year = inst.reported.year
             if year >= 2015:
@@ -526,7 +499,7 @@ class DC(Translator):
     )
     urlfmt = '{}/page/industry-closings-and-layoffs-warn-notifications-{}'
 
-    def finish(self, inst: Translation):
+    def finish(self, inst):
         if not inst.url and inst.reported:
             year = inst.reported.year
             if year >= 2012 and year != 2014:
@@ -584,8 +557,8 @@ class FL(Translator):
         ],
     )
     values_hash_exclude = ['download', 'artifacts_json']
-
     urlfmt = '{}/WarnList/{}?year={}'
+
     def finish(self, inst: Translation, info: TranslateInfo):
         if inst.company and not inst.location:
             if (text := info.data.get('Company Name')) and '\n' in text:
@@ -716,11 +689,11 @@ class IA(Translator):
         addrkeys = ('Address Line 1', 'City', 'St', 'ZIP')
         addrvals = list(map(info.data.get, addrkeys))
         if all(addrvals):
-            addrvals = list(map(self.sanitize, addrvals))
+            addrvals = list(map(sanitize, addrvals))
             if all(addrvals):
                 location = ', '.join([addrvals[0], ' '.join(addrvals[1:])])
                 location = ' '.join(location.split())
-                location = self.rewrite('location', location)
+                location = utils.rewrite_all(location, self.rewrites['location'])
                 if location:
                     inst.location = location
 
@@ -971,7 +944,7 @@ class ME(Translator):
     fieldsmap = dict(
         company=['employer'],
         reported=['notice_date'],
-        location=['city'],
+        location=['address', 'city'],
         employees=['number_of_employees_affected'],
         starting=[],
         action=['warn_type'],
@@ -980,6 +953,12 @@ class ME(Translator):
         report_id=[],
         naics=[],
         artifacts=[])
+    rewrites = dict(
+        location=[
+            (_r(r';'), ','),
+            (_r(r'\s+'), ' '),
+        ],
+    )
 
 class MI(Translator):
     default_url = 'https://milmi.org/warn/'
@@ -1075,11 +1054,7 @@ class NJ(Translator):
         datestr = f'{month} 1, {year}'
         inst.reported = self.parse_date(datestr)
         if inst.reported:
-            for days in reversed(range(28, 31)):
-                dt = inst.reported + timedelta(days=days)
-                if dt.month == inst.reported.month:
-                    inst.reported = dt
-                    break
+            inst.reported = utils.monthend(inst.reported)
         if inst.starting and (not inst.reported or inst.starting < inst.reported):
             inst.reported = inst.starting
 
@@ -1258,7 +1233,7 @@ class PA(Translator):
         ]
     )
 
-    def finish(self, inst: Translation):
+    def finish(self, inst):
         if inst.location:
             inst.location = ', '.join(filter(None, inst.location.splitlines()))
 
@@ -1268,16 +1243,11 @@ class PA(Translator):
         it = (f'{x}/{year}' if x.count('/') == 1 else x for x in it)
         return min(map(self.parse_date, it), default=None)
 
-    def value_reported(self, value: str):
+    def value_reported(self, value):
         month, year = value.split()
         reported = self.parse_date(f'{month} 1, {year}')
         if reported:
-            for days in reversed(range(28, 31)):
-                dt = reported + timedelta(days=days)
-                if dt.month == reported.month:
-                    reported = dt
-                    break
-            return reported
+            return utils.monthend(reported)
 
 class RI(Translator):
     default_url = 'https://dlt.ri.gov/employers/worker-adjustment-and-retraining-notification-warn'
@@ -1339,7 +1309,7 @@ class SC(Translator):
     )
     values_hash_exclude = ['url']
 
-    def value_artifacts(self, value: str):
+    def value_artifacts(self, value):
         year = int(value.split('/')[-1][:4])
         return {f'{year}.pdf': value}
 
@@ -1418,7 +1388,7 @@ class TX(Translator):
         industry=[],
         report_id=[],
         naics=[],
-        artifacts=[])
+        artifacts=['artifact_url'])
     rewrites = dict(
         company=[
             (_r(r'_x000D_'), ''),
@@ -1436,7 +1406,7 @@ class TX(Translator):
         ],
     )
 
-    def finish(self, inst: Translation):
+    def finish(self, inst):
         if inst.reported and inst.starting:
             if inst.starting.year == 2027 and inst.reported.year == 2017:
                 inst.starting = inst.starting.replace(year=inst.reported.year)

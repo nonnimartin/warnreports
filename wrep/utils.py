@@ -116,6 +116,12 @@ def parse_int(value: str) -> int|None:
     except ValueError:
         pass
 
+def monthend(dt: datetime) -> datetime:
+    for days in reversed(range(28, 31)):
+        cand = dt + timedelta(days=days)
+        if cand.month == dt.month:
+            return cand
+
 def rewrite_all(value: str, rewrites: Iterable[SrchRepl]) -> str:
     for srch, repl in rewrites:
         if srch == value:
