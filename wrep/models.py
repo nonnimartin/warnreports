@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
 from pydantic import BaseModel as DataModel
-from pydantic import (ConfigDict, Field, HttpUrl, NonNegativeInt,
-                      PlainSerializer, StringConstraints, field_serializer,
-                      model_validator)
+from pydantic import (ConfigDict, Field, HttpUrl, NonNegativeFloat,
+                      NonNegativeInt, PlainSerializer, StringConstraints,
+                      field_serializer, model_validator)
 from pydantic_core import ValidationError as ValidationError
 
 from . import Stage, settings, utils
@@ -452,25 +452,28 @@ __all__ += [
 
 class ExtractionFilter(FilterModel[Extraction]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
+    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    i_min: Annotated[NonNegativeInt|None, Fi('$gte', '_i')] = None
+    i_max: Annotated[NonNegativeInt|None, Fi('$lte', '_i')] = None
     default_ordering: ClassVar = [('state', 1), ('_i', 1)]
     result_model: ClassVar = Extraction
 
 class TranslationFilter(FilterModel[Translation]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
-    default_ordering: ClassVar = [('id', 1)]
+    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    default_ordering: ClassVar = [('_id', 1)]
     result_model: ClassVar = Translation
 
 class PipelineLogFilter(FilterModel[PipelineLog]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
     stages: Annotated[list[Stage]|None, Fi('$in')] = None
-    states: Annotated[list[StateCode]|None, Fi('$in')] = None
+    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
     start_min: Annotated[datetime|None, Fi('$gte', 'start')] = None
     start_max: Annotated[datetime|None, Fi('$lte', 'start')] = None
     end_min: Annotated[datetime|None, Fi('$gte', 'end')] = None
     end_max: Annotated[datetime|None, Fi('$lte', 'end')] = None
-    elapsed_min: Annotated[NonNegativeInt|None, Fi('$gte', 'elapsed')] = None
-    elapsed_max: Annotated[NonNegativeInt|None, Fi('$lte', 'elapsed')] = None
+    elapsed_min: Annotated[NonNegativeFloat|None, Fi('$gte', 'elapsed')] = None
+    elapsed_max: Annotated[NonNegativeFloat|None, Fi('$lte', 'elapsed')] = None
     default_ordering: ClassVar = [('start', -1)]
+    order_fields: ClassVar = {'start', 'end'}
     result_model: ClassVar = PipelineLog

@@ -71,6 +71,7 @@ COMPANY_NAMES: NormDefs = {
         _sw('FedEx'),
     ],
     'First Student': _sw,
+    'Forever 21': [_sw, _sw('F21')],
     'G2 Secure Staff': _sw,
     'GDI Services': _sw,
     'Goodwill': [
@@ -160,6 +161,9 @@ COMPANY_NAMES: NormDefs = {
     'Solo Cup': [
         'Solo Cup Company',
         'Solo Cup Operating Corporation',
+    ],
+    'Southwest Airlines': [
+        _sw('Southwest - Dallas'),
     ],
     'Staples': [
         'Staples the Office Superstore LLC',

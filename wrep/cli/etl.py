@@ -7,8 +7,7 @@ from uuid import UUID
 import yaml
 
 from .. import orm, utils
-from ..backends import etl, mongo
-from ..backends.mongo import Search, filters
+from ..backends import etl
 from ..models import *
 from ..pipeline import Pipeline
 from ..translators import TranslationFactory
@@ -35,7 +34,7 @@ class OneCommand(BaseCommand):
 
     class Base(EtlBaseCommand):
         label: ClassVar[str] = '?'
-        collection: ClassVar[mongo.MongoCollection]
+        backend_class: ClassVar[type[etl.MongoETBase]]
 
         @classmethod
         def add_arguments(cls, parser: AP):
@@ -43,6 +42,10 @@ class OneCommand(BaseCommand):
             parser.add_argument('--yaml', action='store_true', help='Output yaml')
             parser.add_argument('id', type=UUID, help=f'The {cls.label} doc id')
             super().add_arguments(parser)
+
+        def setup(self, opts):
+            super().setup(opts)
+            self.backend = self.backend_class(context=self.context)
 
         def printobj(self, obj: Any) -> None:
             print(self.objtext(obj))
@@ -54,23 +57,20 @@ class OneCommand(BaseCommand):
                 text = json.dumps(obj, indent=2)
             return text
 
-        def get_filter(self):
-            return filters[self.collection.data_model](id=[self.opts.id])
-
         async def get_inst(self):
-            res = Search(self.get_filter(), limit=1, context=self.context)
+            srch = self.backend.search(dict(id=[self.opts.id]))
             try:
-                return await anext(res.objs())
+                return await anext(srch.objs())
             except StopAsyncIteration:
                 raise ValueError(f'Doc not found: {self.opts.id}')
 
     class Trone(Base):
         'Run translations for a single extraction doc, and print the result'
         label = 'extraction'
-        collection = etl.MongoExtraction.collection
+        backend_class = etl.MongoExtraction
 
         async def run(self):
-            inst: Extraction = await self.get_inst()
+            inst = await self.get_inst()
             data = inst.model_dump(exclude_unset=True, exclude_none=True)
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)
@@ -80,21 +80,21 @@ class OneCommand(BaseCommand):
                     for x in objs]
                 self.printobj(docs)
                 if self.opts.save:
-                    backend = etl.MongoTranslation(inst.state, context=self.context)
+                    backend = etl.MongoTranslation(context=self.context)
                     await backend.update(objs)
                     session.commit()
                 else:
                     session.rollback()
 
-        async def get_inst(self):
+        async def get_inst(self) -> Extraction:
             try:
                 return await super().get_inst()
-            except ValueError as err:
+            except ValueError:
                 logger.warning(f'Extraction {self.opts.id} not found, checking translations')
-            filter = filters[Translation](id=[self.opts.id])
-            res = Search(filter, limit=1, context=self.context)
+            backend = etl.MongoTranslation(context=self.context)
+            srch = backend.search(dict(id=[self.opts.id]))
             try:
-                translation: Translation = await anext(res.objs())
+                translation = await anext(srch.objs())
             except StopAsyncIteration:
                 raise ValueError(f'Doc not found: {self.opts.id}')
             self.opts.id = translation.extraction.id
@@ -103,7 +103,7 @@ class OneCommand(BaseCommand):
     class Ldone(Base):
         'Run load operations for a single translation doc, and print the result'
         label = 'translation'
-        collection = etl.MongoTranslation.collection
+        backend_class = etl.MongoTranslation
 
         async def run(self):
             inst: Translation = await self.get_inst()
@@ -224,7 +224,7 @@ class LogCommand(BaseCommand):
             if src_db.name == dst_db.name:
                 raise ValueError(f'Source and dest db cannot be the same')
             logger.info(f'Copying from {src_db.name} to {dst_db.name}')
-            res = await self.dst.update(await self.src.findall())
+            res = await self.dst.update(self.src.search({}).objs())
             counts = dict(zip(('count', 'created', 'updated'), res))
             print(counts)
 

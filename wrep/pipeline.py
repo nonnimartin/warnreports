@@ -60,9 +60,7 @@ class Pipeline:
         try:
             backend = self.backends[stage]
         except KeyError:
-            backend = self.BACKENDS[stage](
-                self.state,
-                context=self.context)
+            backend = self.BACKENDS[stage](context=self.context)
             self.backends[stage] = backend
         return backend
 
@@ -75,10 +73,19 @@ class Pipeline:
 
     async def stat(self, stage: Stage) -> dict:
         stage = Stage(stage)
-        if stage in self.BACKENDS:
-            return await self.backend(stage).stat()
         if stage is stage.Scrape:
             return await self.scraper.stat()
+        if stage is stage.Extract:
+            return await self.backend(ExtractionBackend).stat(dict(state=[self.state]))
+        if stage is stage.Translate:
+            return await self.backend(TranslationBackend).stat(dict(state=[self.state]))
+        if stage is stage.Index:
+            be = self.backend(SearchIndexBackend)
+            coros = dict(
+                reports=be.stat('reports', dict(state=[self.state])),
+                artifacts=be.stat('artifacts', dict(state=[self.state])),
+                companies=be.stat('companies', dict(state=[self.state])))
+            return {k: await v for k, v in coros.items()}
         if stage is stage.Load:
             stat: dict[str, int] = {}
             backend = self.backend(SearchIndexBackend)
@@ -98,12 +105,25 @@ class Pipeline:
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         logger.info(f'{self.state}:{stage}:clean')
-        if stage in self.BACKENDS:
-            await self.backend(stage).clean()
-            if stage is stage.Extract:
-                await self.scraper.extract_clean()
-        elif stage is stage.Scrape:
+        if stage is stage.Scrape:
             await self.scraper.clean()
+        elif stage is stage.Extract:
+            await self.backend(ExtractionBackend).clean(dict(state=[self.state]))
+            await self.scraper.extract_clean()
+        elif stage is stage.Translate:
+            await self.backend(TranslationBackend).clean(dict(state=[self.state]))
+        elif stage is stage.Index:
+            be = self.backend(SearchIndexBackend)
+            coros = [
+                be.clean('reports', dict(state=[self.state])),
+                be.clean('artifacts', dict(state=[self.state])),
+                be.clean('companies', dict(
+                    state=[self.state],
+                    states_count_min=1,
+                    states_count_max=1)),
+                be.clean('states', dict(id=[self.state]))]
+            for coro in coros:
+                await coro
         elif stage is stage.Load:
             filters = self.get_orm_clean_filters()
             stmts = (
@@ -119,9 +139,7 @@ class Pipeline:
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
         prev = await self.stat(stage)
-        prevlog = dict(prev)
-        prevlog.pop('hash', None)
-        logger.info(f'{self.state}:{stage}:stat {prevlog}')
+        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         self.scraper.metrics.clear()
@@ -132,8 +150,7 @@ class Pipeline:
             metrics.update(artifacts=dict(self.scraper.artifacts.metrics))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        cur.pop('hash', None)
-        res = dict(nochange=nochange, prev=prevlog, cur=cur)
+        res = dict(nochange=nochange, prev=statlog(prev), cur=statlog(cur))
         if metrics:
             res.update(metrics=metrics)
         return res
@@ -142,30 +159,29 @@ class Pipeline:
         stage = Stage.Extract
         backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        prevlog = dict(prev)
-        prevlog.pop('hash', None)
-        logger.info(f'{self.state}:{stage}:stat {prevlog}')
+        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         async with utils.awith(self.scraper.extract()) as source:
-            count = (await backend.update(source))[0]
+            it = utils.as_aiter(source)
+            it = (dict(state=self.state)|x async for x in it)
+            count, created, updated = await backend.update(it)
+            deleted = await backend.clean(dict(state=[self.state], i_min=count+1))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        cur.pop('hash', None)
-        return dict(nochange=nochange, count=count, prev=prevlog, cur=cur)
+        counts = dict(count=count, created=created, updated=updated, deleted=deleted)
+        return dict(nochange=nochange) | counts | dict(prev=statlog(prev), cur=statlog(cur))
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
         backend = self.backend(TranslationBackend)
         source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        prevlog = dict(prev)
-        prevlog.pop('hash', None)
-        logger.info(f'{self.state}:{stage}:stat {prevlog}')
+        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         from .translators import TranslationFactory
-        async with source.reader() as reader:
+        async with source.reader(dict(state=[self.state])) as reader:
             with SessionLocal() as session:
                 translator = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
@@ -178,15 +194,14 @@ class Pipeline:
                     session.commit()
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
-        cur.pop('hash', None)
         counts = dict(count=count, created=created, updated=updated)
-        return dict(nochange=nochange) | counts | dict(prev=prevlog, cur=cur)
+        return dict(nochange=nochange) | counts | dict(prev=statlog(prev), cur=statlog(cur))
 
     async def load(self, clean: bool = False) -> dict:
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
         source = self.backend(TranslationBackend)
-        async with source.reader() as reader:
+        async with source.reader(dict(state=[self.state])) as reader:
             with SessionLocal() as session:
                 self.session = session
                 if clean:
@@ -381,7 +396,12 @@ class Pipeline:
                 trims[field] = len(value) - limit
                 record[field] = value[:limit]
         return trims
-   
+
+def statlog(stat: dict):
+    stat = dict(stat)
+    stat.pop('hash', None)
+    return stat
+
 class PipelineRunner:
     GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({
         Stage.Scrape: 0,
