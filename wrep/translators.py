@@ -98,8 +98,10 @@ class TranslationFactory:
         base = dict(info.data)
         for key in translator.values_hash_exclude:
             base.pop(key, None)
+        # Backwards-compatibility
         if '__' in base:
             base['__'] = json.loads(base['__'])
+        # Remove nulls
         for key, value in info.data.items():
             if value is None:
                 base.pop(key, None)

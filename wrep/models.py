@@ -156,6 +156,7 @@ class CompanyDetail(DataModel):
     last_report_id: UUID|None = None
     employees_sum: NonNegativeInt = 0
     states_count: NonNegativeInt = 0
+    aliases_count: NonNegativeInt = 0
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 # ----------------------------
@@ -411,8 +412,11 @@ class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
     text: Annotated[str|None, Fi('$search')] = None
     name: Annotated[list[CompanyName]|None, Fi('$in', 'aliases')] = None
     naics: Annotated[list[NaicsId]|None, Fi('$naics')] = None
-    order_fields: ClassVar = {
-        'name', 'reports_count', 'states_count', 'last_reported', 'employees_sum'}
+    aliases_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'aliases_count')] = None
+    aliases_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'aliases_count')] = None
+    order_fields: ClassVar = (
+        {'name', 'aliases_count'} |
+        {'reports_count', 'states_count', 'last_reported', 'employees_sum'})
     default_ordering: ClassVar = [('name', 1)]
     result_model: ClassVar = CompanyDetail
 

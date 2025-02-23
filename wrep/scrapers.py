@@ -71,6 +71,7 @@ class Scraper:
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str|None]]]:
         def rest(row: dict):
+            # Backwards-compatibility
             if '__' in row:
                 row['__'] = json.dumps(row['__'])
             return row
@@ -1273,7 +1274,6 @@ class NY(Scraper):
 
 class OH(Scraper):
     base_url = 'https://jfs.ohio.gov'
-    archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
     latest_url = (
         '/wps/portal/gov/jfs/job-services-and-unemployment/job-services'
         '/job-programs-and-services/submit-a-warn-notice'
@@ -1309,14 +1309,20 @@ class OH(Scraper):
             (_r(r'\*'), ''),
         ]
     )
+    # Archived historical data
+    archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
+    # As of 2025-02, the 2024 link disappeared from the website, so we use an
+    # archived source.
     archived_sources = [
-        ('2024.html.json', 'https://archive.warnreports.org/s/OH/2024.html.json')
+        ('2024.html.json', 'https://archive.warnreports.org/s/OH/2024.html.json'),
     ]
 
     async def scrape(self):
         await self.download('oh_historical.csv', self.archive_url, missing_only=True)
+        # Extracted json file key to sourece url
         sources: deque[tuple[str, str]] = deque()
-        page = bs(await self.fetch(key := 'latest.html', self.latest_url))
+        await self.download(key := 'latest.html', self.latest_url)
+        page = bs(self.cache/key)
         self.cache.write_json(f'{key}.json', self.extract_json(page), indent=2)
         sources.append((f'{key}.json', self.absurl(self.latest_url)))
         for a in page.select('nav a'):
@@ -1327,14 +1333,15 @@ class OH(Scraper):
             if not self.cache.exists(f'{key}.json'):
                 self.cache.write_json(
                     f'{key}.json',
-                    self.extract_json(bs(self.cache.read(key))),
+                    self.extract_json(bs(self.cache/key)),
                     indent=2)
             sources.append((f'{key}.json', self.absurl(a['href'])))
         for key, url in self.archived_sources:
             await self.download(key, url, missing_only=True)
             sources.append((key, url))
         self.cache.write_json('sources.json', dict(sorted(sources)), indent=2)
-        self.cache.write_json('index.json', index := self.build_index(), indent=2)
+        index = self.build_index()
+        self.cache.write_json('index.json', index, indent=2)
         for key, url in chain.from_iterable(map(dict.items, index.values())):
             await self.download(key, url, missing_only=True)
             self.artifacts.add(key)
@@ -1364,6 +1371,7 @@ class OH(Scraper):
         headers = next(it)[:9]
         for values in filter(any, it):
             raw = dict(zip(headers, values))
+            # Don't include the archived source
             if self.base_url in source:
                 raw['URL'] = source
             ids = raw['Notice ID'].split(' and ')
@@ -1379,6 +1387,7 @@ class OH(Scraper):
         headers = [self.legacy_header_map.get(header, header) for header in next(it)]
         for values in it:
             row = dict(zip(headers, values))
+            # Ignore duplicates of current data
             if (notice_id := row.get('Notice ID')) and notice_id not in index:
                 yield row
 
@@ -1389,7 +1398,9 @@ class OH(Scraper):
     def normalize_notice_id(self, value: str) -> str:
         return utils.rewrite_all(value, self.rewrites['notice_id']).strip()
 
-    def build_index(self) -> dict[str, list[str]]:
+    def build_index(self) -> dict[str, dict[str, str]]:
+        'Build mapping of notice_id to artifacts dict (key: url)'
+        # Pairs of (notice_id, url)
         items: deque[tuple[str, str]] = deque()
         for file in self.cache.glob('*.html.json'):
             with file.open() as f:
@@ -1402,30 +1413,32 @@ class OH(Scraper):
             for values in filter(any, it):
                 url = self.absurl(values[k_url])
                 url = utils.rewrite_all(url, self.rewrites['artifact'])
+                if not url:
+                    continue
                 if not url.endswith('.pdf'):
                     continue
                 if url in self.artifact404:
                     continue
                 ids = values[k_id].split(' and ')
                 ids = filter(None, map(self.normalize_notice_id, ids))
-                for id in ids:
-                    if id and url:
-                        items.append((id, url))
-        index = defaultdict(list)
-        for key, value in sorted(items):
-            index[key].append(value)
-        for notice_id, values in index.items():
-            if len(values) > 1:
-                values = sorted(set(values))
-            artifacts = {}
-            for i, url in enumerate(values, start=1):
-                if len(values) == 1:
-                    key = f'records/{notice_id}.pdf'
-                else:
-                    key = f'records/{notice_id}_{i}.pdf'
-                artifacts[key] = url
-            index[notice_id] = artifacts
-        return dict(index)
+                for notice_id in ids:
+                    items.append((notice_id, url))
+        # Mapping from notice_id to urls
+        builder: dict[str, set[str]] = defaultdict(set)
+        for notice_id, url in sorted(items):
+            builder[notice_id].add(url)
+        # Final index
+        index: dict[str, dict[str, str]] = {}
+        for notice_id, urls in builder.items():
+            urls = sorted(urls)
+            index[notice_id] = {}
+            for i, url in enumerate(urls, start=1):
+                name = notice_id
+                if len(urls) > 1:
+                    name = f'{name}_{i}'
+                key = f'records/{name}.pdf'
+                index[notice_id][key] = url
+        return index
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'

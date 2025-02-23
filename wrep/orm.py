@@ -244,6 +244,7 @@ class Company(MapReduceBase[CompanyDetail, CompanyRowType]):
         for alias in company.name_canon, company.name:
             if alias not in memo['aliases']:
                 inst.aliases.append(alias)
+                inst.aliases_count += 1
                 memo['aliases'].add(alias)
         if report.id not in memo['reports']:
             inst.reports_count += 1

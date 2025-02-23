@@ -33,10 +33,13 @@ COMPANY_NAMES: NormDefs = {
     "Albertson's": [
         _r(r'^albertsons.*', re.I),
     ],
+    'Alorica': _sw,
     'Amazon': [
         'Amazon.com',
     ],
+    'Amentum': [_sw, _sw('PAE Shared Services')],
     'Ameri-Kleen': _sw,
+    'Applied Materials': _sw,
     'Aramark': [
         _r(r'^Aramark (-|\(|@|at )', re.I),
     ],
@@ -59,11 +62,18 @@ COMPANY_NAMES: NormDefs = {
         'Carbon Health Medical Group',
     ],
     'Caterpillar': _sw,
+    'Centerra': _sw,
+    'Cisco Systems': _sw('Cisco'),
+    'Concentrix': _r(r'^(Concentrix|Convergys).*', re.I),
     'CVS': [
         _r(r'^cvs\s.*', re.I),
     ],
+    'DHL': [
+        _r(r'^.*DHL.*'),
+    ],
     'Dish Network': _sw,
     'Dollar Express': _sw,
+    'Eastman Kodak': _sw,
     'Enterprise Holdings': _sw,
     'Ericsson Inc': [
         _r(r'^Ericsson,? Inc.*', re.I),
@@ -73,8 +83,12 @@ COMPANY_NAMES: NormDefs = {
         _sw('FedEx'),
     ],
     'First Student': _sw,
+    'First Transit': _sw,
     'Forever 21': [_sw, _sw('F21')],
     'G2 Secure Staff': _sw,
+    'GCA Education Services': [
+        _r(r'^(ABM/)?GCA Education.*$', re.I),
+    ],
     'GDI Services': _sw,
     'Goodwill': [
         _r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
@@ -116,7 +130,9 @@ COMPANY_NAMES: NormDefs = {
     'Levy Premium Foodservice': [
         _r(r'^Levy Premium Food\s*service.*', re.I),
     ],
-    'Lockheed Martin': _sw,
+    'Lockheed Martin': [
+        _r(r'^Lockheed (Martin|Aeronautical).*', re.I),
+    ],
     'LogRhythm': _sw,
     'Lord & Taylor': [
         _r(r'^Lord\s*(&|\+|and)\s*(Taylor|Tyalor)(\s.*|$)', re.I),
@@ -128,15 +144,18 @@ COMPANY_NAMES: NormDefs = {
     'ManpowerGroup': _sw,
     'Marvell Semiconductor': _sw,
     'Meta Platforms': _sw,
+    'Microsoft': _sw,
     'Nordstrom': [
         _r(r'^Nordstrom.*(Anchorage|Center|Inc|Place|Plaza|Rack|Stonestown|Store|Waterside).*', re.I),
         _r(r'^(Dadeland|Lloyd Center)?\s*Nordstrom$', re.I),
     ],
+    'Novartis Pharmaceuticals': _sw,
     "P.F. Chang's": [
         _r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
     ],
     'Packers Sanitation Services': _sw('Packers Sanitation'),
     'PepsiCo': _sw,
+    'Pioneer Hi-Bred': [_sw],
     'Pitney Bowes': [
         _r(r'^(Newgistics.*)?Pitney Bowes.*', re.I),
     ],
@@ -173,6 +192,7 @@ COMPANY_NAMES: NormDefs = {
     'Southwest Airlines': [
         _sw('Southwest - Dallas'),
     ],
+    'Sprint': _sw,
     'Staples': [
         'Staples the Office Superstore LLC',
         'Staples Inc',
@@ -197,8 +217,10 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^(The )?Home Depot.*', re.I),
     ],
     'The North Face': _sw,
+    'Thermo Fisher Scientific': _sw('Thermo Fisher'),
     'Transamerica Insurance': _sw('Transamerica Life'),
     'Transdev Services': _sw,
+    'Triple Canopy': _sw,
     'True Value': [_sw, 'Ziegler True Value'],
     'Tyson Foods': [
         _r(r'^(Tyson|Keystone) Food.*', re.I),
