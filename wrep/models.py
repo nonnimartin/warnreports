@@ -173,7 +173,7 @@ __all__ += [
 class Extraction(DataModel):
     id: UUID = Field(alias='_id', default=None)
     state: StateCode|None = Field(default=None)
-    i: NonNegativeInt|None = Field(alias='_i', default=None,)
+    i: NonNegativeInt|None = Field(default=None)
     data: dict[str, str|None] = Field(default_factory=dict)
     stat_exclude_fields: ClassVar = ('scrape_time', 'NAICS Codes')
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -453,9 +453,9 @@ __all__ += [
 class ExtractionFilter(FilterModel[Extraction]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
     state: Annotated[list[StateCode]|None, Fi('$in')] = None
-    i_min: Annotated[NonNegativeInt|None, Fi('$gte', '_i')] = None
-    i_max: Annotated[NonNegativeInt|None, Fi('$lte', '_i')] = None
-    default_ordering: ClassVar = [('state', 1), ('_i', 1)]
+    i_min: Annotated[NonNegativeInt|None, Fi('$gte')] = None
+    i_max: Annotated[NonNegativeInt|None, Fi('$lte')] = None
+    default_ordering: ClassVar = [('state', 1), ('i', 1)]
     result_model: ClassVar = Extraction
 
 class TranslationFilter(FilterModel[Translation]):

@@ -401,7 +401,7 @@ class CO(Translator):
         starting=['begin_date'],
         action=['reason'],
         url=[],
-        industry=[],
+        industry=['naics'],
         report_id=[],
         naics=['naics'],
         artifacts=[])
@@ -416,6 +416,11 @@ class CO(Translator):
         ],
         naics=[
             (_r(r'-[-\s]'), r' '),
+            (_r(r'^(\d+), (\d+:)'), r'\1\2'),
+        ],
+        industry=[
+            (_r(r'^[\d\s,]+: (.*)$'), r'\1'),
+            (_r(r'Practioners'), 'Practitioners'),
         ]
     )
 
@@ -561,6 +566,7 @@ class FL(Translator):
         company=[
             (_r(r'\n.*'), ''),
             ('Sikorsky, a', 'Sikorsky'),
+            (_r(r'Harvest Sherwoord'), 'Harvest Sherwood'),
         ],
     )
     values_hash_exclude = ['download', 'artifacts_json']
@@ -569,6 +575,7 @@ class FL(Translator):
     def finish(self, inst: Translation, info: TranslateInfo):
         if inst.company and not inst.location:
             if (text := info.data.get('Company Name')) and '\n' in text:
+                text = sanitize(text)
                 if '\n\n' in text:
                     addrtext = text.rsplit('\n\n', 1)[-1]
                 else:

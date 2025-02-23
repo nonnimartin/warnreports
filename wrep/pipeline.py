@@ -183,9 +183,9 @@ class Pipeline:
         from .translators import TranslationFactory
         async with source.reader(dict(state=[self.state])) as reader:
             with SessionLocal() as session:
-                translator = TranslationFactory(session)
+                factory = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
-                it = utils.amap(translator.translate, it)
+                it = utils.amap(factory.translate, it)
                 it = utils.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
                 if self.opts.rollback:
