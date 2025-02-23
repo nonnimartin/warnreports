@@ -11,7 +11,8 @@ from feedgen.feed import FeedGenerator
 from pydantic import ValidationError
 from starlette.datastructures import URL
 
-from .. import search, settings, utils
+from .. import settings, utils
+from ..backends.mongo import Search, filters
 from ..models import *
 from .common import (FeedSearchParams, clean_feed_params, feed_id_encode,
                      site_absurl)
@@ -75,8 +76,8 @@ async def build_feed(fmt: str, params: FeedSearchParams) -> bytes:
     feed.description(title)
     feed.generator('')
     params = dict(params, order='-reported')
-    filter = search.filters[ReportData].model_validate(params)
-    result = search.Search(filter, settings.FEED_ENTRY_LIMIT)
+    filter = filters[ReportData].model_validate(params)
+    result = Search(filter, settings.FEED_ENTRY_LIMIT)
     async for report in result.objs():
         entry = feed.add_entry(order='append')
         entry.id((str(report.id)))
