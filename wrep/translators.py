@@ -318,7 +318,7 @@ class AL(Translator):
         company=['Company'],
         reported=['Initial Report Date'],
         location=['City'],
-        employees=['Planned # Affected Employees'],
+        employees=['Planned # of Affected Employees'],
         starting=['Planned Starting Date'],
         action=['Closing or Layoff'],
         url=[],
