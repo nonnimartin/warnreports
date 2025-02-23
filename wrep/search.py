@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
-import re
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
 from . import orm, settings, utils
-from .backends.mongo import (AbstractCollection, AbstractMongoCollection, MongoFilterModel,
-                             MongoClient, Search, filters)
+from .backends.mongo import (AbstractCollection, AbstractMongoCollection,
+                             MongoClient, MongoFilterModel)
 from .models import *
 
-__all__ = ['filters', 'Search']
+__all__ = ['mapped_collections']
 
 logger = utils.get_logger('search')
 client = MongoClient(

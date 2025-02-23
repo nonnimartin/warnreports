@@ -14,7 +14,7 @@ from .. import Stage, settings, utils
 from ..models import *
 from ..utils import EitherIterable
 from .mongo import (AbstractMongoCollection, MongoClient, MongoCollection,
-                    MongoFilterModel, Search, filters)
+                    MongoFilterModel, Search)
 
 __all__ = [
     'ExtractionBackend',
@@ -158,8 +158,8 @@ class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
         return self.collection.client
 
     @property
-    def filter_class(self) -> type[FilterModel[DM]]:
-        return filters[self.model]
+    def filter_class(self) -> type[MongoFilterModel[DM]]:
+        return self.collection.filter_class
 
     async def get_collection(self):
         return (await self.db()).get_collection(self.collection.name)
@@ -283,7 +283,7 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
 
     async def clean(self, name, filt: Any) -> int:
         collection = self.collections[name]
-        filter = filters[collection.data_model].model_validate(filt)
+        filter = collection.filter_class.model_validate(filt)
         q = Search(filter, limit=0, context=self.context).q
         coll = (await self.db()).get_collection(collection.name)
         res = await coll.delete_many(q)
@@ -291,7 +291,7 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
 
     async def stat(self, name, filt: Any):
         collection = self.collections[name]
-        filter = filters[collection.data_model].model_validate(filt)
+        filter = collection.filter_class.model_validate(filt)
         srch = Search(filter, context=self.context)
         return await docs_stat(await srch.docs())
 

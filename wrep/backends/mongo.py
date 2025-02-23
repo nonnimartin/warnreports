@@ -130,10 +130,15 @@ class MissingControlDoc(Exception):
 class AbstractCollection:
     name: str
     data_model: type[DataModel]
+    filter_class: type[FilterModel]
 
 class AbstractMongoCollection(AbstractCollection):
     indexes: list[IndexModel]
     client: MongoClient
+
+    @property
+    def filter_class(self) -> type[MongoFilterModel]:
+        return filters[self.data_model]
 
     async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, str|int]:
         'Get collection stats'
@@ -210,7 +215,7 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
 
 @dataclasses.dataclass
 class Search[DM: DataModel]:
-    filter: FilterModel[DM]|MongoFilterModel[DM]
+    filter: MongoFilterModel[DM]
     limit: Limit|None = None
     offset: Offset = 0
     context: dict[str, Any]|None = None
