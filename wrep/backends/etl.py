@@ -39,13 +39,12 @@ collections: dict[str, MongoCollection] = dict(
         data_model=Extraction,
         indexes=[
             {'state': 1},
-            {'_i': 1}]),
+            {'i': 1}]),
     translations=MongoCollection(
         client=client,
         name='translations',
         data_model=Translation,
         indexes=[
-            {'id': 1},
             {'values_id': 1},
             {'state': 1}]),
     pipelinelogs=MongoCollection(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Iterator
 
 type Norms = dict[str|re.Pattern, str|Callable[[re.Match], str]]
 type SrchSpec = str|re.Pattern|Callable[[str], Iterable[str|re.Pattern]]
@@ -40,6 +40,7 @@ COMPANY_NAMES: NormDefs = {
     'Aramark': [
         _r(r'^Aramark (-|\(|@|at )', re.I),
     ],
+    'Apen Sports': _sw,
     'AT&T': _sw,
     'Avis Budget': _sw,
     'BAE Systems': _sw,
@@ -61,6 +62,7 @@ COMPANY_NAMES: NormDefs = {
     'CVS': [
         _r(r'^cvs\s.*', re.I),
     ],
+    'Dish Network': _sw,
     'Dollar Express': _sw,
     'Enterprise Holdings': _sw,
     'Ericsson Inc': [
@@ -96,6 +98,8 @@ COMPANY_NAMES: NormDefs = {
     'Jabil': [
         _r(r'^(Nypro .*)?Jabil( .*)$', re.I),
     ],
+    'Jack Cooper': _sw,
+    'John Deere': _sw,
     'Kaiser Foundation': _sw,
     'Kmart': [
         'KMART CORPORATION',
@@ -148,6 +152,10 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^Sears .*Holdings.*', re.I),
     ],
     'Shaw Industries': _sw,
+    'Sherwood Food Distributors': [
+        _sw,
+        _r(r'^Harvest (Sherwood|Meat).*', re.I),
+    ],
     'Sikorsky': [
         _r(r'^Sikorsky(,?\s.*)?$', re.I),
     ],
@@ -181,17 +189,19 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^Symantec( -.*|Corp.*)?$', re.I),
     ],
     'T-Mobile': _sw,
+    'Telluride Sports': _sw,
     'Tesla': [
         'Tesla Inc',
     ],
     'The Home Depot': [
         _r(r'^(The )?Home Depot.*', re.I),
     ],
+    'The North Face': _sw,
     'Transamerica Insurance': _sw('Transamerica Life'),
     'Transdev Services': _sw,
     'True Value': [_sw, 'Ziegler True Value'],
     'Tyson Foods': [
-        _r(r'^(Tyson|Keystone) Foods.*', re.I),
+        _r(r'^(Tyson|Keystone) Food.*', re.I),
     ],
     'United Parcel Service': [
         _sw,
@@ -217,6 +227,7 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^Yellow (Corp|Freight|Transportation|Trucking).*', re.I),
         _r(r'^YRC .*Freight.*', re.I),
     ],
+    'Zillow Group': _sw('Zillow'),
 }
 AIRLINE_COMPANIES = [
     'United',
@@ -265,6 +276,9 @@ def _build(norms: Norms, *defs: NormDefs):
             for value in values:
                 if callable(value):
                     for value in value(name):
+                        norms[value] = name
+                elif isinstance(value, Iterator):
+                    for value in value:
                         norms[value] = name
                 else:
                     norms[value] = name
