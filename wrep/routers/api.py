@@ -80,7 +80,7 @@ async def naics_list(req: Request, rep: Response, params: NaicsSearchParams, opt
 
 @router.head('/naics/{id}', include_in_schema=False)
 @router.get('/naics/{id}')
-async def naics_get(id: int) -> NaicsDetail:
+async def naics_get(id: NaicsId) -> NaicsDetail:
     return await retrieve404(NaicsDetail, id=[id])
 
 @router.head('/states', include_in_schema=False)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import datetime, timezone
-from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias
+from typing import Annotated, Any, ClassVar, Iterator, Literal, Self, TypeAlias
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
@@ -29,19 +29,21 @@ __all__ = [
     'Limit',
     'NaicsData',
     'NaicsDetail',
+    'NaicsId',
     'Offset',
     'ReportData',
     'StateCode',
     'StateDetail',
     'ValidationError']
 
+type OrderItem = tuple[str, Literal[1, -1]]
 Limit = Annotated[NonNegativeInt, Le(1_000)]
 Offset: TypeAlias = NonNegativeInt
 CompanyName = Annotated[str, StringConstraints(min_length=1)]
 StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
 UrlType = Annotated[HttpUrl, PlainSerializer(str, return_type=str)]
-NaicsId = Annotated[NonNegativeInt, Gt(10), Lt(1_000_000)]
-NaicsRootId = Annotated[NonNegativeInt, Gt(10), Lt(100)]
+NaicsId = Annotated[int, Gt(10), Lt(1_000_000)]
+NaicsRootId = Annotated[int, Gt(10), Lt(100)]
 
 @dataclasses.dataclass
 class Fi:
@@ -212,7 +214,7 @@ class PipelineRunDetail(DataModel):
     stage: Stage
     start: datetime|None = None
     end: datetime|None = None
-    elapsed: float = 0
+    elapsed: NonNegativeFloat = 0
     failed: bool = False
     error: PipelineRunError|None = None
     result: dict[str, Any]|None = None
@@ -265,7 +267,7 @@ class PipelineLog(DataModel):
     pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
     start: datetime|None = None
     end: datetime|None = None
-    elapsed: float = 0
+    elapsed: NonNegativeFloat = 0
     errors: list[PipelineRunError] = Field(default_factory=list)
     runs: list[PipelineRunDetail] = Field(default_factory=list)
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -338,31 +340,30 @@ __all__ += [
     'ReportsFilter',
     'StatesFilter']
 
+def parse_orders(order: str, allowed: set[str]|None = None) -> Iterator[OrderItem]:
+    for field in filter(None, re.split(r',\s*', order)):
+        if field.startswith('-'):
+            field = field[1:]
+            dir_ = -1
+        else:
+            dir_ = 1
+        if allowed is None or field in allowed:
+            yield field, dir_
+
 class FilterModel[DM: DataModel](DataModel):
     order: str|None = None
     result_model: ClassVar[type[DM]]
     order_fields: ClassVar[set[str]] = set()
-    default_ordering: ClassVar[list[tuple[str, Literal[1, -1]]]] = []
+    default_ordering: ClassVar[list[OrderItem]] = []
 
-    def get_ordering(self):
+    def get_orders(self) -> list[OrderItem]:
         if self.order:
-            yield from self.parse_ordering(self.order, self.order_fields)
+            orders = list(parse_orders(self.order, self.order_fields))
         else:
-            yield from self.default_ordering
-
-    @classmethod
-    def parse_ordering(cls, order: str, allowed: set[str]|None = None):
-        for field in filter(None, re.split(r',\s*', order)):
-            if field.startswith('-'):
-                field = field[1:]
-                dir_ = -1
-            else:
-                dir_ = 1
-            if allowed is None or field in allowed:
-                yield field, dir_
-
-    def __init_subclass__(cls, **kwargs):
-        return super().__init_subclass__(**kwargs)
+            orders = list(self.default_ordering)
+        if ('_id', 1) not in orders and ('_id', -1) not in orders:
+            orders.append(('_id', 1))
+        return orders
 
 class ReportsFilter(FilterModel[ReportData]):
     id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
