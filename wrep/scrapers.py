@@ -1070,6 +1070,20 @@ class MD(Scraper):
     def list_page_files(self) -> list[Path]:
         return sorted(self.cache.glob('*.html'), reverse=True)
 
+class ME(Scraper):
+
+    async def scrape(self) -> None:
+        # CSV files appear to get corrupted sometimes, resulting in missing data, which breaks
+        # hashing. Clearing the CSV seems to help.
+        self.cache.delete('*.csv', glob=True)
+        await super().scrape()
+
+    async def clean(self) -> None:
+        self.cache.delete('*.csv', glob=True)
+
+    def statobjs(self):
+        yield from self.cache.glob('*.csv')
+
 class MO(Scraper):
     start_year = 2019
     base_url = 'https://jobs.mo.gov/warn'

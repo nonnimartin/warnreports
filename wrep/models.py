@@ -4,7 +4,7 @@ import dataclasses
 import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, ClassVar, Iterator, Literal, Self, TypeAlias
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
@@ -257,10 +257,15 @@ class PipelineOpts(ScraperOpts):
     lazy: bool = True
     rollback: bool = False
 
+type UniqueList[T] = Annotated[
+    list[T],
+    BeforeValidator(lambda value: list(utils.unique(value))),
+    Field(default_factory=list)]
+
 class PipelineLog(DataModel):
-    id: UUID = Field(alias='_id')
-    stages: list[Stage] = Field(default_factory=list)
-    states: list[StateCode] = Field(default_factory=list)
+    id: UUID = Field(alias='_id', default_factory=uuid4)
+    stages: UniqueList[Stage]
+    states: UniqueList[StateCode]
     context: dict[str, Any] = Field(default_factory=dict)
     batch_opts: PipelineBatchOpts = Field(default_factory=PipelineBatchOpts)
     pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
@@ -333,6 +338,9 @@ class PipelineLog(DataModel):
 
 __all__ += ['FilterModel', 'Limit', 'Offset']
 
+Limit = Annotated[NonNegativeInt, Le(1_000)]
+Offset: TypeAlias = NonNegativeInt
+
 class FilterModel[DM: DataModel](DataModel):
     order: str|None = None
     result_model: ClassVar[type[DM]]
@@ -358,16 +366,14 @@ def parse_orders(order: str, allowed: set[str]|None = None) -> Iterator[OrderIte
         if allowed is None or field in allowed:
             yield field, dir_
 
-def ensure_list[T](value: T|list[T]|None) -> list[T]|None:
+def ensurelist[T](value: T|list[T]|None) -> list[T]|None:
     if isinstance(value, list):  
         return value
     if value is not None:
         return [value]
 
-Limit = Annotated[NonNegativeInt, Le(1_000)]
-Offset: TypeAlias = NonNegativeInt
 type OrderItem = tuple[str, Literal[1, -1]]
-type AsList[T] = Annotated[list[T]|None, BeforeValidator(ensure_list)]
+type AsList[T] = Annotated[list[T]|None, BeforeValidator(ensurelist)]
 
 
 @dataclasses.dataclass

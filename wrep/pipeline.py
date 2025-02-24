@@ -5,12 +5,12 @@ import functools
 import operator
 import uuid
 from collections import defaultdict, deque
-from functools import cached_property as lazy
+from functools import cache
 from itertools import chain
 from pathlib import Path
 from threading import Thread
 from types import MappingProxyType as MapProxy
-from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, overload
 
 from sentry_sdk import capture_exception
 
@@ -38,32 +38,29 @@ class Pipeline:
         'action',
         'url',
         'company_norm_id')
-    BACKENDS: ClassVar[Mapping[Stage, type[StageBackend]]] = MapProxy(
-        StageBackend.registry['mongo'])
 
-    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, opts: PipelineOpts|dict|None = None) -> None:
+    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, opts: Any = None) -> None:
         if context is None:
             context = {}
         self.state = state.upper()
         self.context = context
-        self.backends: dict[Stage, StageBackend] = {}
         self.opts = PipelineOpts.model_validate(opts or {})
         self.session: orm.Session|None = None
 
-    @lazy
-    def scraper(self) -> Scraper:
-        from .scrapers import scrapers
-        return scrapers[self.state](opts=self.opts)
+    if TYPE_CHECKING:
+        @overload
+        def backend[B: StageBackend](self, base: type[B]) -> B:...
+        @overload
+        def scraper(self, base: StateCode) -> Scraper:...
 
-    def backend[B: StageBackend](self, stage: Stage|type[B]) -> StageBackend|B:
-        if isinstance(stage, type):
-            stage = stage.stage
-        try:
-            backend = self.backends[stage]
-        except KeyError:
-            backend = self.BACKENDS[stage](context=self.context)
-            self.backends[stage] = backend
-        return backend
+    @cache
+    def backend[B: StageBackend](self, base: type[B]) -> B:
+        return StageBackend.registry['mongo'][base.stage](context=self.context)
+
+    @cache
+    def scraper(self, state: StateCode) -> Scraper:
+        from .scrapers import scrapers
+        return scrapers[state](opts=self.opts)
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -74,23 +71,19 @@ class Pipeline:
 
     async def stat(self, stage: Stage) -> dict:
         stage = Stage(stage)
+        state = self.state
         if stage is stage.Scrape:
-            return await self.scraper.stat()
+            return await self.scraper(state).stat()
         if stage is stage.Extract:
-            return await self.backend(ExtractionBackend).stat(dict(state=[self.state]))
+            backend = self.backend(ExtractionBackend)
+            return await backend.stat(dict(state=state))
         if stage is stage.Translate:
-            return await self.backend(TranslationBackend).stat(dict(state=[self.state]))
-        if stage is stage.Index:
-            be = self.backend(SearchIndexBackend)
-            coros = dict(
-                reports=be.stat('reports', dict(state=[self.state])),
-                artifacts=be.stat('artifacts', dict(state=[self.state])),
-                companies=be.stat('companies', dict(state=[self.state])))
-            return {k: await v for k, v in coros.items()}
+            backend = self.backend(TranslationBackend)
+            return await backend.stat(dict(state=state))
         if stage is stage.Load:
             stat: dict[str, int] = {}
             backend = self.backend(SearchIndexBackend)
-            filters = self.get_orm_select_filters()
+            filters = self.get_orm_select_filters(state=state)
             with ensure_session(self.session) as session:
                 for name, defn in backend.collections.items():
                     if name in ('naics', 'states'):
@@ -101,32 +94,30 @@ class Pipeline:
                         lazy=bool(self.opts.lazy))
                     stat[name] = sum(1 for _ in it)
             return stat
+        if stage is stage.Index:
+            backend = self.backend(SearchIndexBackend)
+            coros = dict(
+                reports=backend.stat('reports', dict(state=state)),
+                artifacts=backend.stat('artifacts', dict(state=state)),
+                companies=backend.stat('companies', dict(state=state)))
+            return {k: await v for k, v in coros.items()}
         raise ValueError(stage)
         
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
-        logger.info(f'{self.state}:{stage}:clean')
+        state = self.state
+        logger.info(f'{state}:{stage}:clean')
         if stage is stage.Scrape:
-            await self.scraper.clean()
+            await self.scraper(state).clean()
         elif stage is stage.Extract:
-            await self.backend(ExtractionBackend).clean(dict(state=[self.state]))
-            await self.scraper.extract_clean()
+            backend = self.backend(ExtractionBackend)
+            await backend.clean(dict(state=state))
+            await self.scraper(state).extract_clean()
         elif stage is stage.Translate:
-            await self.backend(TranslationBackend).clean(dict(state=[self.state]))
-        elif stage is stage.Index:
-            be = self.backend(SearchIndexBackend)
-            coros = [
-                be.clean('reports', dict(state=[self.state])),
-                be.clean('artifacts', dict(state=[self.state])),
-                be.clean('companies', dict(
-                    state=[self.state],
-                    states_count_min=1,
-                    states_count_max=1)),
-                be.clean('states', dict(id=[self.state]))]
-            for coro in coros:
-                await coro
+            backend = self.backend(TranslationBackend)
+            await backend.clean(dict(state=state))
         elif stage is stage.Load:
-            filters = self.get_orm_clean_filters()
+            filters = self.get_orm_clean_filters(state=state)
             stmts = (
                 orm.delete(model).where(*filters)
                 for model, filters in filters.items())
@@ -135,20 +126,32 @@ class Pipeline:
                     session.execute(stmt)
                 if not self.session and not self.opts.rollback:
                     session.commit()
-        logger.info(f'{self.state}:{stage}:clean:complete')
+        elif stage is stage.Index:
+            backend = self.backend(SearchIndexBackend)
+            coros = [
+                backend.clean('reports', dict(state=state)),
+                backend.clean('artifacts', dict(state=state)),
+                backend.clean('companies', dict(
+                    state=state,
+                    states_count_min=1,
+                    states_count_max=1)),
+                backend.clean('states', dict(id=state))]
+            for coro in coros:
+                await coro
+        logger.info(f'{state}:{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
+        state = self.state
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
+        logger.info(f'{state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
-        self.scraper.metrics.clear()
-        self.scraper.artifacts.metrics.clear()
-        await self.scraper.scrape()
-        metrics = dict(self.scraper.metrics)
-        if self.scraper.artifacts.metrics:
-            metrics.update(artifacts=dict(self.scraper.artifacts.metrics))
+        scraper = self.scraper(state)
+        await scraper.scrape()
+        metrics = dict(scraper.metrics)
+        if scraper.artifacts.metrics:
+            metrics.update(artifacts=dict(scraper.artifacts.metrics))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         res = dict(nochange=nochange, prev=statlog(prev), cur=statlog(cur))
@@ -158,16 +161,18 @@ class Pipeline:
 
     async def extract(self, clean: bool = False) -> dict:
         stage = Stage.Extract
+        state = self.state
         backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
+        logger.info(f'{state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
-        async with utils.awith(self.scraper.extract()) as source:
+        scraper = self.scraper(state)
+        async with utils.awith(scraper.extract()) as source:
             it = utils.as_aiter(source)
-            it = (dict(state=self.state, data=x) async for x in it)
+            it = (dict(state=state, data=x) async for x in it)
             count, created, updated = await backend.update(it)
-            deleted = await backend.clean(dict(state=[self.state], i_min=count+1))
+            deleted = await backend.clean(dict(state=[state], i_min=count+1))
         cur = await self.stat(stage)
         nochange = cur == prev if cur else None
         counts = dict(count=count, created=created, updated=updated, deleted=deleted)
@@ -175,14 +180,15 @@ class Pipeline:
 
     async def translate(self, clean: bool = False) -> dict:
         stage = Stage.Translate
+        state = self.state
         backend = self.backend(TranslationBackend)
         source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{self.state}:{stage}:stat {statlog(prev)}')
+        logger.info(f'{state}:{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         from .translators import TranslationFactory
-        async with source.reader(dict(state=[self.state])) as reader:
+        async with source.reader(dict(state=state)) as reader:
             with SessionLocal() as session:
                 factory = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
@@ -199,18 +205,19 @@ class Pipeline:
         return dict(nochange=nochange) | counts | dict(prev=statlog(prev), cur=statlog(cur))
 
     async def load(self, clean: bool = False) -> dict:
+        state = self.state
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
         source = self.backend(TranslationBackend)
-        async with source.reader(dict(state=[self.state])) as reader:
+        async with source.reader(dict(state=state)) as reader:
             with SessionLocal() as session:
                 self.session = session
                 if clean:
                     await self.clean(Stage.Load)
                 async for translation in reader:
                     counts[self.save(translation)[1]] += 1
-                stat = session.get(StateStat, self.state)
-                stat = stat or StateStat(id=self.state)
+                stat = session.get(StateStat, state)
+                stat = stat or StateStat(id=state)
                 stat.self_update(session)
                 session.add(stat)
                 if self.opts.rollback:
@@ -225,10 +232,11 @@ class Pipeline:
 
     async def index(self, clean: bool = False) -> dict:
         stage = Stage.Index
+        state = self.state
         if clean:
             await self.clean(stage)
         backend = self.backend(SearchIndexBackend)
-        filters = self.get_orm_select_filters()
+        filters = self.get_orm_select_filters(state=state)
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
             for name, defn in backend.collections.items():
@@ -257,7 +265,7 @@ class Pipeline:
         stmt = orm.STMT_REPORT_GET.where(Report.id == uid)
         report = self.session.scalars(stmt).unique().one_or_none()
         if report is None:
-            report = Report(id=uid, state=self.state)
+            report = Report(id=uid, state=translation.state)
             save = save.Create
         naics = set(record.pop('naics', ()))
         industry = record.pop('industry', None)
@@ -334,8 +342,8 @@ class Pipeline:
     def save_artifacts(self, report: Report, index: dict[str, str]) -> SaveType:
         save = SaveType.Nochange
         index = {
-            str(Path(f'{self.state.lower()}/{key}')): value
-            for key, value in index.items()}
+            str(Path(f'{report.state.lower()}/{key}')): url
+            for key, url in index.items()}
         oldmap = {a.id: a for a in report.artifacts}
         artifacts: list[Artifact] = []
         for path, url in index.items():
@@ -360,32 +368,32 @@ class Pipeline:
             save = save.Update
         return save
 
-    def get_orm_clean_filters(self) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
+    def get_orm_clean_filters(self, state: StateCode) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
         return {
-            Report: [Report.state == self.state],
-            Company: [self.get_companies_delete_pred()],
-            Artifact: [self.get_artifacts_pred()],
-            StateStat: [StateStat.id == self.state]}
+            Report: [Report.state == state],
+            Company: [self.get_companies_delete_pred(state=state)],
+            Artifact: [self.get_artifacts_pred(state=state)],
+            StateStat: [StateStat.id == state]}
 
-    def get_orm_select_filters(self) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
-        return self.get_orm_clean_filters() | {
-            Company: [self.get_companies_update_pred()],
+    def get_orm_select_filters(self, state: StateCode) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
+        return self.get_orm_clean_filters(state=state) | {
+            Company: [self.get_companies_update_pred(state=state)],
             Naics: []}
 
-    def get_artifacts_pred(self) -> orm.BinaryExpression:
-        return Artifact.path.startswith(f'{self.state.lower()}/')
+    def get_artifacts_pred(self, state: StateCode) -> orm.BinaryExpression:
+        return Artifact.path.startswith(f'{state.lower()}/')
 
-    def get_companies_delete_pred(self) -> orm.BinaryExpression:
+    def get_companies_delete_pred(self, state: StateCode) -> orm.BinaryExpression:
         return Company.id.not_in(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
-            .where(Report.state != self.state))
+            .where(Report.state != state))
 
-    def get_companies_update_pred(self) -> orm.BinaryExpression:
+    def get_companies_update_pred(self, state: StateCode) -> orm.BinaryExpression:
         return Company.id.in_(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
-            .where(Report.state == self.state))
+            .where(Report.state == state))
 
     @staticmethod
     def truncate_fields(record: dict[str, Any]) -> dict[str, int]:
@@ -403,6 +411,10 @@ def statlog(stat: dict):
     stat.pop('hash', None)
     return stat
 
+class SkipReason(utils.StrEnum):
+    fail = 'Previous stage failed'
+    nochange = 'No change'
+
 class PipelineRunner:
     GROUPING: ClassVar[Mapping[Stage, int]] = MapProxy({
         Stage.Scrape: 0,
@@ -411,28 +423,32 @@ class PipelineRunner:
         Stage.Load: 2,
         Stage.Index: 3})
 
-    def __init__(self, stages: Iterable[Stage], states: Iterable[StateCode], **kw) -> None:
-        context = kw.pop('context', None)
+    def __init__(
+        self,
+        stages: Iterable[Stage],
+        states: Iterable[StateCode],
+        context: dict[str, Any]|None = None,
+        **kw
+    ) -> None:
         if context is None:
             context = {}
         self.log = PipelineLog(
-            id=uuid.uuid4(),
-            stages=list(utils.unique(map(Stage, stages))),
-            states=list(utils.unique(map(str.upper, states))),
+            stages=stages,
+            states=states,
             batch_opts=PipelineBatchOpts(**kw),
             pipeline_opts=PipelineOpts(**kw))
         self.log.context = context
         self.runs: dict[StateCode, list[PipelineRunDetail]] = defaultdict(list)
-        self.logbackend = PipelineLogBackend.registry['mongo'](context=context)
+        self.backend = PipelineLogBackend.registry['mongo'](context=context)
         self.states_active = dict.fromkeys(self.states)
 
     @property
     def num_workers(self):
-        return min(int(max(1, self.opts.max_workers)), len(self.states_active))
+        return min(self.opts.max_workers, len(self.states_active))
 
     @property
     def num_threads(self):
-        return min(int(max(1, self.opts.max_threads)), len(self.states_active))
+        return min(self.opts.max_threads, len(self.states_active))
 
     @property
     def opts(self):
@@ -462,7 +478,7 @@ class PipelineRunner:
             grouping[self.GROUPING[stage]].append(stage)
         it = iter(grouping)
         self.log.start = utils.utcnow()
-        if await self._save_log():
+        if await self.savelog():
             logger.info(f'start id={self.log.id}')
         try:
             await self.run_concurrently(True, *next(it))
@@ -479,36 +495,56 @@ class PipelineRunner:
             raise
         finally:
             self.log.end = utils.utcnow()
-            if await self._save_log():
+            if await self.savelog():
                 logger.info(f'end id={self.log.id}')
 
     async def run_consecutively(self, *stages: Stage) -> None:
         for state in tuple(self.states_active):
             await self.run_stages(state, *stages)
-            await self._save_log()
+            await self.savelog()
 
     async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
         style = 'threads' if threads else 'workers'
         num: int = getattr(self, f'num_{style}')
         if not (
-            self.states_active and stages and self.opts.concurrent and num > 1):
+            self.states_active and
+            stages and
+            self.opts.concurrent and
+            num > 1
+        ):
             return await self.run_consecutively(*stages)
         logger.info(f'concurrent {style}={num} stages=[{', '.join(map(str, stages))}]')
         if threads:
             await self._run_thread_concurrently(*stages)
         else:
             await self._run_loop_concurrently(*stages)
-        await self._save_log()
+        await self.savelog()
 
     async def _run_thread_concurrently(self, *stages: Stage) -> None:
-        args = (deque(self.states_active), excs := [], *stages)
-        workers = [
-            Thread(name=str(i + 1), target=self.thread_worker, args=args)
+        queue = deque(self.states_active)
+        excs: list[Exception] = []
+        def target() -> None:
+            while True:
+                if excs or self.log.errors and self.opts.fail:
+                    break
+                try:
+                    state = queue.popleft()
+                except IndexError:
+                    break
+                if state not in self.states_active:
+                    continue
+                try:
+                    asyncio.run(self.run_stages(state, *stages))
+                except* Exception as grp:
+                    excs.extend(grp.exceptions)
+                    logger.error(f'Exiting thread due to error')
+        threads = [
+            Thread(name=str(i + 1), target=target)
             for i in range(self.num_threads)]
-        for worker in workers:
-            worker.start()
-        for worker in workers:
-            worker.join()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
         if excs:
             if len(excs) == 1:
                 raise excs[0] from None
@@ -516,11 +552,21 @@ class PipelineRunner:
 
     async def _run_loop_concurrently(self, *stages: Stage) -> None:
         queue = deque(self.states_active)
+        async def worker() -> None:
+            while True:
+                if self.log.errors and self.opts.fail:
+                    break
+                try:
+                    state = queue.popleft()
+                except IndexError:
+                    break
+                if state not in self.states_active:
+                    continue
+                await self.run_stages(state, *stages)
         try:
             async with asyncio.TaskGroup() as group:
                 for i in range(self.num_workers):
-                    coro = self.loop_worker(queue, *stages)
-                    group.create_task(coro, name=str(i + 1))
+                    group.create_task(worker(), name=str(i + 1))
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -529,14 +575,15 @@ class PipelineRunner:
     async def run_stages(self, state: StateCode, *stages: Stage) -> None:
         for stage in stages:
             await self.run_stage(state, stage)
-            if (reason := self._skip_reason(state)):
+            if (reason := self.skipreason(state)):
                 logger.info(f'{state}:skip {reason}: {stage}')
                 self.states_active.pop(state, None)
                 break
 
     async def run_stage(self, state: StateCode, stage: Stage) -> None:
-        if (reason := self._skip_reason(state)):
+        if (reason := self.skipreason(state)):
             logger.info(f'{state}:{stage}:skip {reason}')
+            self.states_active.pop(state, None)
             return
         run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
         self.runs[state].append(run)
@@ -557,47 +604,27 @@ class PipelineRunner:
             if self.opts.fail:
                 logger.error(f'{run.error}')
                 raise
-            logger.exception(
-                f'{state}:{stage}:fail error={run.error.model_dump(mode='json')}')
+            logger.exception(f'{state}:{stage}:fail error={err!r}')
             capture_exception()
         finally:
             run.end = utils.utcnow()
             run.elapsed = (run.end - run.start).total_seconds()
 
-    async def loop_worker(self, queue: deque[str], *stages: Stage) -> None:
-        while queue and not (self.log.errors and self.opts.fail):
-            state = queue.popleft()
-            if state not in self.states_active:
-                continue
-            await self.run_stages(state, *stages)
-
-    def thread_worker(self, queue: deque[str], excs: list[Exception], *stages: Stage) -> None:
-        while not excs and queue and not (self.log.errors and self.opts.fail):
-            try:
-                state = queue.popleft()
-            except IndexError:
-                break
-            if state not in self.states_active:
-                continue
-            try:
-                asyncio.run(self.run_stages(state, *stages))
-            except* Exception as grp:
-                excs.extend(grp.exceptions)
-                logger.error(f'Exiting thread due to error')
-
-    async def _save_log(self) -> bool:
+    async def savelog(self) -> bool:
         self.log.sync()
         if self.opts.stat_only:
             return False
-        await self.logbackend.save(self.log)
+        await self.backend.save(self.log)
         return True
 
-    def _skip_reason(self, state: StateCode) -> str|None:
+    def skipreason(self, state: StateCode) -> SkipReason|None:
         if (runs := self.runs[state]):
             run = runs[-1]
             if run.failed:
-                return 'Previous stage failed'
-            if self.opts.incremental:
-                if run.result:
-                    if run.result.get('nochange'):
-                        return 'No change'
+                return SkipReason.fail
+            if (
+                self.opts.incremental and
+                run.result and
+                run.result.get('nochange')
+            ):
+                return SkipReason.nochange

@@ -114,7 +114,9 @@ mapped_collections: dict[str, MappedCollection] = dict(
         orm_model=orm.Artifact,
         indexes=[
             {'name': 1},
-            {'path': 1}]),
+            {'path': 1},
+            {'state': 1},
+            {'sha1': 1}]),
     states=MappedCollection(
         client=client,
         name='states',
