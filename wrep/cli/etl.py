@@ -20,8 +20,8 @@ class EtlBaseCommand(AppCommand):
 
     @classmethod
     def add_arguments(cls, parser: AP):
-        arg = parser.add_argument
-        arg('--etl-dbname', '-b',
+        parser.add_argument(
+            '--etl-dbname', '-b',
             default=None,
             help=f'Alternate mongo etl db name')
         super().add_arguments(parser)
@@ -58,7 +58,7 @@ class OneCommand(BaseCommand):
             return text
 
         async def get_inst(self):
-            srch = self.backend.search(dict(id=[self.opts.id]), limit=1)
+            srch = self.backend.search(dict(id=self.opts.id), limit=1)
             try:
                 return await anext(srch.objs())
             except StopAsyncIteration:
@@ -70,11 +70,10 @@ class OneCommand(BaseCommand):
         backend_class = etl.MongoExtraction
 
         async def run(self):
-            inst = await self.get_inst()
-            data = inst.model_dump()
+            extraction = await self.get_inst()
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)
-                objs = list(factory.translate(data))
+                translations = list(factory.translate(extraction.model_dump()))
                 res = dict(
                     translations=[
                         x.model_dump(
@@ -82,12 +81,12 @@ class OneCommand(BaseCommand):
                             exclude_unset=True,
                             exclude_none=True,
                             exclude=['extraction'])
-                        for x in objs],
-                    extraction=inst.model_dump(mode='json'))
+                        for x in translations],
+                    extraction=extraction.model_dump(mode='json'))
                 self.printobj(res)
                 if self.opts.save:
                     backend = etl.MongoTranslation(context=self.context)
-                    await backend.update(objs)
+                    await backend.update(translations)
                     session.commit()
                 else:
                     session.rollback()
@@ -98,7 +97,7 @@ class OneCommand(BaseCommand):
             except ValueError:
                 logger.warning(f'Extraction {self.opts.id} not found, checking translations')
             backend = etl.MongoTranslation(context=self.context)
-            srch = backend.search(dict(id=[self.opts.id]), limit=1)
+            srch = backend.search(dict(id=self.opts.id), limit=1)
             try:
                 translation = await anext(srch.objs())
             except StopAsyncIteration:
@@ -112,26 +111,26 @@ class OneCommand(BaseCommand):
         backend_class = etl.MongoTranslation
 
         async def run(self):
-            inst: Translation = await self.get_inst()
-            pipeline = Pipeline(inst.state, context=self.context)
+            translation: Translation = await self.get_inst()
+            pipeline = Pipeline(translation.state, context=self.context)
             with orm.SessionLocal() as session:
                 pipeline.session = session
                 pipeline.artifact_cache = {}
-                report, save = pipeline.save(inst)
+                report, save = pipeline.save(translation)
                 if report is not None:
                     row = (report, report, None, None)
                     report, = orm.Report.map_reduce([row])
-                    report = report.model_dump(mode='json', exclude_unset=True)
-                res = dict(save=save, report=report)
-                res.update(
-                    translation=inst.model_dump(
+                res = dict(
+                    save=save,
+                    report=report.model_dump(
+                        mode='json',
+                        exclude_unset=True),
+                    translation=translation.model_dump(
                         mode='json',
                         exclude_none=True,
                         exclude=['extraction']),
-                    extraction=inst.extraction.model_dump(
-                        mode='json',
-
-                    ))
+                    extraction=translation.extraction.model_dump(
+                        mode='json'))
                 self.printobj(res)
                 if self.opts.save and save is not save.Nochange:
                     session.commit()
