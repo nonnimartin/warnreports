@@ -368,6 +368,7 @@ class AZ(Translator):
 
 class CA(Translator):
     default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
+    values_hash_exclude = ['artifacts_json']
     fieldsmap = dict(
         company=['company'],
         reported=['notice_date'],
@@ -567,7 +568,7 @@ class FL(Translator):
         employees=['Employees Affected'],
         starting=['Layoff Date'],
         action=['Notice Type'],
-        url=['download'],
+        url=[],
         industry=['Industry'],
         report_id=[],
         naics=[],
@@ -585,11 +586,12 @@ class FL(Translator):
     def finish(self, inst: Translation, info: TranslateInfo):
         if inst.company and not inst.location:
             if (text := info.data.get('Company Name')) and '\n' in text:
-                if '\n\n' in text:
-                    addrtext = text.rsplit('\n\n', 1)[-1]
-                else:
-                    addrtext = text.split('\n', 1)[-1]
+                it = text.splitlines()[1:]
+                it = map(str.strip, it)
+                it = filter(None, it)
+                addrtext = ', '.join(it)
                 addrtext = ' '.join(addrtext.split())
+                addrtext = addrtext.replace(',,', ',')
                 if addrtext:
                     inst.location = addrtext
         if inst.reported and not inst.url:

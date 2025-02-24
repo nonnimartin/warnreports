@@ -5,6 +5,7 @@ import functools
 import operator
 import uuid
 from collections import defaultdict, deque
+from functools import cached_property as lazy
 from itertools import chain
 from pathlib import Path
 from threading import Thread
@@ -49,7 +50,7 @@ class Pipeline:
         self.opts = PipelineOpts.model_validate(opts or {})
         self.session: orm.Session|None = None
 
-    @utils.lazyprop
+    @lazy
     def scraper(self) -> Scraper:
         from .scrapers import scrapers
         return scrapers[self.state](opts=self.opts)
