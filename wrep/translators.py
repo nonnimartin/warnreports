@@ -100,6 +100,7 @@ class TranslationFactory:
                 value = self.value(translator, field, value, info)
                 if value is not None and value != '':
                     setattr(inst, field, value)
+                    break
 
     def value(self, translator: Translator, field: str, value: str, info: TranslateInfo) -> Any:
         'Translate a field value'
@@ -601,7 +602,10 @@ class GA(Translator):
     fieldsmap = dict(
         company=['Company Name'],
         reported=['submitted_date', 'GA WARN ID', 'First Date of Separation'],
-        location=['First Location Address', 'County'],
+        location=[
+            'Company Address',
+            'First Location Address',
+            'County'],
         employees=[
             'Number of Employees Affected',
             'Total Number of Affected Employees'],

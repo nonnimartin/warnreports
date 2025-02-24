@@ -149,6 +149,5 @@ class AppCommand(BaseCommand):
 
     @classmethod
     def add_arguments(cls, parser: AP):
-        arg = parser.add_argument
-        arg('--log-level', default=None)
+        parser.add_argument('--log-level', default=None)
         super().add_arguments(parser)
