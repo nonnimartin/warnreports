@@ -192,7 +192,12 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
         data = self.model_dump(exclude_none=True, exclude=['order'])
         for name, value in data.items():
             field = self.model_fields[name]
-            if (meta := field.metadata) and isinstance(anno := meta[0], Fi):
+            if (meta := field.metadata):
+                for anno in meta:
+                    if isinstance(anno, Fi):
+                        break
+                else:
+                    continue
                 alias = anno.alias
                 if alias is None:
                     alias = name

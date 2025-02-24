@@ -9,9 +9,9 @@ from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
 from pydantic import BaseModel as DataModel
-from pydantic import (ConfigDict, Field, HttpUrl, NonNegativeFloat,
-                      NonNegativeInt, PlainSerializer, StringConstraints,
-                      field_serializer, model_validator)
+from pydantic import (BeforeValidator, ConfigDict, Field, HttpUrl,
+                      NonNegativeFloat, NonNegativeInt, PlainSerializer,
+                      StringConstraints, field_serializer, model_validator)
 from pydantic_core import ValidationError as ValidationError
 
 from . import Stage, settings, utils
@@ -26,35 +26,36 @@ __all__ = [
     'CompanyDetail',
     'CompanyName',
     'DataModel',
-    'Limit',
     'NaicsData',
     'NaicsDetail',
     'NaicsId',
-    'Offset',
+    'NaicsRootId',
     'ReportData',
     'StateCode',
     'StateDetail',
     'ValidationError']
 
-type OrderItem = tuple[str, Literal[1, -1]]
-Limit = Annotated[NonNegativeInt, Le(1_000)]
-Offset: TypeAlias = NonNegativeInt
-CompanyName = Annotated[str, StringConstraints(min_length=1)]
-StateCode = Annotated[str, StringConstraints(min_length=2, max_length=2, to_upper=True)]
-UrlType = Annotated[HttpUrl, PlainSerializer(str, return_type=str)]
-NaicsId = Annotated[int, Gt(10), Lt(1_000_000)]
-NaicsRootId = Annotated[int, Gt(10), Lt(100)]
-
-@dataclasses.dataclass
-class Fi:
-    oper: str
-    alias: str|None = None
-
-    def __post_init__(self):
-        if self.oper == '$search':
-            if self.alias:
-                raise ValueError(f'alias {self.alias} for oper {self.oper}')
-            self.alias = '$text'
+UrlType = Annotated[
+    HttpUrl,
+    PlainSerializer(str, return_type=str)]
+CompanyName = Annotated[
+    str,
+    StringConstraints(min_length=1),
+    Field(description='The company name')]
+StateCode = Annotated[
+    str,
+    StringConstraints(min_length=2, max_length=2, to_upper=True),
+    Field(description='The 2-letter state postal code')]
+NaicsId = Annotated[
+    int,
+    Gt(10),
+    Lt(1_000_000),
+    Field(description='The 2 to 6 digit NAICS code')]
+NaicsRootId = Annotated[
+    int,
+    Gt(10),
+    Lt(100),
+    Field(description='The root NAICS code')]
 
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
     return dt and dt.replace(hour=0, tzinfo=tzinfo)
@@ -69,14 +70,12 @@ class DataModel(DataModel):
 
 class ReportData(DataModel):
     id: UUID = Field(alias='_id')
-    company: CompanyName = Field(
-        description='The company name as indicated')
+    company: CompanyName
     company_id: UUID = Field(
         default=None,
         title='Company ID',
         description='The internal company ID, for cross-referencing related reports')
-    state: StateCode = Field(
-        description='The 2-letter state postal code')
+    state: StateCode
     location: str|None = Field(
         default=None,
         description='Location details (city, county, address, store number, etc.)')
@@ -122,12 +121,12 @@ class ArtifactDetail(ArtifactData):
     modified: datetime
 
 class NaicsData(DataModel):
-    id: NaicsId = Field(description='The 2 to 6 digit NAICS code')
+    id: NaicsId
     code: str = Field(description='The code string')
     title: str = Field(description='The NAICS industry title')
     parent: NaicsId|None = Field(description='The parent NAICS code, if any')
-    depth: int = Field(description='The tree depth')
-    root: NaicsRootId = Field(description='The root NAICS code')
+    depth: NonNegativeInt = Field(description='The tree depth')
+    root: NaicsRootId
     is_leaf: bool = Field(description='Whether this is a leaf node', default=False)
     model_config = ConfigDict(from_attributes=True)
 
@@ -237,7 +236,7 @@ class PipelineBatchOpts(DataModel):
     clean: bool = False
     clean_only: bool = False
     stat_only: bool = False
-    fail: bool = False
+    fail: bool = True
     incremental: bool = False
     concurrent: bool = False
     max_workers: NonNegativeInt = settings.ETL_DEFAULT_WORKERS
@@ -332,23 +331,7 @@ class PipelineLog(DataModel):
 
 # ----------------------------
 
-__all__ += [
-    'ArtifactsFilter',
-    'CompaniesFilter',
-    'FilterModel',
-    'NaicsFilter',
-    'ReportsFilter',
-    'StatesFilter']
-
-def parse_orders(order: str, allowed: set[str]|None = None) -> Iterator[OrderItem]:
-    for field in filter(None, re.split(r',\s*', order)):
-        if field.startswith('-'):
-            field = field[1:]
-            dir_ = -1
-        else:
-            dir_ = 1
-        if allowed is None or field in allowed:
-            yield field, dir_
+__all__ += ['FilterModel', 'Limit', 'Offset']
 
 class FilterModel[DM: DataModel](DataModel):
     order: str|None = None
@@ -365,16 +348,58 @@ class FilterModel[DM: DataModel](DataModel):
             orders.append(('_id', 1))
         return orders
 
+def parse_orders(order: str, allowed: set[str]|None = None) -> Iterator[OrderItem]:
+    for field in filter(None, re.split(r',\s*', order)):
+        if field.startswith('-'):
+            field = field[1:]
+            dir_ = -1
+        else:
+            dir_ = 1
+        if allowed is None or field in allowed:
+            yield field, dir_
+
+def ensure_list[T](value: T|list[T]|None) -> list[T]|None:
+    if isinstance(value, list):  
+        return value
+    if value is not None:
+        return [value]
+
+Limit = Annotated[NonNegativeInt, Le(1_000)]
+Offset: TypeAlias = NonNegativeInt
+type OrderItem = tuple[str, Literal[1, -1]]
+type AsList[T] = Annotated[list[T]|None, BeforeValidator(ensure_list)]
+
+
+@dataclasses.dataclass
+class Fi:
+    oper: str
+    alias: str|None = None
+
+    def __post_init__(self):
+        if self.oper == '$search':
+            if self.alias:
+                raise ValueError(f'alias {self.alias} for oper {self.oper}')
+            self.alias = '$text'
+
+# ----------------------------
+
+__all__ += [
+    'ArtifactsFilter',
+    'CompaniesFilter',
+    'NaicsFilter',
+    'ReportsFilter',
+    'StatesFilter']
+
 class ReportsFilter(FilterModel[ReportData]):
-    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    id_not: Annotated[list[UUID]|None, Fi('$nin', '_id')] = None
+    id: Annotated[AsList[UUID], Fi('$in', '_id')] = None
+    id_not: Annotated[AsList[UUID], Fi('$nin', '_id')] = None
     text: Annotated[str|None, Fi('$search')] = None
-    company: Annotated[list[CompanyName]|None, Fi('$in')] = None
-    company_id: Annotated[list[UUID]|None, Fi('$in')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    company: Annotated[AsList[CompanyName], Fi('$in')] = None
+    company_id: Annotated[AsList[UUID], Fi('$in')] = None
+    state: Annotated[AsList[StateCode], Fi('$in')] = None
     location: Annotated[str|None, Fi('$contains')] = None
     action: Annotated[str|None, Fi('$contains')] = None
-    naics: Annotated[list[NaicsId]|None, Fi('$naics')] = None
+    naics: Annotated[AsList[NaicsId], Fi('$naics')] = None
     reported_min: Annotated[datetime|None, Fi('$gte', 'reported')] = None
     reported_max: Annotated[datetime|None, Fi('$lte', 'reported')] = None
     starting_min: Annotated[datetime|None, Fi('$gte', 'starting')] = None
@@ -393,23 +418,23 @@ class NaicsStatesFilterMixin:
     last_reported_max: Annotated[datetime|None, Fi('$lte', 'last_reported')] = None
 
 class StatesFilter(FilterModel[StateDetail], NaicsStatesFilterMixin):
-    id: Annotated[list[StateCode]|None, Fi('$in')] = None
+    id: Annotated[AsList[StateCode], Fi('$in')] = None
     result_model: ClassVar = StateDetail
     order_fields: ClassVar = {'id', 'reports_count', 'last_reported'}
     default_ordering: ClassVar = [('id', 1)]
 
 class NaicsCompaniesFilterMixin(NaicsStatesFilterMixin):
-    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
+    state: Annotated[AsList[StateCode], Fi('$in', 'states')] = None
     states_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'states_count')] = None
     states_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'states_count')] = None
     employees_sum_min: Annotated[NonNegativeInt|None, Fi('$gte', 'employees_sum')] = None
     employees_sum_max: Annotated[NonNegativeInt|None, Fi('$lte', 'employees_sum')] = None
 
 class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
-    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
+    id: Annotated[AsList[UUID], Fi('$in', '_id')] = None
     text: Annotated[str|None, Fi('$search')] = None
-    name: Annotated[list[CompanyName]|None, Fi('$in', 'aliases')] = None
-    naics: Annotated[list[NaicsId]|None, Fi('$naics')] = None
+    name: Annotated[AsList[CompanyName], Fi('$in', 'aliases')] = None
+    naics: Annotated[AsList[NaicsId], Fi('$naics')] = None
     aliases_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'aliases_count')] = None
     aliases_count_max: Annotated[NonNegativeInt|None, Fi('$lte', 'aliases_count')] = None
     order_fields: ClassVar = (
@@ -419,13 +444,13 @@ class CompaniesFilter(FilterModel[CompanyDetail], NaicsCompaniesFilterMixin):
     result_model: ClassVar = CompanyDetail
 
 class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
-    id: Annotated[list[NaicsId]|None, Fi('$in')] = None
-    prefix: Annotated[list[NaicsId]|None, Fi('$naics', '')] = None
+    id: Annotated[AsList[NaicsId], Fi('$in')] = None
+    prefix: Annotated[AsList[NaicsId], Fi('$naics', '')] = None
     title: Annotated[str|None, Fi('$contains')] = None
-    root: Annotated[list[NaicsRootId]|None, Fi('$in')] = None
-    parent: Annotated[list[NaicsId]|None, Fi('$in')] = None
+    root: Annotated[AsList[NaicsRootId], Fi('$in')] = None
+    parent: Annotated[AsList[NaicsId], Fi('$in')] = None
     is_leaf: Annotated[bool|None, Fi('$eq')] = None
-    includes: list[NaicsId]|None = None
+    includes: AsList[NaicsId] = None
     depth_min: Annotated[NonNegativeInt|None, Fi('$gte', 'depth')] = None
     depth_max: Annotated[NonNegativeInt|None, Fi('$lte', 'depth')] = None
     companies_count_min: Annotated[NonNegativeInt|None, Fi('$gte', 'companies_count')] = None
@@ -437,8 +462,8 @@ class NaicsFilter(FilterModel[NaicsDetail], NaicsCompaniesFilterMixin):
     result_model: ClassVar = NaicsDetail
 
 class ArtifactsFilter(FilterModel[ArtifactDetail]):
-    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    id: Annotated[AsList[UUID], Fi('$in', '_id')] = None
+    state: Annotated[AsList[StateCode], Fi('$in')] = None
     sha1: Annotated[str|None, Fi('$eq')] = None
     name: Annotated[str|None, Fi('$eq')] = None
     order_fields: ClassVar = {'name'}
@@ -453,23 +478,23 @@ __all__ += [
     'TranslationFilter']
 
 class ExtractionFilter(FilterModel[Extraction]):
-    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    id: Annotated[AsList[UUID], Fi('$in', '_id')] = None
+    state: Annotated[AsList[StateCode], Fi('$in')] = None
     i_min: Annotated[NonNegativeInt|None, Fi('$gte')] = None
     i_max: Annotated[NonNegativeInt|None, Fi('$lte')] = None
     default_ordering: ClassVar = [('state', 1), ('i', 1)]
     result_model: ClassVar = Extraction
 
 class TranslationFilter(FilterModel[Translation]):
-    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in')] = None
+    id: Annotated[AsList[UUID], Fi('$in', '_id')] = None
+    state: Annotated[AsList[StateCode], Fi('$in')] = None
     default_ordering: ClassVar = [('_id', 1)]
     result_model: ClassVar = Translation
 
 class PipelineLogFilter(FilterModel[PipelineLog]):
-    id: Annotated[list[UUID]|None, Fi('$in', '_id')] = None
-    stages: Annotated[list[Stage]|None, Fi('$in')] = None
-    state: Annotated[list[StateCode]|None, Fi('$in', 'states')] = None
+    id: Annotated[AsList[UUID], Fi('$in', '_id')] = None
+    stages: Annotated[AsList[Stage], Fi('$in')] = None
+    state: Annotated[AsList[StateCode], Fi('$in', 'states')] = None
     start_min: Annotated[datetime|None, Fi('$gte', 'start')] = None
     start_max: Annotated[datetime|None, Fi('$lte', 'start')] = None
     end_min: Annotated[datetime|None, Fi('$gte', 'end')] = None
