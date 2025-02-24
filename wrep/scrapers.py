@@ -28,7 +28,7 @@ from . import Stage, settings, utils
 from .backends import webdrivers
 from .backends.files import ArtifactStore, FileCache, clean_filename
 from .models import ScraperOpts, StateCode
-from .tools import dom, pdfs, xlsx
+from .tools import dom, matx, pdfs, xlsx
 from .tools.dom import Soup, bs
 from .utils import wrapcontext
 
@@ -1031,8 +1031,6 @@ class LA(Scraper):
         return index
 
 class MD(Scraper):
-    # Scrape time: 3s
-    # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
     latest_url = '/warn.shtml'
     retry = dict(total=10)
@@ -1053,19 +1051,17 @@ class MD(Scraper):
     def statobjs(self):
         yield from self.get_tables()
 
-    @contextmanager
+    @wrapcontext
     def extract(self):
-        it = chain.from_iterable(map(self.read_table, self.get_tables()))
+        def readtr(tr: Soup) -> list[str]:
+            return [' '.join(td.text.split()) for td in tr.find_all('td')]
+        def readtable(table: Soup) -> Iterator[list[str]]:
+            return filter(any, map(readtr, table.find_all('tr')))
+        it = map(readtable, self.get_tables())
+        it = chain.from_iterable(it)
         headers = next(it)
-        yield (dict(zip(headers, values)) for values in it)
-
-    def read_table(self, table: Soup) -> Iterator[list[str]]:
-        it = map(self.read_tr, table.find_all('tr'))
-        return filter(any, map(list, it))
-
-    def read_tr(self, tr: Soup) -> Iterator[str]:
-        for td in tr.find_all('td'):
-            yield ' '.join(td.text.split())
+        for values in it:
+            yield dict(zip(headers, values))
 
     def get_tables(self) -> Iterator[Soup]:
         for file in self.list_page_files():
@@ -1595,7 +1591,6 @@ class SC(Scraper):
         None: ['Company', 'County', 'Notice Date', 'Layoff/Closure Date', 'Impacted', 'Layoff/Closure', 'Address']
     }
     extra_headers = ['year', 'url']
-    realign_most = 0.9
 
     async def scrape(self) -> None:
         index: list[tuple[int, str]] = []
@@ -1653,9 +1648,9 @@ class SC(Scraper):
         self.remove_extra_header(table)
         if self.table_is_sparse(table) or self.table_is_summary(table):
             return []
-        table = self.filter_sparse_rows(table)
-        table = self.filter_empty_columns(table)
-        self.realign_columns(table)
+        table = matx.nonsparse_rows(table)
+        table = matx.nonempty_columns(table)
+        matx.align_columns(table)
         return table
 
     def merge_tables(self, tables: Iterable[list[list]]) -> Iterator[list]:
@@ -1693,44 +1688,6 @@ class SC(Scraper):
     def remove_extra_header(self, table: list[list]) -> None:
         if table and not utils.morethan(1, table[0]):
             del table[0]
-
-    def filter_sparse_rows(self, table: list[list]) -> list[list]:
-        return [row for row in table if utils.morethan(2, row)]
-
-    def filter_empty_columns(self, table: list[list]) -> list[list]:
-        if not table:
-            return table
-        cols = [
-            c for c in range(len(table[0]))
-            if any(row[c] for row in table)]
-        return [[row[c] for c in cols] for row in table]
-
-    def realign_columns(self, table: list[list]) -> None:
-        """
-        +---+---+      +---+
-        | x |   |      | x |
-        +---+---+  =>  +---+
-        |   | x |      | x |
-        +---+---+      +---+
-        """
-        L = len(table)
-        if L < 2:
-            return table
-        def most(it):
-            return utils.morethan(self.realign_most * L, it)
-        c = 0
-        while c <= len(table[0]) - 2:
-            d = c + 1
-            realign = (
-                most(row[c] or row[d] for row in table) and
-                not any(row[c] and row[d] for row in table))
-            if realign:
-                for row in table:
-                    if not row[c]:
-                        del row[c]
-                    else:
-                        del row[d]
-            c += 1
 
     rewrites = {
         'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
