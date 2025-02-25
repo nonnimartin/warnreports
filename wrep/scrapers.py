@@ -1620,7 +1620,7 @@ class SC(Scraper):
         await self.download('latest.html', self.latest_url)
         index = self.build_index()
         now = utils.now()
-        for year, (key, url) in index.items():
+        for key, (year, url) in index.items():
             is_recent = year >= now.year - 1
             await self.download(key, url, missing_only=not is_recent)
 
@@ -1631,8 +1631,8 @@ class SC(Scraper):
         yield self.cache/'index.json'
         yield from sorted(self.cache.glob('*.pdf'), reverse=True)
 
-    def build_index(self) -> dict[int, tuple[str, str]]:
-        index: dict[int, tuple[str, str]] = {}
+    def build_index(self) -> dict[str, tuple[int, str]]:
+        index: dict[str, tuple[int, str]] = {}
         for a in bs(self.cache/'latest.html').find_all('a'):
             href = a.get('href', '')
             if href.endswith('2024_0.pdf'):
@@ -1642,7 +1642,7 @@ class SC(Scraper):
                 year = int(href.split('/')[-1][:4])
                 key = f'{year}.pdf'
                 url = self.absurl(href)
-                index[year] = (key, url)
+                index[key] = (year, url)
         index = {key: index[key] for key in sorted(index)}
         self.cache.write_json('index.json', index, indent=2)
         return index
@@ -1650,7 +1650,7 @@ class SC(Scraper):
     @wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
         index: dict[int, tuple[str, str]] = self.cache.read_json('index.json')
-        for year, (key, url) in index.items():
+        for key, (year, url) in index.items():
             headers = self.get_header_species(year) + self.extra_headers
             extra = [str(year), url]
             it = self.read_table(key)
