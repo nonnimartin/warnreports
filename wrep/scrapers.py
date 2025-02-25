@@ -538,28 +538,24 @@ class GA(Scraper):
     extra_headers = ['entry_url', 'submitted_date', 'artifacts_json']
 
     async def scrape(self):
-        text = await self.fetch('latest.html', self.latest_url)
-        doc = bs(text, 'html5lib')
-        payload = dict(self.payload, nonce=self.extract_nonce(doc))
+        await self.download('latest.html', self.latest_url)
+        payload = dict(self.payload, nonce=self.extract_nonce())
         rep = await self.request('POST', self.api_url, data=payload)
         try:
             body = rep.json()
         except requests.exceptions.JSONDecodeError:
             self.logger.error(f'{rep.status_code} {rep.url} {payload=} content={rep.content}')
             raise
-        index = {}
-        for listing in body['data']:
-            a = bs(listing[0], 'html5lib').find('a')
-            index[a.text] = [a['href'], listing[2]]
-        self.cache.write_json('index.json', index, indent=2)
+        self.cache.write_json('latest.json', body, indent=2)
+        index = self.build_index()
         if self.needs_scrape():
             await asyncio.sleep(0)
             self.runner.scrape()
         artifacts = {}
-        for idkey in index:
-            infos = dict(self.extract_artifact_infos(idkey))
+        for notice_id in index:
+            infos = dict(self.extract_artifact_infos(notice_id))
             if infos:
-                artifacts[idkey] = infos
+                artifacts[notice_id] = infos
         self.cache.write_json('artifacts.json', artifacts, indent=2)
         it = chain.from_iterable(map(dict.items, artifacts.values()))
         for cachekey, url in it:
@@ -572,35 +568,19 @@ class GA(Scraper):
 
     def statobjs(self):
         yield from self.cache.glob('*.json')
-        yield from self.list_record_files()
+        yield from sorted(self.cache.glob('*.format3'), reverse=True)
 
-    @contextmanager
-    def extract(self):
-        with self.runner.file.open() as file:
-            yield self.read_records(csv.reader(file))
-
-    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
-        index: dict = self.cache.read_json('index.json')
-        artifacts = self.cache.read_json('artifacts.json')
-        headers = next(it) + self.extra_headers
-        fillrow = [''] * len(self.extra_headers)
-        for values in it:
-            idkey = values[0]
-            fill = list(fillrow)
-            if idkey in index:
-                fill[:2] = index[idkey]
-            if idkey in artifacts:
-                fill[2] = json.dumps(artifacts[idkey])
-            values.extend(fill)
-            yield dict(zip(headers, values))
-
-    def extract_artifact_infos(self, idkey: str) -> Iterator[tuple[str, str]]:
-        doc = bs(self.cache/f'{idkey}.format3')
-        for a in doc.find_all('a', {'data-type': 'pdf'}):
-            filename = self.artifact_filename(a['href'])
-            if filename:
-                cachekey = f'records/{idkey}-{filename}'
-                yield cachekey, self.absurl(a['href'])
+    def build_index(self) -> dict[str, tuple[str, str]]:
+        body: dict = self.cache.read_json('latest.json')
+        index: dict[str, tuple[str, str]] = {}
+        for listing in body['data']:
+            a = bs(listing[0], 'html5lib').find('a')
+            notice_id = a.text
+            url = self.absurl(a['href'])
+            datestr = listing[2]
+            index[notice_id] = (url, datestr)
+        self.cache.write_json('index.json', index, indent=2)
+        return index
 
     def needs_scrape(self) -> bool:
         index = self.cache.read_json('index.json')
@@ -612,16 +592,22 @@ class GA(Scraper):
             self.cache.exists('index.json') and
             all(map(self.cache.exists, keys)))
 
-    def extract_nonce(self, doc: Soup) -> str|None:
+    def extract_artifact_infos(self, notice_id: str) -> Iterator[tuple[str, str]]:
+        doc = bs(self.cache/f'{notice_id}.format3')
+        for a in doc.find_all('a', {'data-type': 'pdf'}):
+            filename = self.artifact_filename(a['href'])
+            if filename:
+                cachekey = f'records/{notice_id}-{filename}'
+                yield cachekey, self.absurl(a['href'])
+
+    def extract_nonce(self) -> str|None:
+        doc = bs(self.cache/'latest.html', 'html5lib')
         script = doc.find(
             'script',
             text=lambda text: text and 'window.gvDTglobals.push' in text)
         match = re.search(r'"nonce":"([^"]+)"', str(script))
         if match:
             return match.group(1)
-
-    def list_record_files(self) -> list[Path]:
-        return sorted(self.cache.glob('*.format3'), reverse=True)
 
     def artifact_filename(self, href: str) -> str|None:
         vals = parse_qs(urlparse(href).query).get('gf-download')
@@ -644,6 +630,25 @@ class GA(Scraper):
         hideUntilSearched=0,
         setUrlOnSearch=True,
         shortcode_atts=dict(id=77460))
+
+    @contextmanager
+    def extract(self):
+        index: dict = self.cache.read_json('index.json')
+        artifacts = self.cache.read_json('artifacts.json')
+        def readrecords(it: Iterable[list[str]]):
+            headers = next(it) + self.extra_headers
+            fillrow = [''] * len(self.extra_headers)
+            for values in it:
+                idkey = values[0]
+                fill = list(fillrow)
+                if idkey in index:
+                    fill[:2] = index[idkey]
+                if idkey in artifacts:
+                    fill[2] = json.dumps(artifacts[idkey])
+                values.extend(fill)
+                yield dict(zip(headers, values))
+        with self.runner.file.open() as file:
+            yield readrecords(csv.reader(file))
 
 class IL(Scraper):
     source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export'
@@ -1177,6 +1182,7 @@ class MO(Scraper):
 class NJ(Scraper):
     base_url = 'https://www.nj.gov/labor'
     latest_url = '/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
+    retry = dict(total=7)
 
     async def scrape(self):
         await self.download('latest.xlsx', self.latest_url)
@@ -1490,10 +1496,9 @@ class OH(Scraper):
                 if (notice_id := data.get('Notice ID')) and notice_id not in index:
                     yield data
 
+        it = chain.from_iterable(map(readfile, sources))
         with self.cache.open('oh_historical.csv') as file:
-            yield chain(
-                chain.from_iterable(map(readfile, sources)),
-                readhistorical(csv.reader(file)))
+            yield chain(it, readhistorical(csv.reader(file)))
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
@@ -1659,6 +1664,7 @@ class SC(Scraper):
                 yield dict(zip(headers, row + extra))
 
     def get_header_species(self, year: int) -> list[str]:
+        year = int(year)
         for key, headers in self.headers_species.items():
             if key and year in key:
                 return headers
@@ -1676,7 +1682,7 @@ class SC(Scraper):
         it = chain.from_iterable(saved)
         it = map(self.process_table, it)
         it = filter(None, it)
-        it = self.merge_tables(it)
+        it = matx.merge_tables(it)
         it = (list(map(self.clean_cell, row)) for row in it)
         yield from it
 
@@ -1688,20 +1694,6 @@ class SC(Scraper):
         table = matx.nonempty_columns(table)
         matx.align_columns(table)
         return table
-
-    def merge_tables(self, tables: Iterable[list[list]]) -> Iterator[list]:
-        width, head = None, None
-        for i, table in enumerate(tables):
-            h = table[0]
-            w = len(h)
-            if i == 0:
-                width, head = w, h
-            elif width != w:
-                raise ValueError(f'Mismatched table widths {width}, {w}')
-            elif head == h:
-                table = iter(table)
-                next(table)
-            yield from table
 
     def clean_cell(self, text: str|None) -> str:
         text = text or ''
