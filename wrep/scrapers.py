@@ -1465,6 +1465,123 @@ class OH(Scraper):
                 key = f'records/{name}.pdf'
                 index[notice_id][key] = url
         return index
+    
+class OK(Scraper):
+    warn_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
+                
+    async def scrape(self) -> None:
+        prefs = {
+        'download.prompt_for_download': False,
+        'download.directory_upgrade': True
+        }
+        try:
+            async with webdrivers.selenium(prefs=prefs) as driver:
+                helper = self.WorkerHelper(self, driver)
+                await helper.run(self.warn_url)
+        except Exception:
+            self.logger.warning(f'', exc_info=True)
+        
+
+
+    def load_index(self) -> dict[str, str]:
+        if self.cache.exists('artifacts.json'):
+            return self.cache.read_json('artifacts.json')
+        return {}
+    
+    @dataclasses.dataclass
+    class ArtifactDownloader:
+        scraper: OK
+        index: dict[str, str]
+        broken_links: ClassVar = {}
+
+        @property
+        def logger(self) -> utils.logging.Logger:
+            return self.scraper.logger
+
+        async def run(self) -> None:
+            with self.scraper.runner.file.open() as f:
+                todos = deque(self.find_todos(csv.DictReader(f)))
+            if todos:
+                self.logger.info(f'Found {len(todos)} artifact urls to scrape')
+            else:
+                self.logger.info(f'No artifact urls to scrape')
+                return
+            self.scraper.cache.mkdir('records')
+            num_workers = min(self.scraper.opts.selenium_max_procs, len(todos))
+            self.logger.info(f'Creating {num_workers} selenium workers')
+            try:
+                async with asyncio.TaskGroup() as group:
+                    for i in range(num_workers):
+                        name = f'worker-{i}'
+                        coro = self.start_worker(todos, name)
+                        group.create_task(coro, name=name)
+            finally:
+                self.save_index()
+
+        async def start_worker(self, queue: deque[tuple[str, str]], name: str) -> None:
+            cache = self.scraper.cache.subcache(f'download/{name}')
+            cache.mkdir()
+            prefs = {
+                'download.default_directory': cache.path,
+                'download.prompt_for_download': False,
+                'download.directory_upgrade': True}
+            async with webdrivers.selenium(prefs=prefs) as driver:
+                helper = self.WorkerHelper(self, driver, cache)
+                while queue:
+                    url, prefix = queue.popleft()
+                    cache.delete('*', glob=True)
+                    print('got here')
+                    await helper.run(self.warn_url)
+            cache.nuke()
+
+        def find_todos(self, rows: Iterable[dict[str, str]]) -> Iterator[tuple[str, str]]:
+            for row in rows:
+                url = row['detail_page_url']
+                recvd = row.get('notice_date')
+                if not (url and recvd):
+                    continue
+                if url in self.broken_links:
+                    self.logger.debug(f'Ignoring {url=}')
+                    continue
+                if url in self.index:
+                    key = self.index[url]
+                    if self.scraper.cache.exists(key):
+                        self.logger.debug(f'Skipping {key} already exists')
+                        continue
+                dateid = str(recvd).split()[0]
+                urlid = uuid.uuid5(settings.NAMESPACE, url).hex[:6]
+                prefix = clean_filename(f'{dateid}-{urlid}')
+                yield (url, prefix)
+
+    @dataclasses.dataclass
+    class WorkerHelper:
+        downloader: OK.ArtifactDownloader
+        driver: webdrivers.Chrome
+        
+        def find_table(self) -> list[webdrivers.WebElement]:
+                element = self.driver.find_element('css selector', '.body')
+                rows = element.find_elements('tag name', 'tr')
+                # remove headers
+                print(len(rows))
+                for row in rows[1:]:
+                    print(row.text)
+                    print('')
+                return element
+        
+        @property
+        def logger(self) -> utils.logging.Logger:
+                return self.downloader.logger
+        
+        async def run(self, url: str) -> None:
+                try:
+                    self.driver.get(url)
+                    await asyncio.sleep(5)
+                    wait = utils.Wait(timeout=10)
+                    self.find_table()
+                except TimeoutError:
+                    self.logger.warning(f'Request timed out')
+
+
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
