@@ -18,10 +18,9 @@ def nonempty_columns(arr: list[list]) -> list[list]:
         if any(row[c] for row in arr)]
     return [[row[c] for c in cols] for row in arr]
 
-def nonsparse_rows(arr: list[list], /, *, tolerance: float = 0.1) -> list[list]:
+def nonsparse_rows(arr: list[list], /, *, threshold: int = 2) -> list[list]:
     if not arr:
         return arr
-    threshold = math.ceil(len(arr[0]) * tolerance) - 1
     return [row for row in arr if morethan(threshold, row)]
 
 def align_columns(arr: list[list], /, *, tolerance: float = 0.9) -> None:
