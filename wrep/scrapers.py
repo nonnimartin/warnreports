@@ -30,7 +30,7 @@ from .backends.files import ArtifactStore, FileCache, clean_filename
 from .models import ScraperOpts, StateCode
 from .tools import dom, pdfs, xlsx
 from .tools.dom import Soup, bs
-from os import path
+from os import path, makedirs
 
 scrapers: dict[str, type[Scraper]] = {}
 
@@ -1471,7 +1471,8 @@ class OK(Scraper):
     warn_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
     
     async def scrape(self) -> None:
-        file_name = '/build/scrape/ok/ok.csv'
+        file_name = './build/scrape/ok/ok.csv'
+        makedirs(path.dirname(file_name), exist_ok=True)
         # Check if the csv exists
         if not path.exists(file_name):
             # Create an empty CSV file
