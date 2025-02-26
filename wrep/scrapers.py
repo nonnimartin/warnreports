@@ -1485,7 +1485,6 @@ class OK(Scraper):
     @dataclasses.dataclass
     class CsvBuilder:
         scraper: OK
-        broken_links: ClassVar = {}
         warn_url: str
 
         @property
