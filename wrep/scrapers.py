@@ -1468,20 +1468,34 @@ class OH(Scraper):
     
 class OK(Scraper):
     warn_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
-                
+    
     async def scrape(self) -> None:
-        prefs = {
-        'download.prompt_for_download': False,
-        'download.directory_upgrade': True
-        }
-        try:
-            async with webdrivers.selenium(prefs=prefs) as driver:
-                helper = self.WorkerHelper(self, driver)
-                await helper.run(self.warn_url)
-        except Exception:
-            self.logger.warning(f'', exc_info=True)
-        
+        self.runner.scrape()
+        index = self.load_index()
+        if settings.SELENIUM_ENABLED:
+            await self.ArtifactDownloader(self, index, self.warn_url).run()
+        for key in index.values():
+            if self.cache.exists(key):
+                self.artifacts.add(key)
 
+    async def clean(self) -> None:
+        await super().clean()
+        self.cache.delete('download/*', glob=True)
+
+    def statobjs(self):
+        yield self.runner.file
+        yield self.cache/'artifacts.json'
+
+    # @contextmanager
+    # def extract(self):
+    #     index = self.load_index()
+    #     def extend(row: dict) -> dict:
+    #         if (key := index.get(url := row['Notice URL'])):
+    #             if self.cache.exists(key):
+    #                 row.update(artifacts_json=json.dumps({key: url}))
+    #         return row
+    #     with super().extract() as it:
+    #         yield map(extend, it)
 
     def load_index(self) -> dict[str, str]:
         if self.cache.exists('artifacts.json'):
@@ -1493,46 +1507,59 @@ class OK(Scraper):
         scraper: OK
         index: dict[str, str]
         broken_links: ClassVar = {}
+        warn_url: str
 
         @property
         def logger(self) -> utils.logging.Logger:
             return self.scraper.logger
-
+        
         async def run(self) -> None:
-            with self.scraper.runner.file.open() as f:
-                todos = deque(self.find_todos(csv.DictReader(f)))
-            if todos:
-                self.logger.info(f'Found {len(todos)} artifact urls to scrape')
-            else:
-                self.logger.info(f'No artifact urls to scrape')
-                return
-            self.scraper.cache.mkdir('records')
-            num_workers = min(self.scraper.opts.selenium_max_procs, len(todos))
-            self.logger.info(f'Creating {num_workers} selenium workers')
             try:
-                async with asyncio.TaskGroup() as group:
-                    for i in range(num_workers):
-                        name = f'worker-{i}'
-                        coro = self.start_worker(todos, name)
-                        group.create_task(coro, name=name)
-            finally:
-                self.save_index()
-
-        async def start_worker(self, queue: deque[tuple[str, str]], name: str) -> None:
-            cache = self.scraper.cache.subcache(f'download/{name}')
-            cache.mkdir()
-            prefs = {
-                'download.default_directory': cache.path,
+                prefs = {
                 'download.prompt_for_download': False,
-                'download.directory_upgrade': True}
-            async with webdrivers.selenium(prefs=prefs) as driver:
-                helper = self.WorkerHelper(self, driver, cache)
-                while queue:
-                    url, prefix = queue.popleft()
-                    cache.delete('*', glob=True)
-                    print('got here')
+                'download.directory_upgrade': True
+                }
+                cache = self.scraper.cache.subcache(f'')
+                async with webdrivers.selenium(prefs=prefs) as driver:
+                    helper = self.WorkerHelper(self, driver, cache)
                     await helper.run(self.warn_url)
-            cache.nuke()
+            except Exception:
+                self.logger.warning(f'', exc_info=True)
+
+        # async def run(self) -> None:
+        #     with self.scraper.runner.file.open() as f:
+        #         todos = deque(self.find_todos(csv.DictReader(f)))
+        #     if todos:
+        #         self.logger.info(f'Found {len(todos)} artifact urls to scrape')
+        #     else:
+        #         self.logger.info(f'No artifact urls to scrape')
+        #         return
+        #     self.scraper.cache.mkdir('records')
+        #     num_workers = min(self.scraper.opts.selenium_max_procs, len(todos))
+        #     self.logger.info(f'Creating {num_workers} selenium workers')
+        #     try:
+        #         async with asyncio.TaskGroup() as group:
+        #             for i in range(num_workers):
+        #                 name = f'worker-{i}'
+        #                 coro = self.start_worker(todos, name)
+        #                 group.create_task(coro, name=name)
+        #     finally:
+        #         self.save_index()
+
+        # async def start_worker(self, queue: deque[tuple[str, str]], name: str) -> None:
+        #     cache = self.scraper.cache.subcache(f'download/{name}')
+        #     cache.mkdir()
+        #     prefs = {
+        #         'download.default_directory': cache.path,
+        #         'download.prompt_for_download': False,
+        #         'download.directory_upgrade': True}
+        #     async with webdrivers.selenium(prefs=prefs) as driver:
+        #         helper = self.WorkerHelper(self, driver, cache)
+        #         while queue:
+        #             url, prefix = queue.popleft()
+        #             cache.delete('*', glob=True)
+        #             await helper.run(self.warn_url)
+        #     cache.nuke()
 
         def find_todos(self, rows: Iterable[dict[str, str]]) -> Iterator[tuple[str, str]]:
             for row in rows:
@@ -1553,33 +1580,57 @@ class OK(Scraper):
                 prefix = clean_filename(f'{dateid}-{urlid}')
                 yield (url, prefix)
 
-    @dataclasses.dataclass
-    class WorkerHelper:
-        downloader: OK.ArtifactDownloader
-        driver: webdrivers.Chrome
-        
-        def find_table(self) -> list[webdrivers.WebElement]:
-                element = self.driver.find_element('css selector', '.body')
-                rows = element.find_elements('tag name', 'tr')
-                # remove headers
-                print(len(rows))
-                for row in rows[1:]:
-                    print(row.text)
-                    print('')
-                return element
-        
-        @property
-        def logger(self) -> utils.logging.Logger:
-                return self.downloader.logger
-        
-        async def run(self, url: str) -> None:
-                try:
-                    self.driver.get(url)
-                    await asyncio.sleep(5)
-                    wait = utils.Wait(timeout=10)
-                    self.find_table()
-                except TimeoutError:
-                    self.logger.warning(f'Request timed out')
+        @dataclasses.dataclass
+        class WorkerHelper:
+            downloader: OK.ArtifactDownloader
+            driver: webdrivers.Chrome
+            cache: FileCache
+            
+            @property
+            def scraper(self) -> OK:
+                return self.downloader.scraper
+            
+            def find_table(self) -> list[str]:
+                    # NEED TO KEEP CHECKING FOR 'NEXT' button to be disabled
+                    element = self.driver.find_element('css selector', '.body')
+                    rows = element.find_elements('tag name', 'lightning-primitive-cell-factory')
+                    # get headers
+                    rows_list = list()
+                    for row in rows:
+                        lines = row.text.split('\n')
+                        for line in lines:
+                            rows_list.append(line)
+                    csv_list = rows_list
+                    print(csv_list)
+                    return csv_list
+            
+            @property
+            def logger(self) -> utils.logging.Logger:
+                    return self.downloader.logger
+            
+            def chunk_list(self, lst, n) -> Iterator[str]:
+                for i in range(0, len(lst), n):
+                    yield lst[i:i + n]
+                        
+            async def run(self, url: str) -> None:
+                    try:
+                        self.driver.get(url)
+                        await asyncio.sleep(5)
+                        wait = utils.Wait(timeout=10)
+                        csv_list = self.find_table()
+                        with self.scraper.runner.file.open() as file:
+                            headers = ['Employer', 'City', 'Zip Code', 'Local Workforce Board', 'Notice Date', 'Notice Type']
+                            n = len(headers)
+                            # Split the list into chunks of size n
+                            chunks = list(self.chunk_list(csv_list, n))
+                            print(chunks)
+                            with self.cache.open('ok.csv', 'w') as file:
+                                writer = csv.writer(file)
+                                writer.writerow(headers)
+                                writer.writerows(chunks)
+                        # self.runner.file.unlink()
+                    except TimeoutError:
+                        self.logger.warning(f'Request timed out')
 
 
 
