@@ -1591,18 +1591,25 @@ class OK(Scraper):
                 return self.downloader.scraper
             
             def find_table(self) -> list[str]:
-                    # NEED TO KEEP CHECKING FOR 'NEXT' button to be disabled
+                # NEED TO KEEP CHECKING FOR 'NEXT' button to be disabled
+                rows_list = list()
+                keep_going = True
+                while keep_going:
                     element = self.driver.find_element('css selector', '.body')
+                    next_button = element.find_element('xpath', '//button[text()="Next"]')
                     rows = element.find_elements('tag name', 'lightning-primitive-cell-factory')
-                    # get headers
-                    rows_list = list()
+
                     for row in rows:
                         lines = row.text.split('\n')
                         for line in lines:
                             rows_list.append(line)
                     csv_list = rows_list
-                    print(csv_list)
-                    return csv_list
+                    if not next_button.is_enabled():
+                        keep_going = False
+                    else:
+                        next_button.click()
+                        #asyncio.sleep(1)
+                return csv_list
             
             @property
             def logger(self) -> utils.logging.Logger:
