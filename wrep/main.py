@@ -35,29 +35,34 @@ class Apps:
     @wapp
     def search(self):
         app = self.create_app()
-        app.include_router(routers.search)
+        app.include_router(routers.api.router)
+        app.include_router(routers.feed.router, include_in_schema=False)
         return app
     
     @lazy
     @wapp
     def artifacts(self):
         app = self.create_app(title='warnreports artifacts')
-        app.include_router(routers.artifacts.router, prefix='/api/v0')
+        app.include_router(routers.artifacts.router, include_in_schema=False)
         return app
     
     @lazy
     @wapp
     def backend(self):
         app = self.create_app()
-        app.include_router(routers.backend)
+        app.include_router(routers.api.router)
+        app.include_router(routers.feed.router, include_in_schema=False)
+        app.include_router(routers.artifacts.router, include_in_schema=False)
         return app
     
     @lazy
     @wapp
     def app(self):
         app = self.create_app(lifespan=frontend.lifespan)
+        app.include_router(routers.api.router)
+        app.include_router(routers.feed.router, include_in_schema=False)
+        app.include_router(routers.artifacts.router, include_in_schema=False)
         app.include_router(frontend.router, include_in_schema=False)
-        app.include_router(routers.backend)
         return app
 
     @lazy

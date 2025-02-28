@@ -1182,7 +1182,7 @@ class MO(Scraper):
 class NJ(Scraper):
     base_url = 'https://www.nj.gov/labor'
     latest_url = '/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
-    retry = dict(total=7)
+    retry = dict(total=5)
 
     async def scrape(self):
         await self.download('latest.xlsx', self.latest_url)
@@ -1197,7 +1197,7 @@ class NJ(Scraper):
     def extract(self):
         file = self.cache/'latest.xlsx'
         scrape_time = utils.file_mtime(file).isoformat()
-        wb = xlsx.load_workbook(file, read_only=True)
+        wb = xlsx.load_workbook(file)
         for ws in wb.worksheets:
             extra = dict(scrape_time=scrape_time, worksheet_name=ws.title)
             for data in xlsx.extract_worksheet(ws):
@@ -1824,7 +1824,7 @@ class Runner:
         self.file = self.data_dir/f'{self.state.lower()}.csv'
 
     def scrape(self) -> None:
-        mod = import_module(f"warn.scrapers.{self.state.lower()}")
+        mod = import_module(f'warn.scrapers.{self.state.lower()}')
         mod.scrape(self.data_dir, self.cache_dir)
 
 def absurl(base_url: str|None, url: str) -> None:

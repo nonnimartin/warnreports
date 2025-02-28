@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import datetime, timezone
-from typing import Annotated, Any, ClassVar, Iterator, Literal, Self, TypeAlias
+from typing import Annotated, Any, ClassVar, Iterator, Literal, Self
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
@@ -338,8 +338,8 @@ class PipelineLog(DataModel):
 
 __all__ += ['FilterModel', 'Limit', 'Offset']
 
-Limit = Annotated[NonNegativeInt, Le(1_000)]
-Offset: TypeAlias = NonNegativeInt
+type Limit = Annotated[NonNegativeInt, Le(1_000)]
+type Offset = NonNegativeInt
 
 class FilterModel[DM: DataModel](DataModel):
     order: str|None = None

@@ -14,7 +14,7 @@ from ..models import *
 from .common import *
 
 logger = utils.get_logger('api')
-router = APIRouter()
+router = APIRouter(prefix='/api/v0')
 
 def search_opts(
     order: Annotated[
@@ -53,43 +53,43 @@ def repopts(model: type) -> dict:
     return dict(response_model_by_alias=False, response_model=model)
 
 @router.head('/reports', include_in_schema=False)
-@router.get('/reports', **repopts(list[ReportDataView]))
+@router.get('/reports', **repopts(list[ReportDataView]), tags=['reports'])
 async def reports_list(req: Request, rep: Response, params: ReportSearchParams, opts: SearchOpts) -> list[ReportData]:
     feed_id_header(rep, params)
     return await search_response(req, rep, ReportData, params, opts)
 
 @router.head('/reports/{id}', include_in_schema=False)
-@router.get('/reports/{id}', **repopts(ReportDataView))
+@router.get('/reports/{id}', **repopts(ReportDataView), tags=['reports'])
 async def report_get(id: UUID) -> ReportData:
     return await retrieve404(ReportData, id=[id])
 
 @router.head('/companies', include_in_schema=False)
-@router.get('/companies', **repopts(list[CompanyDetailView]))
+@router.get('/companies', **repopts(list[CompanyDetailView]), tags=['companies'])
 async def companies_list(req: Request, rep: Response, params: CompanySearchParams, opts: SearchOpts) -> list[CompanyDetail]:
     return await search_response(req, rep, CompanyDetail, params, opts)
 
 @router.head('/companies/{id}', include_in_schema=False)
-@router.get('/companies/{id}', **repopts(CompanyDetailView))
+@router.get('/companies/{id}', **repopts(CompanyDetailView), tags=['companies'])
 async def company_get(id: UUID) -> CompanyDetail:
     return await retrieve404(CompanyDetail, id=[id])
 
 @router.head('/naics', include_in_schema=False)
-@router.get('/naics')
+@router.get('/naics', tags=['naics'])
 async def naics_list(req: Request, rep: Response, params: NaicsSearchParams, opts: SearchOpts) -> list[NaicsDetail]:
     return await search_response(req, rep, NaicsDetail, params, opts)
 
 @router.head('/naics/{id}', include_in_schema=False)
-@router.get('/naics/{id}')
+@router.get('/naics/{id}', tags=['naics'])
 async def naics_get(id: NaicsId) -> NaicsDetail:
     return await retrieve404(NaicsDetail, id=[id])
 
 @router.head('/states', include_in_schema=False)
-@router.get('/states')
+@router.get('/states', tags=['states'])
 async def states_list(req: Request, rep: Response, params: StateSearchParams, opts: SearchOpts) -> list[StateDetail]:
     return await search_response(req, rep, StateDetail, params, opts)
 
 @router.head('/states/{id}', include_in_schema=False)
-@router.get('/states/{id}')
+@router.get('/states/{id}', tags=['states'])
 async def state_get(id: StateCode) -> StateDetail:
     return await retrieve404(StateDetail, id=[id])
 

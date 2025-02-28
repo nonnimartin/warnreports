@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from typing import Iterable, Iterator, Sequence
 
 from ..utils import morethan
+
 
 def nonempty_columns[T](arr: Sequence[Sequence[T]]) -> list[list[T]]:
     """
