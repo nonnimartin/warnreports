@@ -32,7 +32,6 @@ from .tools.dom import Soup, bs
 from .tools.files import (ArtifactStore, FileCache, clean_filename, excachectx,
                           jsoncache)
 from .utils import wrapcontext
-from os import path, makedirs
 
 scrapers: dict[str, type[Scraper]] = {}
 
@@ -1505,17 +1504,11 @@ class OK(Scraper):
     warn_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
     
     async def scrape(self) -> None:
-        file_name = './build/scrape/ok/ok.csv'
-        makedirs(path.dirname(file_name), exist_ok=True)
-        # Check if the csv exists
-        if not path.exists(file_name):
-            # Create an empty CSV file
-            with open(file_name, 'w', newline='') as csvfile:
-                pass
-
         if settings.SELENIUM_ENABLED:
             await self.CsvBuilder(self, self.warn_url).run()
-    
+        else:
+            self.runner.scrape()
+
     @dataclasses.dataclass
     class CsvBuilder:
         scraper: OK
