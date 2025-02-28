@@ -1169,15 +1169,13 @@ class OH(Translator):
     report_id_extra = ['reported']
 
 class OK(Translator):
-    default_url = 'https://okjobmatch.com/search/warn_lookups/new'
+    default_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
     fieldsmap = dict(
-        company=['employer'],
-        reported=['notice_date'],
-        location=['city'],
-        employees=['number_of_employees_affected'],
-        starting=[],
-        action=['warn_type'],
-        url=['detail_page_url'],
+        company=['Employer'],
+        reported=['Notice Date'],
+        location=['City'],
+        employees=[],
+        action=['Notice Type'],
         industry=[],
         report_id=[],
         naics=[],
