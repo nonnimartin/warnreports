@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 from contextlib import asynccontextmanager
+from functools import cached_property as lazy
 from typing import Any, Callable, Coroutine, Sequence
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -15,12 +16,13 @@ logger = utils.get_logger('main')
 
 appslist: Sequence[str] = []
 
+def wapp[F: Callable](wrapped: F):
+    appslist.append(wrapped.__name__)
+    return wrapped
+
 class Apps:
 
-    def wapp[F: Callable](wrapped: F):
-        appslist.append(wrapped.__name__)
-        return utils.lazyprop(wrapped)
-
+    @lazy
     @wapp
     def frontend(self):
         app = self.create_app(
@@ -29,36 +31,44 @@ class Apps:
         app.include_router(frontend.router, include_in_schema=False)
         return app
 
+    @lazy
     @wapp
     def search(self):
         app = self.create_app()
-        app.include_router(routers.search)
+        app.include_router(routers.api.router)
+        app.include_router(routers.feed.router, include_in_schema=False)
         return app
     
+    @lazy
     @wapp
     def artifacts(self):
         app = self.create_app(title='warnreports artifacts')
-        app.include_router(routers.artifacts.router, prefix='/api/v0')
+        app.include_router(routers.artifacts.router, include_in_schema=False)
         return app
     
+    @lazy
     @wapp
     def backend(self):
         app = self.create_app()
-        app.include_router(routers.backend)
+        app.include_router(routers.api.router)
+        app.include_router(routers.feed.router, include_in_schema=False)
+        app.include_router(routers.artifacts.router, include_in_schema=False)
         return app
     
+    @lazy
     @wapp
     def app(self):
         app = self.create_app(lifespan=frontend.lifespan)
+        app.include_router(routers.api.router)
+        app.include_router(routers.feed.router, include_in_schema=False)
+        app.include_router(routers.artifacts.router, include_in_schema=False)
         app.include_router(frontend.router, include_in_schema=False)
-        app.include_router(routers.backend)
         return app
 
+    @lazy
     @wapp
     def noop(self):
         return FastAPI(lifespan=self.default_lifespan)
-
-    del(wapp)
 
     def create_app(self, **kw) -> FastAPI:
         kw = dict(
@@ -95,8 +105,6 @@ class Apps:
 
 appslist = tuple(appslist)
 apps = Apps()
-
-del(Apps)
 
 if __name__ == '__main__':
     from .cli.main import Command

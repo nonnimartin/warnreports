@@ -4,15 +4,17 @@ import dataclasses
 import re
 import uuid
 from datetime import timedelta
+from functools import cached_property
 from typing import Any, AsyncIterator, ClassVar, Iterable, Literal
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorDatabase)
-from pydantic import SerializationInfo, SerializerFunctionWrapHandler, model_serializer
+from pydantic import (SerializationInfo, SerializerFunctionWrapHandler,
+                      model_serializer)
 from pymongo.operations import IndexModel
 
 from .. import settings, utils
-from ..models import DataModel, FilterModel, Limit, Offset, Fi
+from ..models import DataModel, Fi, FilterModel, Limit, Offset, OrderItem
 
 type Filts[DM] = dict[type[DM: DataModel], type[FilterModel[DM: DataModel]]]
 filters: Filts = {}
@@ -190,7 +192,12 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
         data = self.model_dump(exclude_none=True, exclude=['order'])
         for name, value in data.items():
             field = self.model_fields[name]
-            if (meta := field.metadata) and isinstance(anno := meta[0], Fi):
+            if (meta := field.metadata):
+                for anno in meta:
+                    if isinstance(anno, Fi):
+                        break
+                else:
+                    continue
                 alias = anno.alias
                 if alias is None:
                     alias = name
@@ -232,19 +239,19 @@ class Search[DM: DataModel]:
     def client(self) -> MongoClient:
         return self.collection.client
 
-    @utils.lazyprop
+    @cached_property
     def q(self) -> dict[str, Any]:
         return self.filter.get_query()
+
+    @cached_property
+    def orders(self) -> list[OrderItem]:
+        if self.limit == 0:
+            return []
+        return self.filter.get_orders()
 
     def __post_init__(self) -> None:
         if self.context is None:
             self.context = {}
-        if self.limit == 0:
-            self.orders = []
-        else:
-            self.orders = list(self.filter.get_ordering())
-            if ('_id', 1) not in self.orders and ('_id', -1) not in self.orders:
-                self.orders.append(('_id', 1))
 
     async def db(self) -> AsyncIOMotorDatabase:
         return await self.client.get_context_database(self.context)

@@ -145,6 +145,7 @@ COMPANY_NAMES: NormDefs = {
     'Marvell Semiconductor': _sw,
     'Meta Platforms': _sw,
     'Microsoft': _sw,
+    'MVM': _sw,
     'Nordstrom': [
         _r(r'^Nordstrom.*(Anchorage|Center|Inc|Place|Plaza|Rack|Stonestown|Store|Waterside).*', re.I),
         _r(r'^(Dadeland|Lloyd Center)?\s*Nordstrom$', re.I),

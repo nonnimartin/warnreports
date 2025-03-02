@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 from collections import defaultdict
+from contextlib import contextmanager
 from itertools import chain
 from pathlib import Path
 from re import compile as _r
@@ -144,3 +145,23 @@ class ArtifactStore:
         self.metrics['total'] += 1
         self.metrics['bytes_total'] += sta.st_size
         return save, sta.st_size
+
+@contextmanager
+def excachectx(src: Path, dest: Path):
+    sta = src.stat()
+    if dest.exists():
+        stb = dest.stat()
+        if int(sta.st_mtime) == int(stb.st_mtime):
+            yield dest
+            return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    yield
+    shutil.copystat(src, dest)
+
+@contextmanager
+def jsoncache(src: Path, dest: Path):
+    with excachectx(src, dest) as saved:
+        if saved:
+            with saved.open() as f:
+                saved = json.load(f)
+        yield saved

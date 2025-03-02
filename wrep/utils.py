@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import builtins
 import dataclasses
 import enum
 import logging
@@ -10,11 +9,11 @@ import mimetypes
 import re
 import time
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
-                        asynccontextmanager)
+                        asynccontextmanager, contextmanager)
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
-from typing import (TYPE_CHECKING, Any, AsyncIterable, AsyncIterator, Callable,
+from typing import (Any, AsyncIterable, AsyncIterator, Callable, Generator,
                     Iterable, Iterator, Sequence)
 from uuid import UUID
 
@@ -182,15 +181,12 @@ async def achain_from_iterable[T](it: EitherIterable[EitherIterable[T]]) -> Asyn
         async for x in as_aiter(it):
             yield x
 
-def lazyprop[S, T](wrapped: Callable[..., T]) -> property[S, T]:
-    name = wrapped.__name__
+def wrapcontext[T](wrapped: Callable[..., T]):
+    @contextmanager
     @wraps(wrapped)
-    def wrapper(self: S) -> T:
-        try:
-            return self.__dict__[name]
-        except KeyError:
-            return self.__dict__.setdefault(name, wrapped(self))
-    return property(wrapper)
+    def wrapper(*args, **kw) -> Generator[T]:
+        yield wrapped(*args, **kw)
+    return wrapper
 
 class StrEnum(str, enum.Enum):
 
@@ -199,15 +195,24 @@ class StrEnum(str, enum.Enum):
 
 @dataclasses.dataclass(frozen=True)
 class Wait:
+    'Async retry/wait parameters'
     timeout: float
+    'The total time limit'
     poll: float = 0.5
+    'Time to wait in between poll'
     ignored: tuple[type[Exception], ...] = ()
+    'Exception types to ignore'
     args: Sequence[Any] = ()
+    'Args to pass to the callback'
     kwargs: dict = dataclasses.field(default_factory=dict)
+    'Kwargs to pass to the callback'
     raises: type[Exception] = dataclasses.field(default_factory=lambda: TimeoutError)
+    'The exception class to raise on timeout'
     oper: Callable[[Any], Any] = dataclasses.field(default_factory=lambda: bool)
+    'The operator to apply to the result of the callback'
 
     async def until[T](self, callback: Callable[..., T]) -> T:
+        'Wait until the callback returns a truthy value (depending on `oper`)'
         end = time.monotonic() + self.timeout
         err = None
         ignored = tuple(self.ignored or ())
@@ -237,24 +242,3 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
     else:
         logger.info('Failed to send email.')
     return success
-
-if TYPE_CHECKING:
-    from typing import overload
-    class property[S, T](builtins.property):
-        fget: Callable[[S], Any] | None
-        fset: Callable[[S, Any], None] | None
-        fdel: Callable[[S], None] | None
-        @overload
-        def __init__(
-            self,
-            fget: Callable[[S], T] | None = ...,
-            fset: Callable[[S, Any], None] | None = ...,
-            fdel: Callable[[S], None] | None = ...,
-            doc: str | None = ...,
-        ) -> None: ...
-        def getter(self, __fget: Callable[[S], T]) -> property[S, T]: ...
-        def setter(self, __fset: Callable[[S, Any], None]) -> property[S, T]: ...
-        def deleter(self, __fdel: Callable[[S], None]) -> property[S, T]: ...
-        def __get__(self, __obj: S, __type: type | None = ...) -> T: ...
-        def __set__(self, __obj: S, __value: Any) -> None: ...
-        def __delete__(self, __obj: S) -> None: ...

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Iterator
 
-from openpyxl import load_workbook as load_workbook
+import openpyxl
 from openpyxl.worksheet.worksheet import Worksheet
 
+
+@wraps(openpyxl.load_workbook)
+def load_workbook(file: Path, read_only=True, **kw):
+    return openpyxl.load_workbook(file, read_only=read_only, **kw)
 
 def extract_workbook(file: Path) -> Iterator[dict[str, str]]:
     worksheet = load_workbook(file, read_only=True).worksheets[0]

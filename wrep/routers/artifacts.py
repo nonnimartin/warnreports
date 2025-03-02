@@ -11,10 +11,10 @@ from .api import retrieve404
 
 logger = utils.get_logger('artifacts')
 
-router = APIRouter()
+router = APIRouter(prefix='/api/v0')
 
 @router.head('/artifacts/{id}/data')
-@router.get('/artifacts/{id}/data')
+@router.get('/artifacts/{id}/data', tags=['artifacts'])
 async def artifact_data(req: Request, id: UUID, disposition: Disp = 'download'):
-    artifact = await retrieve404(ArtifactDetail, id=[id])
+    artifact = await retrieve404(ArtifactDetail, id=id)
     return get_artifact_response(req.method, artifact, disposition)

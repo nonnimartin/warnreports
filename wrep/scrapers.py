@@ -26,10 +26,12 @@ from typing_extensions import Buffer
 
 from . import Stage, settings, utils
 from .backends import webdrivers
-from .backends.files import ArtifactStore, FileCache, clean_filename
 from .models import ScraperOpts, StateCode
-from .tools import dom, pdfs, xlsx
+from .tools import dom, matx, pdfs, xlsx
 from .tools.dom import Soup, bs
+from .tools.files import (ArtifactStore, FileCache, clean_filename, excachectx,
+                          jsoncache)
+from .utils import wrapcontext
 
 scrapers: dict[str, type[Scraper]] = {}
 
@@ -37,7 +39,7 @@ class Scraper:
     state: ClassVar[StateCode]
     base_url: ClassVar[str|None] = None
     user_agent: ClassVar[str] = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
-    request_delay: ClassVar[int] = 0
+    request_delay: ClassVar[float] = 0.0
     ssl_verify: ClassVar[bool] = True
     retry: ClassVar[dict] = dict(total=3, backoff_factor=2)
 
@@ -157,14 +159,6 @@ class AK(Scraper):
             yield bs(file).find('table')
         yield self.cache/'index.json'
 
-    @contextmanager
-    def extract(self) -> Generator[Iterator[dict[str, str]]]:
-        doc = bs(self.cache/'latest.html')
-        it = self.read_table(doc.find('table'))
-        headers = next(it)
-        headers.append('artifacts_json')
-        yield (dict(zip(headers, values)) for values in it)
-
     def build_index(self) -> dict[str, str]:
         'Mapping from url to cache key'
         items: deque[tuple[str, str]] = deque()
@@ -181,29 +175,39 @@ class AK(Scraper):
         self.cache.write_json('index.json', index, indent=2)
         return index
 
-    def read_table(self, table: Soup) -> Iterator[list[str]]:
+    @wrapcontext
+    def extract(self) -> Iterator[dict[str, str]]:
+
+        def parseurl(tr: Soup) -> str:
+            td = tr.find('td')
+            if td.text.strip() == 'Company':
+                # header row
+                return 'url'
+            a = td.find('a')
+            if a:
+                return self.absurl(a['href'])
+            return ''
+
+        def readtr(tr: Soup) -> Iterator[str]:
+            for td in tr.find_all('td'):
+                yield ' '.join(td.text.split())
+
+        def readtable(table: Soup):
+            for tr in table.find_all('tr'):
+                url = parseurl(tr)
+                values = [*readtr(tr), url]
+                if len(values) > 2 and values[0]:
+                    if url in index:
+                        values.append(json.dumps({index[url]: url}))
+                    yield values
+
         index: dict[str, str] = self.cache.read_json('index.json')
-        for tr in table.find_all('tr'):
-            url = self.parse_url(tr)
-            values = [*self.read_tr(tr), url]
-            if len(values) > 2 and values[0]:
-                if url in index:
-                    values.append(json.dumps({index[url]: url}))
-                yield values
-
-    def read_tr(self, tr: Soup) -> Iterator[str]:
-        for td in tr.find_all('td'):
-            yield ' '.join(td.text.split())
-
-    def parse_url(self, tr: Soup) -> str:
-        td = tr.find('td')
-        if td.text.strip() == 'Company':
-            # header row
-            return 'url'
-        a = td.find('a')
-        if a:
-            return self.absurl(a['href'])
-        return ''
+        doc = bs(self.cache/'latest.html')
+        it = readtable(doc.find('table'))
+        headers = next(it)
+        headers.append('artifacts_json')
+        for values in it:
+            yield dict(zip(headers, values))
 
 class CA(Scraper):
     base_url = 'https://edd.ca.gov'
@@ -211,47 +215,53 @@ class CA(Scraper):
     hrefpat = _r(r'warn[-_]?report', re.I)
 
     async def scrape(self) -> None:
-        page = bs(await self.fetch('latest.html', self.latest_url))
-        index = []
-        for link in page.find_all('a'):
-            href = str(link.get('href', ''))
-            if self.hrefpat.search(href):
-                key = Path(urlparse(href).path).name
-                await self.download(key, href, missing_only=key.endswith('.pdf'))
-                self.artifacts.add(key)
-                index.append((key, self.absurl(href)))
-        index.sort()
-        self.cache.write_json('index.json', dict(index), indent=2)
+        await self.download('latest.html', self.latest_url)
+        index = self.build_index()
+        for key, url in index.items():
+            await self.download(key, url, missing_only=key.endswith('.pdf'))
+            self.artifacts.add(key)
 
     async def clean(self):
         self.cache.delete('latest.html', 'index.json')
 
     def statobjs(self):
-        yield from self.list_record_files()
+        yield from sorted(self.cache.glob('*.pdf', '*.xlsx'))
         yield self.cache/'index.json'
 
-    @contextmanager
-    def extract(self):
-        it = map(self.read_record_file, self.load_index())
-        yield chain.from_iterable(it)
+    @wrapcontext
+    def extract(self) -> Iterator[dict[str, str]]:
+        index: dict[str, str] = self.cache.read_json('index.json')
+        def clean(data: dict[str, str]):
+            return dict(zip(data, map(str, data.values())))
+        for key, url in index.items():
+            file = self.cache/key
+            cached = self.extract_cache/f'{key}.json'
+            with jsoncache(file, cached) as saved:
+                if not saved:
+                    from warn.scrapers import ca
+                    if file.suffix == '.pdf':
+                        saved = ca._extract_pdf_data(file)
+                    else:
+                        saved = ca._extract_excel_data(file)
+                    with cached.open('w') as f:
+                        json.dump(saved, f, indent=2)
+            extra = dict(artifacts_json=json.dumps({key: url}))
+            for data in map(clean, saved):
+                yield data|extra
 
-    def read_record_file(self, file: Path|str) -> Iterator[dict[str, str]]:
-        file = self.cache/file
-        from warn.scrapers import ca
-        if file.name.endswith('.pdf'):
-            records = ca._extract_pdf_data(file)
-        else:
-            records = ca._extract_excel_data(file)
-        return map(self.clean_record, records)
-
-    def clean_record(self, record: dict[str, Any]) -> dict[str, str]:
-        return {k: str(v) for k, v in record.items()}
-
-    def list_record_files(self) -> list[Path]:
-        return sorted(self.cache.glob('*.pdf', '*.xlsx'))
-
-    def load_index(self) -> dict[str, str]:
-        return self.cache.read_json('index.json')
+    def build_index(self) -> dict[str, str]:
+        'Build downloads index {cache_key: url}'
+        page = bs(self.cache/'latest.html')
+        items: deque[tuple[str, str]] = deque()
+        for link in page.find_all('a'):
+            href = str(link.get('href', ''))
+            if self.hrefpat.search(href):
+                key = Path(urlparse(href).path).name
+                url = self.absurl(href)
+                items.append((key, url))
+        index = dict(sorted(items))
+        self.cache.write_json('index.json', index, indent=2)
+        return index
 
 class CO(Scraper):
 
@@ -303,24 +313,22 @@ class CT(Scraper):
         yield from super().statobjs()
         yield self.cache.topath('artifacts.json')
 
-    @contextmanager
+    @wrapcontext
     def extract(self):
-        with self.runner.file.open() as file:
-            yield self.read_records(csv.reader(file))
-
-    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
         "Yield augmented records from CSV rows"
         index: dict[str, list[str]] = self.cache.read_json('artifacts.json')
-        headers = next(it)
-        for values in it:
-            row = dict(zip(headers, values))
-            row_key = self.row_key(values)
-            if row_key in index:
-                key, url = index[row_key]
-                row.update(
-                    download=url,
-                    artifacts_json=json.dumps({key: url}))
-            yield row
+        with self.runner.file.open() as file:
+            it = csv.reader(file)
+            headers = next(it)
+            for values in it:
+                row = dict(zip(headers, values))
+                row_key = self.row_key(values)
+                if row_key in index:
+                    key, url = index[row_key]
+                    row.update(
+                        download=url,
+                        artifacts_json=json.dumps({key: url}))
+                yield row
 
     def row_key(self, values: Iterable[str]) -> str:
         "Values hash key from CSV row for artifact index"
@@ -408,11 +416,8 @@ class DE(Scraper):
         yield self.cache/'index.json'
         yield from self.list_record_files()
 
-    @contextmanager
-    def extract(self):
-        yield self.read_records()
-
-    def read_records(self) -> Iterator[dict[str, str]]:
+    @wrapcontext
+    def extract(self) -> Iterator[dict[str, str]]:
         for row in self.load_index():
             record_num = row.pop('record_num')
             key = f'records/{record_num}.html'
@@ -447,8 +452,7 @@ class FL(Scraper):
 
     async def scrape(self) -> None:
         self.runner.scrape()
-        index = dict(self.build_artifacts_index())
-        self.cache.write_json('artifacts.json', index, indent=2)
+        index = self.build_index()
         for key, url in index.values():
             await self.download(key, url, missing_only=True)
             self.artifacts.add(key)
@@ -459,7 +463,7 @@ class FL(Scraper):
 
     def statobjs(self):
         yield from super().statobjs()
-        yield self.cache.topath('artifacts.json')
+        yield self.cache/'artifacts.json'
 
     @contextmanager
     def extract(self):
@@ -472,28 +476,30 @@ class FL(Scraper):
         headers = next(it)
         for values in it:
             row = dict(zip(headers, values))
-            row_key = self.row_key(values)
-            if row_key in index:
-                key, url = index[row_key]
+            values_key = self.values_key(values)
+            if values_key in index:
+                key, url = index[values_key]
                 row.update(
                     download=url,
                     artifacts_json=json.dumps({key: url}))
             yield row
 
-    def build_artifacts_index(self) -> Iterator[tuple[str, tuple[str, str]]]:
-        "Build the artifacts index from the downloaded page files"
+    def build_index(self) -> dict[str, tuple[str, str]]:
+        "Build the artifacts index {values_key: (cache_key, url)}"
+        index: dict[str, tuple[str, str]] = {}
         for file in sorted(self.cache.glob('*_page_*.html'), reverse=True):
             year = int(file.name[:4])
-            doc = bs(file.read_text(), 'html5lib')
-            table = doc.find('table')
-            yield from self.parse_downloads_table(year, table)
+            table = bs(file, 'html5lib').find('table')
+            index.update(self.parse_downloads_table(year, table))
+        self.cache.write_json('artifacts.json', index, indent=2)
+        return index
 
-    def row_key(self, values: Iterable[str]) -> str:
+    def values_key(self, values: Iterable[str]) -> str:
         "Values hash key from CSV row for artifact index"
         return ''.join(''.join(values).split())
 
     def parse_downloads_table(self, year: int, table: Soup) -> Iterator[tuple[str, tuple[str, str]]]:
-        "Yields (row_key, (cache_key, url)) for an html table"
+        "Yields (values_key, (cache_key, url)) for an html table"
         tbody = table.find('tbody')
         for tr in tbody.find_all('tr'):
             tds = tr.find_all('td')
@@ -501,8 +507,8 @@ class FL(Scraper):
             if last.find('input', id='download'):
                 if (el := last.find('input', type='hidden')):
                     if (info := self.artifact_info(year, el['value'])):
-                        row_key = self.row_key(td.text for td in tds)
-                        yield row_key, info
+                        values_key = self.values_key(td.text for td in tds)
+                        yield values_key, info
 
     def artifact_info(self, year: int, uri: str) -> tuple[str, str]|None:
         "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
@@ -532,28 +538,24 @@ class GA(Scraper):
     extra_headers = ['entry_url', 'submitted_date', 'artifacts_json']
 
     async def scrape(self):
-        text = await self.fetch('latest.html', self.latest_url)
-        doc = bs(text, 'html5lib')
-        payload = dict(self.payload, nonce=self.extract_nonce(doc))
+        await self.download('latest.html', self.latest_url)
+        payload = dict(self.payload, nonce=self.extract_nonce())
         rep = await self.request('POST', self.api_url, data=payload)
         try:
             body = rep.json()
         except requests.exceptions.JSONDecodeError:
             self.logger.error(f'{rep.status_code} {rep.url} {payload=} content={rep.content}')
             raise
-        index = {}
-        for listing in body['data']:
-            a = bs(listing[0], 'html5lib').find('a')
-            index[a.text] = [a['href'], listing[2]]
-        self.cache.write_json('index.json', index, indent=2)
+        self.cache.write_json('latest.json', body, indent=2)
+        index = self.build_index()
         if self.needs_scrape():
             await asyncio.sleep(0)
             self.runner.scrape()
         artifacts = {}
-        for idkey in index:
-            infos = dict(self.extract_artifact_infos(idkey))
+        for notice_id in index:
+            infos = dict(self.extract_artifact_infos(notice_id))
             if infos:
-                artifacts[idkey] = infos
+                artifacts[notice_id] = infos
         self.cache.write_json('artifacts.json', artifacts, indent=2)
         it = chain.from_iterable(map(dict.items, artifacts.values()))
         for cachekey, url in it:
@@ -566,35 +568,19 @@ class GA(Scraper):
 
     def statobjs(self):
         yield from self.cache.glob('*.json')
-        yield from self.list_record_files()
+        yield from sorted(self.cache.glob('*.format3'), reverse=True)
 
-    @contextmanager
-    def extract(self):
-        with self.runner.file.open() as file:
-            yield self.read_records(csv.reader(file))
-
-    def read_records(self, it: Iterable[list[str]]) -> Iterator[dict[str, str]]:
-        index: dict = self.cache.read_json('index.json')
-        artifacts = self.cache.read_json('artifacts.json')
-        headers = next(it) + self.extra_headers
-        fillrow = [''] * len(self.extra_headers)
-        for values in it:
-            idkey = values[0]
-            fill = list(fillrow)
-            if idkey in index:
-                fill[:2] = index[idkey]
-            if idkey in artifacts:
-                fill[2] = json.dumps(artifacts[idkey])
-            values.extend(fill)
-            yield dict(zip(headers, values))
-
-    def extract_artifact_infos(self, idkey: str) -> Iterator[tuple[str, str]]:
-        doc = bs(self.cache/f'{idkey}.format3')
-        for a in doc.find_all('a', {'data-type': 'pdf'}):
-            filename = self.artifact_filename(a['href'])
-            if filename:
-                cachekey = f'records/{idkey}-{filename}'
-                yield cachekey, self.absurl(a['href'])
+    def build_index(self) -> dict[str, tuple[str, str]]:
+        body: dict = self.cache.read_json('latest.json')
+        index: dict[str, tuple[str, str]] = {}
+        for listing in body['data']:
+            a = bs(listing[0], 'html5lib').find('a')
+            notice_id = a.text
+            url = self.absurl(a['href'])
+            datestr = listing[2]
+            index[notice_id] = (url, datestr)
+        self.cache.write_json('index.json', index, indent=2)
+        return index
 
     def needs_scrape(self) -> bool:
         index = self.cache.read_json('index.json')
@@ -606,16 +592,22 @@ class GA(Scraper):
             self.cache.exists('index.json') and
             all(map(self.cache.exists, keys)))
 
-    def extract_nonce(self, doc: Soup) -> str|None:
+    def extract_artifact_infos(self, notice_id: str) -> Iterator[tuple[str, str]]:
+        doc = bs(self.cache/f'{notice_id}.format3')
+        for a in doc.find_all('a', {'data-type': 'pdf'}):
+            filename = self.artifact_filename(a['href'])
+            if filename:
+                cachekey = f'records/{notice_id}-{filename}'
+                yield cachekey, self.absurl(a['href'])
+
+    def extract_nonce(self) -> str|None:
+        doc = bs(self.cache/'latest.html', 'html5lib')
         script = doc.find(
             'script',
             text=lambda text: text and 'window.gvDTglobals.push' in text)
         match = re.search(r'"nonce":"([^"]+)"', str(script))
         if match:
             return match.group(1)
-
-    def list_record_files(self) -> list[Path]:
-        return sorted(self.cache.glob('*.format3'), reverse=True)
 
     def artifact_filename(self, href: str) -> str|None:
         vals = parse_qs(urlparse(href).query).get('gf-download')
@@ -638,6 +630,25 @@ class GA(Scraper):
         hideUntilSearched=0,
         setUrlOnSearch=True,
         shortcode_atts=dict(id=77460))
+
+    @contextmanager
+    def extract(self):
+        index: dict = self.cache.read_json('index.json')
+        artifacts = self.cache.read_json('artifacts.json')
+        def readrecords(it: Iterable[list[str]]):
+            headers = next(it) + self.extra_headers
+            fillrow = [''] * len(self.extra_headers)
+            for values in it:
+                idkey = values[0]
+                fill = list(fillrow)
+                if idkey in index:
+                    fill[:2] = index[idkey]
+                if idkey in artifacts:
+                    fill[2] = json.dumps(artifacts[idkey])
+                values.extend(fill)
+                yield dict(zip(headers, values))
+        with self.runner.file.open() as file:
+            yield readrecords(csv.reader(file))
 
 class IL(Scraper):
     source_url = 'https://apps.illinoisworknet.com/iebs/api/public/export'
@@ -701,38 +712,36 @@ class IN(Scraper):
         if (file := self.cache/'latest.html').exists():
             yield from bs(file).find_all('table')
 
-    @contextmanager
+    @wrapcontext
     def extract(self):
-        yield self.read_records()
 
-    def read_records(self):
+        def readtable(table: Soup) -> Iterator[list[str]]:
+            tags = ['td', 'th']
+            for tr in table.find_all('tr'):
+                tds = tr.find_all(tags)
+                if not tds:
+                    continue
+                last = tds.pop()
+                values = [td.text.strip() for td in tds]
+                values.append(parseurl(last))
+                yield values
+
+        def parseurl(cell: Soup) -> str:
+            if cell.name == 'th':
+                # header row
+                return 'url'
+            a = cell.find('a')
+            if a:
+                return self.absurl(a['href'])
+            return cell.text.strip()
+
         doc = bs(self.cache/'latest.html')
         for i, table in enumerate(doc.find_all('table')):
-            it = self.read_table(table)
+            it = readtable(table)
             if i == 0:
                 headers = next(it)
             for values in it:
                 yield dict(zip(headers, values))
-
-    def read_table(self, table: Soup) -> Iterator[list[str]]:
-        tags = ['td', 'th']
-        for tr in table.find_all('tr'):
-            tds = tr.find_all(tags)
-            if not tds:
-                continue
-            last = tds.pop()
-            values = [td.text.strip() for td in tds]
-            values.append(self.parse_url(last))
-            yield values
-
-    def parse_url(self, cell: Soup) -> str:
-        if cell.name == 'th':
-            # header row
-            return 'url'
-        a = cell.find('a')
-        if a:
-            return self.absurl(a['href'])
-        return cell.text.strip()
 
 class KY(Scraper):
 
@@ -761,8 +770,8 @@ class KY(Scraper):
                 if self.cache.exists(key):
                     row.update(artifacts_json=json.dumps({key: url}))
             return row
-        with super().extract() as it:
-            yield map(extend, it)
+        with self.runner.file.open() as f:
+            yield map(extend, csv.DictReader(f))
 
     def load_index(self) -> dict[str, str]:
         if self.cache.exists('artifacts.json'):
@@ -979,26 +988,18 @@ class LA(Scraper):
         for y in range(2007, 2024)]
 
     async def scrape(self):
-        index = {}
-        page = bs(await self.fetch('latest.html', self.latest_url))
-        recent = (utils.now().year, utils.now().year - 1)
-        for a in page.find_all('a'):
-            url = a.get('href', '')
-            if 'WARN Notices' in a.text and url.endswith('.pdf'):
-                key = url.split('/')[-1]
-                is_recent = any(str(y) in key for y in recent)
-                await self.download(key, url, missing_only=not is_recent)
-                index[key] = self.absurl(url)
-        for url in self.historical_urls:
-            key = url.split('/')[-1]
-            await self.download(key, url, missing_only=True)
-            if key not in index:
-                index[key] = url
-        index = {key: index[key] for key in sorted(index, reverse=True)}
-        self.cache.write_json('index.json', index, indent=2)
+        await self.download('latest.html', self.latest_url)
+        index = self.build_index()
+        now = utils.now()
+        recent = (now.year, now.year - 1)
+        for key, url in index.items():
+            is_recent = (
+                'historical' not in url and
+                any(str(y) in key for y in recent))
+            await self.download(key, url, missing_only=not is_recent)
 
     def statobjs(self):
-        yield from self.cache.glob('*.pdf')
+        yield from sorted(self.cache.glob('*.pdf'))
 
     async def clean(self):
         self.cache.delete('*.pdf', '*.html', '*.csv', '*.json', glob=True)
@@ -1006,11 +1007,17 @@ class LA(Scraper):
     @contextmanager
     def extract(self):
         from warn.scrapers import la
-        index = self.cache.read_json('index.json')
+        index: dict[str, str] = self.cache.read_json('index.json')
         headers: list[str] = []
         def readfile(key: str):
             url = index[key]
-            rows: list[list[str]] = la._process_pdf(self.cache.topath(key))
+            file = self.cache/key
+            cached = self.extract_cache/f'{key}.json'
+            with jsoncache(file, cached) as rows:
+                if not rows:
+                    rows: list[list[str]] = la._process_pdf(file)
+                    with cached.open('w') as f:
+                        json.dump(rows, f, indent=2)
             if not headers:
                 headers.extend(next(filter(la._is_clean_header, rows)))
                 headers.append('url')
@@ -1019,9 +1026,24 @@ class LA(Scraper):
                 yield dict(zip(headers, values))
         yield chain.from_iterable(map(readfile, index))
 
+    def build_index(self) -> dict[str, str]:
+        'Build downloads index {cache_key: url}'
+        items: deque[tuple[str, str]] = deque()
+        page = bs(self.cache/'latest.html')
+        for a in page.find_all('a'):
+            href = a.get('href', '')
+            if 'WARN Notices' in a.text and href.endswith('.pdf'):
+                key = href.split('/')[-1]
+                url = self.absurl(href)
+                items.append((key, url))
+        for url in self.historical_urls:
+            key = url.split('/')[-1]
+            items.append((key, url))
+        index = dict(sorted(items, reverse=True))
+        self.cache.write_json('index.json', index, indent=2)
+        return index
+
 class MD(Scraper):
-    # Scrape time: 3s
-    # Extract time: 2s
     base_url = 'https://www.dllr.state.md.us/employment'
     latest_url = '/warn.shtml'
     retry = dict(total=10)
@@ -1042,19 +1064,17 @@ class MD(Scraper):
     def statobjs(self):
         yield from self.get_tables()
 
-    @contextmanager
+    @wrapcontext
     def extract(self):
-        it = chain.from_iterable(map(self.read_table, self.get_tables()))
+        def readtr(tr: Soup) -> list[str]:
+            return [' '.join(td.text.split()) for td in tr.find_all('td')]
+        def readtable(table: Soup) -> Iterator[list[str]]:
+            return filter(any, map(readtr, table.find_all('tr')))
+        it = map(readtable, self.get_tables())
+        it = chain.from_iterable(it)
         headers = next(it)
-        yield (dict(zip(headers, values)) for values in it)
-
-    def read_table(self, table: Soup) -> Iterator[list[str]]:
-        it = map(self.read_tr, table.find_all('tr'))
-        return filter(any, map(list, it))
-
-    def read_tr(self, tr: Soup) -> Iterator[str]:
-        for td in tr.find_all('td'):
-            yield ' '.join(td.text.split())
+        for values in it:
+            yield dict(zip(headers, values))
 
     def get_tables(self) -> Iterator[Soup]:
         for file in self.list_page_files():
@@ -1062,6 +1082,20 @@ class MD(Scraper):
 
     def list_page_files(self) -> list[Path]:
         return sorted(self.cache.glob('*.html'), reverse=True)
+
+class ME(Scraper):
+
+    async def scrape(self) -> None:
+        # CSV files appear to get corrupted sometimes, resulting in missing data, which breaks
+        # hashing. Clearing the CSV seems to help.
+        self.cache.delete('*.csv', glob=True)
+        await super().scrape()
+
+    async def clean(self) -> None:
+        self.cache.delete('*.csv', glob=True)
+
+    def statobjs(self):
+        yield from self.cache.glob('*.csv')
 
 class MO(Scraper):
     start_year = 2019
@@ -1074,23 +1108,27 @@ class MO(Scraper):
     }
 
     async def scrape(self) -> None:
+        years = range(self.start_year, utils.now().year + 1)
+        keys = [f'pages/{y}.html' for y in years]
         if settings.SELENIUM_ENABLED:
-            await self.driver_scrape()
+            func = self.driver_scrape
+            urls = [self.absurl(f'/{y}') for y in years]
         else:
-            await self.archive_scrape()
+            func = self.archive_scrape
+            urls = [f'{self.archive_url}/{key}' for key in keys]
+        index = dict(zip(years, zip(keys, urls)))
+        await func(index)
 
-    async def driver_scrape(self) -> None:
+    async def driver_scrape(self, index: dict[int, tuple[str, str]]) -> None:
         def find_content():
             return driver.find_element('css selector', 'div.view-warn-notices')
         wait = utils.Wait(timeout=10)
         now = utils.utcnow()
         async with webdrivers.selenium() as driver:
-            for year in range(self.start_year, now.year + 1):
+            for year, (key, url) in index.items():
                 is_recent = year >= now.year - 1
-                key = f'pages/{year}.html'
                 if not is_recent and self.cache.exists(key):
                     continue
-                url = self.absurl(f'/{year}')
                 driver.get(url)
                 try:
                     await wait.until(find_content)
@@ -1100,20 +1138,11 @@ class MO(Scraper):
                 self.logger.info(f'Scraped {key}')
                 self.cache.write(key, driver.page_source)
 
-    async def archive_scrape(self) -> None:
+    async def archive_scrape(self, index: dict[int, tuple[str, str]]) -> None:
         now = utils.utcnow()
-        for year in range(self.start_year, now.year + 1):
-            key = f'pages/{year}.html'
-            url = f'{self.archive_url}/{key}'
+        for year, (key, url) in index.items():
             is_recent = year >= now.year - 1
-            try:
-                rep = await self.download(key, url, missing_only=not is_recent)
-            except HTTPError:
-                if year == now.year and now.month < 2:
-                    # Don't fail for current year if it is January
-                    self.logger.warning(f'Current year download failed, skipping {url=}')
-                    continue
-                raise
+            rep = await self.download(key, url, missing_only=not is_recent)
             if year == now.year:
                 dt = utils.parse_date(rep.headers.get('Last-Modified'))
                 if not dt:
@@ -1130,35 +1159,30 @@ class MO(Scraper):
         for file in self.list_page_files():
             yield bs(file).find('table')
 
-    @contextmanager
-    def extract(self):
-        yield self.read_records()
+    def list_page_files(self) -> list[Path]:
+        return sorted(self.cache.glob('pages/*.html'), reverse=True)
 
-    def read_records(self) -> Iterable[dict[str, str]]:
+    @wrapcontext
+    def extract(self) -> Iterable[dict[str, str]]:
+        def readtr(tr: Soup) -> Iterator[str]:
+            for td in tr.find_all('td'):
+                yield td.text.strip()
         for file in self.list_page_files():
             table = bs(file).find('table')
             year = int(file.name.removesuffix('.html'))
             url = self.absurl(str(year))
             it = iter(table.find_all('tr'))
-            headers = self.get_header_species(next(it))
+            width = len(next(it).find_all(['td', 'th']))
+            headers = self.headers_species[width]
             for tr in it:
-                values = [*self.read_tr(tr), url]
+                values = [*readtr(tr), url]
                 if utils.morethan(2, values):
                     yield dict(zip(headers, values))
-
-    def get_header_species(self, head: Soup) -> list[str]:
-        return self.headers_species[len(head.find_all(['td', 'th']))]
-
-    def read_tr(self, tr: Soup) -> Iterator[str]:
-        for td in tr.find_all('td'):
-            yield td.text.strip()
-
-    def list_page_files(self) -> list[Path]:
-        return sorted(self.cache.glob('pages/*.html'), reverse=True)
 
 class NJ(Scraper):
     base_url = 'https://www.nj.gov/labor'
     latest_url = '/assets/PDFs/WARN/WARN_Notice_Archive.xlsx'
+    retry = dict(total=5)
 
     async def scrape(self):
         await self.download('latest.xlsx', self.latest_url)
@@ -1169,18 +1193,16 @@ class NJ(Scraper):
     async def clean(self):
         self.cache.delete('latest.xlsx')
 
-    @contextmanager
+    @wrapcontext
     def extract(self):
-        file = self.cache.topath('latest.xlsx')
-        extra = dict(scrape_time=utils.file_mtime(file).isoformat())
-        wb = xlsx.load_workbook(file, read_only=True)
-        it = chain.from_iterable(map(self.extract_xlsx_worksheet, wb.worksheets))
-        yield (row|extra for row in it)
-
-    def extract_xlsx_worksheet(self, ws: xlsx.Worksheet):
-        extra = dict(worksheet_name=ws.title)
-        it = xlsx.extract_worksheet(ws)
-        return (row|extra for row in it)
+        file = self.cache/'latest.xlsx'
+        scrape_time = utils.file_mtime(file).isoformat()
+        wb = xlsx.load_workbook(file)
+        for ws in wb.worksheets:
+            extra = dict(scrape_time=scrape_time, worksheet_name=ws.title)
+            for data in xlsx.extract_worksheet(ws):
+                data.update(extra)
+                yield data
 
 class NY(Scraper):
     base_url = 'https://dol.ny.gov'
@@ -1204,8 +1226,7 @@ class NY(Scraper):
         await self.download('latest.html', self.latest_url)
         for key, url in self.past_urls.items():
             await self.download(key, url, missing_only=True)
-        index = dict(self.build_artifacts_index())
-        self.cache.write_json('artifacts.json', index, indent=2)
+        index = self.build_index()
         for key, url in index.items():
             await self.download(key, url, missing_only=True)
             self.artifacts.add(key)
@@ -1223,18 +1244,53 @@ class NY(Scraper):
         keys = ('latest.html', *self.past_urls)
         yield chain.from_iterable(map(self.read_record_file, keys))
 
-    def read_record_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+    def build_index(self) -> dict[str, str]:
+        "Build the artifacts index from the downloaded page files {cache_key: url}"
+        items: deque[tuple[str, str]] = deque()
+        for key in ('latest.html', *self.past_urls):
+            if not key.endswith('.html'):
+                continue
+            file = self.cache/key
+            table = self.find_table(bs(file))
+            for a in table.select('tbody > tr > td:nth-of-type(1) > a'):
+                items.append(self.parse_record_key_url(a['href']))
+        index = dict(items)
+        self.cache.write_json('artifacts.json', index, indent=2)
+        return index
+
+    def find_table(self, page: Soup) -> Soup:
+         "Find main table in HTML page"
+         return page.find('div', {'class': 'landing-paragraphs'}).find('table')
+
+    def parse_record_key_url(self, href: str) -> tuple[str, str]:
+        "Return an artifact key and download URL from the href value"
+        url = self.absurl(href)
+        url = self.artifact_map.get(url, url)
+        filename = Path(urlparse(url).path).name
+        key = f'records/{filename}'
+        if not filename.endswith('.pdf'):
+            key = f'{key}.pdf'
+        return key, url
+
+    def read_record_file(self, key: str) -> Iterator[dict[str, str]]:
         "Call either read_html_file() or read_xlsx_file() depending on the file extenstion"
-        file = self.cache/file
-        return getattr(self, f'read_{file.name[-4:]}_file')(file)
+        file = self.cache/key
+        return getattr(self, f'read_{file.suffix[1:]}_file')(key)
 
-    def read_xlsx_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+    def read_xlsx_file(self, key: str) -> Iterator[dict[str, str]]:
         "Extract records from historical xlsx file"
-        return xlsx.extract_workbook(self.cache/file)
+        file = self.cache/key
+        cached = self.extract_cache/f'{key}.json'
+        with jsoncache(file, cached) as saved:
+            if not saved:
+                saved = list(xlsx.extract_workbook(file))
+                with cached.open('w') as f:
+                    json.dump(saved, f, indent=2)
+        yield from saved    
 
-    def read_html_file(self, file: Path|str) -> Iterator[dict[str, str]]:
+    def read_html_file(self, key: str) -> Iterator[dict[str, str]]:
         "Extract records from HTML page"
-        file = self.cache/file
+        file = self.cache/key
         table = self.find_table(bs(file))
         it = iter(table.find_all('tr'))
         next(it)
@@ -1253,33 +1309,9 @@ class NY(Scraper):
                 notice_dated=tds[2].text)
             yield record
 
-    def find_table(self, page: Soup) -> Soup:
-         "Find main table in HTML page"
-         return page.find('div', {'class': 'landing-paragraphs'}).find('table')
-
-    def parse_record_key_url(self, href: str) -> tuple[str, str]:
-        "Return an artifact key and download URL from the href value"
-        url = self.absurl(href)
-        url = self.artifact_map.get(url, url)
-        filename = Path(urlparse(url).path).name
-        key = f'records/{filename}'
-        if not filename.endswith('.pdf'):
-            key = f'{key}.pdf'
-        return key, url
-
-    def build_artifacts_index(self) -> Iterator[tuple[str, str]]:
-        "Build the artifacts index from the downloaded page files"
-        for key in ('latest.html', *self.past_urls):
-            if not key.endswith('.html'):
-                continue
-            file = self.cache/key
-            table = self.find_table(bs(file))
-            for a in table.select('tbody > tr > td:nth-of-type(1) > a'):
-                yield self.parse_record_key_url(a['href'])
-
-    def read_record_pdf(self, file: Path|str) -> Iterator[tuple[str, str]]:
+    def read_record_pdf(self, key: str) -> Iterator[tuple[str, str]]:
         "Extract extra data from an individual record PDF download"
-        text = self.extract_pdf_text(file)
+        text = self.extract_pdf_text(key)
         for line in text.splitlines():
             item = line.split(': ', 1)
             if len(item) == 1:
@@ -1288,22 +1320,25 @@ class NY(Scraper):
             key = self.pdf_keytrans.get(key, key)
             yield key, value
 
-    def extract_pdf_text(self, file: Path|str) -> str:
+    def extract_pdf_text(self, key: str) -> str:
         "Cache extracted text to file for performance"
-        file = self.cache/file
-        textkey = f'{self.cache.tokey(file)}.txt'
-        if not self.extract_cache.exists(textkey):
+        file = self.cache/key
+        cached = self.extract_cache/f'{key}.txt'
+        with excachectx(file, cached) as saved:
+            if saved:
+                return saved.read_text()
             with pdfs.open(file) as pdf:
                 text = '\n'.join(page.extract_text() for page in pdf.pages)
-            self.extract_cache.write(textkey, text)
-        return self.extract_cache.read(textkey)
+            cached.write_text(text)
+        return text
 
 class OH(Scraper):
     base_url = 'https://jfs.ohio.gov'
     latest_url = (
         '/wps/portal/gov/jfs/job-services-and-unemployment/job-services'
         '/job-programs-and-services/submit-a-warn-notice'
-        '/current-public-notices-of-layoffs-and-closures-sa/current-public-notices-of-layoffs-and-closures')
+        '/current-public-notices-of-layoffs-and-closures-sa'
+        '/current-public-notices-of-layoffs-and-closures')
     request_delay = 1
     atext_pat = _r(r'^\s*(\d{4}) Public Notices')
     legacy_header_map = {
@@ -1336,41 +1371,29 @@ class OH(Scraper):
         ]
     )
     # Archived historical data
-    archive_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
-    # As of 2025-02, the 2024 link disappeared from the website, so we use an
-    # archived source.
-    archived_sources = [
-        ('2024.html.json', 'https://archive.warnreports.org/s/OH/2024.html.json'),
-    ]
+    historical_url = 'https://archive.warnreports.org/s/OH/oh_historical.csv'
+    archived_sources = {
+        # 2025-02 The 2024 link disappeared from the website for a while, so we
+        #         keep archived sources as a fallback.
+        '2020.html': 'https://archive.warnreports.org/s/OH/2020.html',
+        '2021.html': 'https://archive.warnreports.org/s/OH/2021.html',
+        '2022.html': 'https://archive.warnreports.org/s/OH/2022.html',
+        '2023.html': 'https://archive.warnreports.org/s/OH/2023.html',
+        '2024.html': 'https://archive.warnreports.org/s/OH/2024.html',
+    }
 
     async def scrape(self):
-        await self.download('oh_historical.csv', self.archive_url, missing_only=True)
-        # Extracted json file key to sourece url
-        sources: deque[tuple[str, str]] = deque()
-        await self.download(key := 'latest.html', self.latest_url)
-        page = bs(self.cache/key)
-        self.cache.write_json(f'{key}.json', self.extract_json(page), indent=2)
-        sources.append((f'{key}.json', self.absurl(self.latest_url)))
-        for a in page.select('nav a'):
-            if not (match := self.atext_pat.match(a.text)):
-                continue
-            key = f'{match.group(1)}.html'
-            await self.download(key, a['href'], missing_only=True)
-            if not self.cache.exists(f'{key}.json'):
-                self.cache.write_json(
-                    f'{key}.json',
-                    self.extract_json(bs(self.cache/key)),
-                    indent=2)
-            sources.append((f'{key}.json', self.absurl(a['href'])))
-        for key, url in self.archived_sources:
+        await self.download('latest.html', self.latest_url)
+        sources = self.build_sources()
+        for key, url in sources.items():
             await self.download(key, url, missing_only=True)
-            sources.append((key, url))
-        self.cache.write_json('sources.json', dict(sorted(sources)), indent=2)
+            self.extract_json(key)
         index = self.build_index()
-        self.cache.write_json('index.json', index, indent=2)
-        for key, url in chain.from_iterable(map(dict.items, index.values())):
-            await self.download(key, url, missing_only=True)
-            self.artifacts.add(key)
+        for items in map(dict.items, index.values()):
+            for key, url in items:
+                await self.download(key, url, missing_only=True)
+                self.artifacts.add(key)
+        await self.download('oh_historical.csv', self.historical_url, missing_only=True)
 
     async def clean(self):
         self.cache.delete('*.html', '*.json', '*.csv', glob=True)
@@ -1378,93 +1401,104 @@ class OH(Scraper):
     def statobjs(self):
         yield from sorted(self.cache.glob('*.json', 'oh_historical.csv'))
 
-    @contextmanager
-    def extract(self):
-        index = self.cache.read_json('index.json')
-        sources = self.cache.read_json('sources.json')
-        files = sorted(self.cache.glob('*.html.json'), reverse=True)
-        with self.cache.open('oh_historical.csv') as file:
-            yield chain(
-                chain.from_iterable(
-                    self.read_data_file(file, index, sources[file.name]) for file in files),
-                self.read_historical(csv.reader(file), index))
+    def build_sources(self) -> dict[str, str]:
+        'Yearly html pages {key: url}'
+        items: list[tuple[str, str]] = []
+        items.extend(self.archived_sources.items())
+        items.append(('latest.html', self.absurl(self.latest_url)))
+        for a in bs(self.cache/'latest.html').select('nav a'):
+            if not (match := self.atext_pat.match(a.text)):
+                continue
+            key = f'{match.group(1)}.html'
+            url = self.absurl(a['href'])
+            items.append((key, url))
+        sources = dict(sorted(items))
+        self.cache.write_json('sources.json', sources, indent=2)
+        return sources
 
-    def read_data_file(self, file: Path, index: dict[str, dict[str, str]], source: str) -> Iterator[dict[str, str]]:
-        with file.open() as f:
-            data = json.load(f)['data']
-        it = iter(data)
-        next(it)
-        headers = next(it)[:9]
-        for values in filter(any, it):
-            raw = dict(zip(headers, values))
-            # Don't include the archived source
-            if self.base_url in source:
-                raw['URL'] = source
-            ids = raw['Notice ID'].split(' and ')
-            for notice_id in map(self.normalize_notice_id, ids):
-                row = dict(raw)
-                row['Notice ID'] = notice_id
-                if notice_id in index:
-                    row['artifacts_json'] = json.dumps(index[notice_id])
-                yield row
-
-    def read_historical(self, data: Iterable[list[str]], index: dict[str, dict[str, str]]) -> Iterator[dict[str, str]]:
-        it = iter(data)
-        headers = [self.legacy_header_map.get(header, header) for header in next(it)]
-        for values in it:
-            row = dict(zip(headers, values))
-            # Ignore duplicates of current data
-            if (notice_id := row.get('Notice ID')) and notice_id not in index:
-                yield row
-
-    def extract_json(self, page: Soup) -> dict[str, Any]:
+    def extract_json(self, key: str) -> dict[str, Any]:
+        page = bs(self.cache/key)
         div = page.find('div', {'id': 'js-placeholder-json-data'})
-        return json.loads(div.decode_contents().strip())
-
-    def normalize_notice_id(self, value: str) -> str:
-        return utils.rewrite_all(value, self.rewrites['notice_id']).strip()
+        body = json.loads(div.decode_contents().strip())
+        self.cache.write_json(f'{key}.json', body, indent=2)
+        return body
 
     def build_index(self) -> dict[str, dict[str, str]]:
         'Build mapping of notice_id to artifacts dict (key: url)'
-        # Pairs of (notice_id, url)
-        items: deque[tuple[str, str]] = deque()
-        for file in self.cache.glob('*.html.json'):
-            with file.open() as f:
-                data: list[list[str]] = json.load(f)['data']
-            it = iter(data)
-            next(it)
-            headers = next(it)
-            k_id = headers.index('Notice ID')
-            k_url = headers.index('URL')
-            for values in filter(any, it):
-                url = self.absurl(values[k_url])
-                url = utils.rewrite_all(url, self.rewrites['artifact'])
-                if not url:
-                    continue
-                if not url.endswith('.pdf'):
-                    continue
-                if url in self.artifact404:
-                    continue
-                ids = values[k_id].split(' and ')
-                ids = filter(None, map(self.normalize_notice_id, ids))
-                for notice_id in ids:
-                    items.append((notice_id, url))
+        def rewriteurl(url: str) -> str:
+            return utils.rewrite_all(url, self.rewrites['artifact'])
         # Mapping from notice_id to urls
         builder: dict[str, set[str]] = defaultdict(set)
-        for notice_id, url in sorted(items):
-            builder[notice_id].add(url)
+        sourcekeys: list[str] = list(self.cache.read_json('sources.json'))
+        for key in sourcekeys:
+            rows: list[list[str]] = self.cache.read_json(f'{key}.json')['data']
+            headers = rows[1]
+            for values in filter(any, rows[2:]):
+                data = dict(zip(headers, values))
+                url = rewriteurl(self.absurl(data['URL']))
+                if (
+                    not (url and url.endswith('.pdf')) or
+                    url in self.artifact404
+                ):
+                    continue
+                it = data['Notice ID'].split(' and ')
+                it = map(self.normalize_notice_id, it)
+                it = filter(None, it)
+                for notice_id in it:
+                    builder[notice_id].add(url)
         # Final index
         index: dict[str, dict[str, str]] = {}
-        for notice_id, urls in builder.items():
-            urls = sorted(urls)
+        for notice_id in sorted(builder):
             index[notice_id] = {}
+            urls = sorted(builder[notice_id])
             for i, url in enumerate(urls, start=1):
                 name = notice_id
                 if len(urls) > 1:
                     name = f'{name}_{i}'
                 key = f'records/{name}.pdf'
                 index[notice_id][key] = url
+        self.cache.write_json('index.json', index, indent=2)
         return index
+
+    def normalize_notice_id(self, value: str) -> str:
+        return utils.rewrite_all(value, self.rewrites['notice_id']).strip()
+
+    @contextmanager
+    def extract(self):
+        index: dict[str, dict[str, str]] = self.cache.read_json('index.json')
+        sources: dict[str, str] = self.cache.read_json('sources.json')
+
+        def readfile(key: str):
+            url = sources[key]
+            rows: list[list[str]] = self.cache.read_json(f'{key}.json')['data']
+            headers = rows[1][:9]
+            for values in filter(any, rows[2:]):
+                base = dict(zip(headers, values))
+                if self.archived_sources.get(key) != url:
+                    # Don't include the archived source
+                    base['URL'] = url
+                it = base['Notice ID'].split(' and ')
+                it = map(self.normalize_notice_id, it)
+                for notice_id in it:
+                    data = dict(base)
+                    data['Notice ID'] = notice_id
+                    if notice_id in index:
+                        data['artifacts_json'] = json.dumps(index[notice_id])
+                    yield data
+
+        def readhistorical(reader: Iterator[list[str]]):
+            headers = [
+                self.legacy_header_map.get(header, header)
+                for header in next(reader)]
+            for values in reader:
+                data = dict(zip(headers, values))
+                # Ignore duplicates of current data
+                if (notice_id := data.get('Notice ID')) and notice_id not in index:
+                    yield data
+
+        it = chain.from_iterable(map(readfile, sources))
+        with self.cache.open('oh_historical.csv') as file:
+            yield chain(it, readhistorical(csv.reader(file)))
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
@@ -1486,11 +1520,8 @@ class PA(Scraper):
         if (file := self.cache/'latest.html').exists():
             yield self.find_main_div(bs(file))
 
-    @contextmanager
-    def extract(self):
-        yield self.read_records()
-
-    def read_records(self) -> Iterator[dict[str, str]]:
+    @wrapcontext
+    def extract(self) -> Iterator[dict[str, str]]:
         file = self.cache/'latest.html'
         scrape_time = utils.file_mtime(file)
         maindiv = self.find_main_div(bs(file))
@@ -1589,60 +1620,69 @@ class SC(Scraper):
         None: ['Company', 'County', 'Notice Date', 'Layoff/Closure Date', 'Impacted', 'Layoff/Closure', 'Address']
     }
     extra_headers = ['year', 'url']
-    realign_most = 0.9
 
     async def scrape(self) -> None:
-        index: list[tuple[int, str]] = []
-        text = await self.fetch('latest.html', self.latest_url)
-        page = bs(text)
-        for a in page.find_all('a'):
-            href = a.get('href', '')
-            if href.endswith('2024_0.pdf'):
-                # Duplicate data
-                continue
-            if href.endswith('.pdf'):
-                year = int(href.split('/')[-1][:4])
-                index.append((year, href))
-                key = f'{year}.pdf'
-                is_recent = year >= utils.now().year - 1
-                await self.download(key, href, missing_only=not is_recent)
-                self.artifacts.add(key)
-        index.sort()
-        self.cache.write_json('index.json', index, indent=2)
+        await self.download('latest.html', self.latest_url)
+        index = self.build_index()
+        now = utils.now()
+        for key, (year, url) in index.items():
+            is_recent = year >= now.year - 1
+            await self.download(key, url, missing_only=not is_recent)
 
     async def clean(self) -> None:
         self.cache.delete('latest.html', 'index.json')
 
     def statobjs(self):
         yield self.cache/'index.json'
-        yield from self.list_record_files()
+        yield from sorted(self.cache.glob('*.pdf'), reverse=True)
 
-    @contextmanager
-    def extract(self):
-        yield self.read_records()
+    def build_index(self) -> dict[str, tuple[int, str]]:
+        index: dict[str, tuple[int, str]] = {}
+        for a in bs(self.cache/'latest.html').find_all('a'):
+            href = a.get('href', '')
+            if href.endswith('2024_0.pdf'):
+                # Duplicate data
+                continue
+            if href.endswith('.pdf'):
+                year = int(href.split('/')[-1][:4])
+                key = f'{year}.pdf'
+                url = self.absurl(href)
+                index[key] = (year, url)
+        index = {key: index[key] for key in sorted(index)}
+        self.cache.write_json('index.json', index, indent=2)
+        return index
 
-    def read_records(self) -> Iterator[dict[str, str]]:
-        for year, url in self.load_index():
+    @wrapcontext
+    def extract(self) -> Iterator[dict[str, str]]:
+        index: dict[int, tuple[str, str]] = self.cache.read_json('index.json')
+        for key, (year, url) in index.items():
             headers = self.get_header_species(year) + self.extra_headers
-            extra = [str(year), self.absurl(url)]
-            it = self.read_table(self.cache/f'{year}.pdf')
+            extra = [str(year), url]
+            it = self.read_table(key)
             next(it)
             for row in it:
                 yield dict(zip(headers, row + extra))
 
     def get_header_species(self, year: int) -> list[str]:
+        year = int(year)
         for key, headers in self.headers_species.items():
             if key and year in key:
                 return headers
         return self.headers_species[None]
 
-    def read_table(self, path: Path) -> Iterator[list[str]]:
-        with pdfs.open(path) as pdf:
-            it = [page.extract_tables() for page in pdf.pages]
-        it = chain.from_iterable(it)
+    def read_table(self, key: str) -> Iterator[list[str]]:
+        file = self.cache/key
+        cached = self.extract_cache/f'{key}.json'
+        with jsoncache(file, cached) as saved:
+            if not saved:
+                with pdfs.open(file) as pdf:
+                    saved = [page.extract_tables() for page in pdf.pages]
+                with cached.open('w') as f:
+                    json.dump(saved, f, indent=2)
+        it = chain.from_iterable(saved)
         it = map(self.process_table, it)
         it = filter(None, it)
-        it = self.merge_tables(it)
+        it = matx.merge_tables(it)
         it = (list(map(self.clean_cell, row)) for row in it)
         yield from it
 
@@ -1650,36 +1690,16 @@ class SC(Scraper):
         self.remove_extra_header(table)
         if self.table_is_sparse(table) or self.table_is_summary(table):
             return []
-        table = self.filter_sparse_rows(table)
-        table = self.filter_empty_columns(table)
-        self.realign_columns(table)
+        table = matx.nonsparse_rows(table)
+        table = matx.nonempty_columns(table)
+        matx.align_columns(table)
         return table
-
-    def merge_tables(self, tables: Iterable[list[list]]) -> Iterator[list]:
-        width, head = None, None
-        for i, table in enumerate(tables):
-            h = table[0]
-            w = len(h)
-            if i == 0:
-                width, head = w, h
-            elif width != w:
-                raise ValueError(f'Mismatched table widths {width}, {w}')
-            elif head == h:
-                table = iter(table)
-                next(table)
-            yield from table
 
     def clean_cell(self, text: str|None) -> str:
         text = text or ''
         text = text.replace('\n', ' ').strip()
         text = self.rewrites.get(text, text)
         return text
-
-    def load_index(self) -> list[tuple[int, str]]:
-        return list(map(tuple, self.cache.read_json('index.json')))
-
-    def list_record_files(self) -> list[Path]:
-        return sorted(self.cache.glob('*.pdf'), reverse=True)
 
     def table_is_sparse(self, table: list[list]) -> bool:
         return not any(utils.morethan(1, row) for row in table)
@@ -1690,44 +1710,6 @@ class SC(Scraper):
     def remove_extra_header(self, table: list[list]) -> None:
         if table and not utils.morethan(1, table[0]):
             del table[0]
-
-    def filter_sparse_rows(self, table: list[list]) -> list[list]:
-        return [row for row in table if utils.morethan(2, row)]
-
-    def filter_empty_columns(self, table: list[list]) -> list[list]:
-        if not table:
-            return table
-        cols = [
-            c for c in range(len(table[0]))
-            if any(row[c] for row in table)]
-        return [[row[c] for c in cols] for row in table]
-
-    def realign_columns(self, table: list[list]) -> None:
-        """
-        +---+---+      +---+
-        | x |   |      | x |
-        +---+---+  =>  +---+
-        |   | x |      | x |
-        +---+---+      +---+
-        """
-        L = len(table)
-        if L < 2:
-            return table
-        def most(it):
-            return utils.morethan(self.realign_most * L, it)
-        c = 0
-        while c <= len(table[0]) - 2:
-            d = c + 1
-            realign = (
-                most(row[c] or row[d] for row in table) and
-                not any(row[c] and row[d] for row in table))
-            if realign:
-                for row in table:
-                    if not row[c]:
-                        del row[c]
-                    else:
-                        del row[d]
-            c += 1
 
     rewrites = {
         'Caraustar Industrial &': 'Caraustar Industrial & Consumer Products Group',
@@ -1771,20 +1753,23 @@ class TX(Scraper):
     def statobjs(self):
         yield from self.list_record_files()
 
-    @contextmanager
-    def extract(self):
-        yield chain.from_iterable(map(self.extract_xlsx, self.list_record_files()))
-
-    def extract_xlsx(self, file: Path) -> Iterator[dict[str, str]]:
-        extra = {}
-        if self.year_pat.match(file.name):
-            extra.update(artifact_url=self.absurl(file.name))
-        for row in xlsx.extract_workbook(file):
-            row.update(extra)
-            yield row
-
     def list_record_files(self) -> list[Path]:
         return sorted(self.cache.glob('*.xlsx'), reverse=True)
+
+    @wrapcontext
+    def extract(self):
+        for file in self.list_record_files():
+            extra = {}
+            if self.year_pat.match(file.name):
+                extra.update(artifact_url=self.absurl(file.name))
+            cached = self.extract_cache/f'{file.name}.json'
+            with jsoncache(file, cached) as saved:
+                if not saved:
+                    saved = list(xlsx.extract_workbook(file))
+                    with cached.open('w') as f:
+                        json.dump(saved, f)
+            for data in saved:
+                yield data|extra
 
 class UT(Scraper):
     base_url = 'https://jobs.utah.gov'
@@ -1800,21 +1785,17 @@ class UT(Scraper):
     async def clean(self):
         self.cache.delete('latest.html')
 
-    @contextmanager
+    @wrapcontext
     def extract(self):
         file = self.cache/'latest.html'
         extra = dict(scrape_time=utils.file_mtime(file).isoformat())
-        tables = bs(file).find_all('table')
-        it = chain.from_iterable(map(self.read_table, tables))
-        yield (row|extra for row in it)
-
-    def read_table(self, table: Soup) -> Iterator[dict[str, str]]:
-        it = (
-            [td.text.strip() for td in tr.find_all(('td', 'th'))]
-            for tr in table.find_all('tr'))
-        headers = next(it)
-        for values in it:
-            yield dict(zip(headers, values))
+        for table in bs(file).find_all('table'):
+            it = (
+                [td.text.strip() for td in tr.find_all(('td', 'th'))]
+                for tr in table.find_all('tr'))
+            headers = next(it)
+            for values in it:
+                yield dict(zip(headers, values))|extra
 
 class VA(Scraper):
     # TODO: detail url: https://www.vec.virginia.gov/warn-notice-detail/18595
@@ -1843,7 +1824,7 @@ class Runner:
         self.file = self.data_dir/f'{self.state.lower()}.csv'
 
     def scrape(self) -> None:
-        mod = import_module(f"warn.scrapers.{self.state.lower()}")
+        mod = import_module(f'warn.scrapers.{self.state.lower()}')
         mod.scrape(self.data_dir, self.cache_dir)
 
 def absurl(base_url: str|None, url: str) -> None:

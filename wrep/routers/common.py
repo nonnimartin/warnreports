@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import Depends, Query
+from pydantic import NonNegativeInt
 from starlette.datastructures import URL
 
 from .. import settings
@@ -26,9 +27,9 @@ TextSearchParam = Annotated[str, Query(description='General text search')]
 CompanyParam = Annotated[list[CompanyName], Query(description='The company name')]
 StateParam = Annotated[list[StateCode], Query(description='The 2-letter state postal code')]
 IdsParam = Annotated[list[UUID], Query(description='The unique record ID(s)')]
-NaicsParam = Annotated[list[int], Query(description='The 2 to 6 digit NAICS code')]
+NaicsParam = Annotated[list[NaicsId], Query(description='The 2 to 6 digit NAICS code')]
 NaicsTitleParam = Annotated[str, Query(description='The NAICS industry title')]
-NaicsRootParam = Annotated[list[int], Query(description='The 2 digit root NAICS code')]
+NaicsRootParam = Annotated[list[NaicsRootId], Query(description='The 2 digit root NAICS code')]
 
 def reported_params(
     reported_min: Annotated[
@@ -68,10 +69,10 @@ def starting_params(
 
 def employees_params(
     employees_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum employees affected')] = None,
     employees_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum employees affected')] = None,
 ):
     return dict(
@@ -80,10 +81,10 @@ def employees_params(
 
 def employees_sum_params(
     employees_sum_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum sum total employees affected')] = None,
     employees_sum_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum sum total employees affected')] = None,
 ):
     return dict(
@@ -92,10 +93,10 @@ def employees_sum_params(
 
 def reports_count_params(
     reports_count_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum report count')] = None,
     reports_count_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum report count')] = None,
 ):
     return dict(
@@ -104,10 +105,10 @@ def reports_count_params(
 
 def companies_count_params(
     companies_count_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum companies count')] = None,
     companies_count_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum companies count')] = None,
 ):
     return dict(
@@ -116,10 +117,10 @@ def companies_count_params(
 
 def aliases_count_params(
     aliases_count_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum aliases count')] = None,
     aliases_count_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum aliases count')] = None,
 ):
     return dict(
@@ -128,10 +129,10 @@ def aliases_count_params(
 
 def states_count_params(
     states_count_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum states count')] = None,
     states_count_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum states count')] = None,
 ):
     return dict(
@@ -140,10 +141,10 @@ def states_count_params(
 
 def depth_params(
     depth_min: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The minimum tree depth')] = None,
     depth_max: Annotated[
-        int,
+        NonNegativeInt,
         Query(description='The maximum tree depth')] = None,
 ):
     return dict(
@@ -246,7 +247,7 @@ def feed_search_params(
     text: TextSearchParam = None,
     state: StateParam = None,
     naics: NaicsParam = None,
-    employees_min: int = None,
+    employees_min: NonNegativeInt = None,
 ):
     return dict(
         text=text,

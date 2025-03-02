@@ -28,11 +28,13 @@ class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
     client: MongoClient
     name: str
     orm_model: type[orm.MapReduceBase]
-    data_model: type[DataModel] = None
     indexes: list[IndexModel] = dataclasses.field(default_factory=list)
 
+    @property
+    def data_model(self) -> type[DataModel]:
+        return self.orm_model.data_model
+
     def __post_init__(self) -> None:
-        self.data_model = self.data_model or self.orm_model.data_model
         self.indexes = list(map(IndexModel, self.indexes))
 
     async def build(self, db: str|AsyncIOMotorDatabase|None = None, lazy: bool = True) -> None:
@@ -112,7 +114,9 @@ mapped_collections: dict[str, MappedCollection] = dict(
         orm_model=orm.Artifact,
         indexes=[
             {'name': 1},
-            {'path': 1}]),
+            {'path': 1},
+            {'state': 1},
+            {'sha1': 1}]),
     states=MappedCollection(
         client=client,
         name='states',

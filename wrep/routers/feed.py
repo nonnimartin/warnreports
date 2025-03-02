@@ -5,10 +5,11 @@ import binascii
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from feedgen.feed import FeedGenerator
 from pydantic import ValidationError
+from starlette import status
 from starlette.datastructures import URL
 
 from .. import settings, utils
@@ -18,7 +19,7 @@ from .common import (FeedSearchParams, clean_feed_params, feed_id_encode,
                      site_absurl)
 
 logger = utils.get_logger('feed')
-router = APIRouter()
+router = APIRouter(prefix='/feed')
 
 @router.get('/rss')
 async def rss_default() -> HTMLResponse:
