@@ -195,15 +195,24 @@ class StrEnum(str, enum.Enum):
 
 @dataclasses.dataclass(frozen=True)
 class Wait:
+    'Async retry/wait parameters'
     timeout: float
+    'The total time limit'
     poll: float = 0.5
+    'Time to wait in between poll'
     ignored: tuple[type[Exception], ...] = ()
+    'Exception types to ignore'
     args: Sequence[Any] = ()
+    'Args to pass to the callback'
     kwargs: dict = dataclasses.field(default_factory=dict)
+    'Kwargs to pass to the callback'
     raises: type[Exception] = dataclasses.field(default_factory=lambda: TimeoutError)
+    'The exception class to raise on timeout'
     oper: Callable[[Any], Any] = dataclasses.field(default_factory=lambda: bool)
+    'The operator to apply to the result of the callback'
 
     async def until[T](self, callback: Callable[..., T]) -> T:
+        'Wait until the callback returns a truthy value (depending on `oper`)'
         end = time.monotonic() + self.timeout
         err = None
         ignored = tuple(self.ignored or ())
