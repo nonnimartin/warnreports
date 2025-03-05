@@ -1505,82 +1505,61 @@ class OK(Scraper):
     
     async def scrape(self) -> None:
         if settings.SELENIUM_ENABLED:
-            await self.CsvBuilder(self, self.warn_url).run()
+            async with webdrivers.selenium() as driver:
+                await self.WorkerHelper(self, driver).run(self.warn_url)
         else:
             self.runner.scrape()
 
     @dataclasses.dataclass
-    class CsvBuilder:
+    class WorkerHelper:
         scraper: OK
-        warn_url: str
-
+        driver: webdrivers.Chrome
+        
+        @property
+        def cache(self) -> FileCache:
+            return self.scraper.cache
+        
         @property
         def logger(self) -> utils.logging.Logger:
             return self.scraper.logger
         
-        async def run(self) -> None:
-            try:
-                cache = self.scraper.cache.subcache(f'')
-                async with webdrivers.selenium() as driver:
-                    helper = self.WorkerHelper(self, driver, cache)
-                    await helper.run(self.warn_url)
-            except Exception:
-                self.logger.warning(f'', exc_info=True)
+        def find_table(self) -> list[str]:
+            rows_list = list()
+            keep_going = True
+            while keep_going:
+                element = self.driver.find_element('css selector', '.body')
+                next_button = element.find_element('xpath', '//button[text()="Next"]')
+                rows = element.find_elements('tag name', 'lightning-primitive-cell-factory')
+                for row in rows:
+                    print(row)
+                    lines = row.text.split('\n')
+                    rows_list.extend(lines)
+                if not next_button.is_enabled():
+                    keep_going = False
+                else:
+                    next_button.click()
+            return rows_list
+        
+        def chunk_list(self, lst: list[str], n: int) -> Iterator[list[str]]:
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
 
-        @dataclasses.dataclass
-        class WorkerHelper:
-            downloader: OK.CsvBuilder
-            driver: webdrivers.Chrome
-            cache: FileCache
-            
-            @property
-            def scraper(self) -> OK:
-                return self.downloader.scraper
-            
-            def find_table(self) -> list[str]:
-                rows_list = list()
-                keep_going = True
-                while keep_going:
-                    element = self.driver.find_element('css selector', '.body')
-                    next_button = element.find_element('xpath', '//button[text()="Next"]')
-                    rows = element.find_elements('tag name', 'lightning-primitive-cell-factory')
+        def is_loaded(self) -> list[webdrivers.WebElement]:
+            return self.driver.find_elements('css selector', '.body')
 
-                    for row in rows:
-                        lines = row.text.split('\n')
-                        for line in lines:
-                            rows_list.append(line)
-                    csv_list = rows_list
-                    if not next_button.is_enabled():
-                        keep_going = False
-                    else:
-                        next_button.click()
-                return csv_list
-            
-            @property
-            def logger(self) -> utils.logging.Logger:
-                    return self.downloader.logger
-            
-            def chunk_list(self, lst, n) -> Iterator[str]:
-                for i in range(0, len(lst), n):
-                    yield lst[i:i + n]
-                        
-            async def run(self, url: str) -> None:
-                    try:
-                        self.driver.get(url)
-                        await asyncio.sleep(5)
-                        wait = utils.Wait(timeout=10)
-                        csv_list = self.find_table()
-                        with self.scraper.runner.file.open() as file:
-                            headers = ['Employer', 'City', 'Zip Code', 'Local Workforce Board', 'Notice Date', 'Notice Type']
-                            n = len(headers)
-                            # Split the list into chunks of size n
-                            chunks = list(self.chunk_list(csv_list, n))
-                            with self.cache.open('ok.csv', 'w') as file:
-                                writer = csv.writer(file)
-                                writer.writerow(headers)
-                                writer.writerows(chunks)
-                    except TimeoutError:
-                        self.logger.warning(f'Request timed out')
+        async def run(self, url: str) -> None:
+            self.driver.get(url)
+            wait = utils.Wait(timeout=10)
+            await wait.until(self.is_loaded)
+            csv_list = self.find_table()
+            headers = ['Employer', 'City', 'Zip Code', 'Local Workforce Board', 'Notice Date', 'Notice Type']
+            n = len(headers)
+            # Split the list into chunks of size n
+            chunks = self.chunk_list(csv_list, n)
+            with self.scraper.runner.file.open('w') as file:
+                writer = csv.writer(file)
+                writer.writerow(headers)
+                writer.writerows(chunks)
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
