@@ -1523,43 +1523,42 @@ class OK(Scraper):
         def logger(self) -> utils.logging.Logger:
             return self.scraper.logger
         
-        def find_table(self) -> list[str]:
+        def yield_rows(self) -> Generator[Iterable]:
+
             rows_list = list()
             keep_going = True
+            yield_headers = True
             while keep_going:
                 element = self.driver.find_element('css selector', '.body')
+                header_elements = element.find_elements('xpath', "//th[@role = 'columnheader']")
+                headers = [header.text.split('\n')[1] for header in header_elements]
+                headers_len = len(headers)
                 next_button = element.find_element('xpath', '//button[text()="Next"]')
-                rows = element.find_elements('tag name', 'lightning-primitive-cell-factory')
+                cells = element.find_elements('tag name', 'lightning-primitive-cell-factory')
+                cells = [(i.text) for i in cells]
+                rows = [cells[x:x+headers_len] for x in range(0, len(cells), headers_len)]
+                if yield_headers:
+                    yield headers
+                    yield_headers = False
                 for row in rows:
-                    print(row)
-                    lines = row.text.split('\n')
-                    rows_list.extend(lines)
+                    yield row
                 if not next_button.is_enabled():
                     keep_going = False
                 else:
                     next_button.click()
             return rows_list
-        
-        def chunk_list(self, lst: list[str], n: int) -> Iterator[list[str]]:
-            for i in range(0, len(lst), n):
-                yield lst[i:i + n]
 
         def is_loaded(self) -> list[webdrivers.WebElement]:
-            return self.driver.find_elements('css selector', '.body')
+            body = self.driver.find_elements('css selector', '.body')[0]
+            return body.find_elements('tag name', 'lightning-primitive-cell-factory')
 
         async def run(self, url: str) -> None:
             self.driver.get(url)
             wait = utils.Wait(timeout=10)
             await wait.until(self.is_loaded)
-            csv_list = self.find_table()
-            headers = ['Employer', 'City', 'Zip Code', 'Local Workforce Board', 'Notice Date', 'Notice Type']
-            n = len(headers)
-            # Split the list into chunks of size n
-            chunks = self.chunk_list(csv_list, n)
             with self.scraper.runner.file.open('w') as file:
                 writer = csv.writer(file)
-                writer.writerow(headers)
-                writer.writerows(chunks)
+                writer.writerows(self.yield_rows())
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
