@@ -1533,10 +1533,10 @@ class OK(Scraper):
                 next_button = element.find_element('xpath', '//button[text()="Next"]')
                 cells = element.find_elements('tag name', 'lightning-primitive-cell-factory')
                 cells = [(i.text) for i in cells]
-                # Group cells into rows by header length
                 if yield_headers:
                     yield headers
                     yield_headers = False
+                # Group cells into rows by header length
                 yield from (cells[x:x+headers_len] for x in range(0, len(cells), headers_len))
                 if not next_button.is_enabled():
                     break
