@@ -1506,7 +1506,7 @@ class OK(Scraper):
     async def scrape(self) -> None:
         if settings.SELENIUM_ENABLED:
             async with webdrivers.selenium() as driver:
-                await self.WorkerHelper(self, driver).run(self.warn_url)
+                await self.WorkerHelper(self, driver).run()
         else:
             self.runner.scrape()
 
@@ -1514,6 +1514,7 @@ class OK(Scraper):
     class WorkerHelper:
         scraper: OK
         driver: webdrivers.Chrome
+        url: ClassVar = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
         
         @property
         def cache(self) -> FileCache:
@@ -1523,12 +1524,9 @@ class OK(Scraper):
         def logger(self) -> utils.logging.Logger:
             return self.scraper.logger
         
-        def yield_rows(self) -> Generator[Iterable]:
-
-            rows_list = list()
-            keep_going = True
+        def yield_rows(self) -> Iterable[list[str]]:
             yield_headers = True
-            while keep_going:
+            while True:
                 element = self.driver.find_element('css selector', '.body')
                 header_elements = element.find_elements('xpath', "//th[@role = 'columnheader']")
                 headers = [header.text.split('\n')[1] for header in header_elements]
@@ -1537,24 +1535,21 @@ class OK(Scraper):
                 cells = element.find_elements('tag name', 'lightning-primitive-cell-factory')
                 cells = [(i.text) for i in cells]
                 # Group cells into rows by header length
-                rows = [cells[x:x+headers_len] for x in range(0, len(cells), headers_len)]
                 if yield_headers:
                     yield headers
                     yield_headers = False
-                for row in rows:
-                    yield row
+                yield from (cells[x:x+headers_len] for x in range(0, len(cells), headers_len))
                 if not next_button.is_enabled():
-                    keep_going = False
+                    break
                 else:
                     next_button.click()
-            return rows_list
 
         def is_loaded(self) -> list[webdrivers.WebElement]:
             body = self.driver.find_elements('css selector', '.body')[0]
             return body.find_elements('tag name', 'lightning-primitive-cell-factory')
 
-        async def run(self, url: str) -> None:
-            self.driver.get(url)
+        async def run(self) -> None:
+            self.driver.get(self.url)
             wait = utils.Wait(timeout=10)
             await wait.until(self.is_loaded)
             with self.scraper.runner.file.open('w') as file:
