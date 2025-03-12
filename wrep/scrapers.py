@@ -1501,7 +1501,6 @@ class OH(Scraper):
             yield chain(it, readhistorical(csv.reader(file)))
     
 class OK(Scraper):
-    warn_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
     
     async def scrape(self) -> None:
         if settings.SELENIUM_ENABLED:
