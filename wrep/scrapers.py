@@ -10,9 +10,10 @@ import uuid
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime
+from functools import cached_property as lazy
 from html import unescape as _u
 from importlib import import_module
-from itertools import chain, filterfalse
+from itertools import batched, chain, filterfalse
 from pathlib import Path
 from re import compile as _r
 from typing import Any, ClassVar, Generator, Iterable, Iterator
@@ -1499,6 +1500,80 @@ class OH(Scraper):
         it = chain.from_iterable(map(readfile, sources))
         with self.cache.open('oh_historical.csv') as file:
             yield chain(it, readhistorical(csv.reader(file)))
+    
+class OK(Scraper):
+    latest_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
+    # Archived historical data
+    historical_url = 'https://archive.warnreports.org/s/OK/ok_historical.csv'
+    # Historical data is better, so prefer it for Jan 2024 and earlier
+    historical_cutoff = datetime.strptime('2024-01-31', '%Y-%m-%d')
+
+    async def scrape(self) -> None:
+        await self.download('historical.csv', self.historical_url, missing_only=True)
+        if settings.SELENIUM_ENABLED:
+            async with webdrivers.selenium() as driver:
+                await self.DriverHelper(self, driver).run()
+
+    def statobjs(self):
+        yield from self.cache.glob('latest.csv', 'historical.csv')
+
+    async def clean(self):
+        self.cache.delete('*.csv', glob=True)
+
+    @contextmanager
+    def extract(self):
+        def isnew(data: dict[str, str]) -> bool:
+            return self.historical_cutoff < utils.parse_date(data['Notice Date'])
+        with self.cache.open('latest.csv') as file:
+            it = filter(isnew, csv.DictReader(file))
+            with self.cache.open('historical.csv') as file:
+                yield chain(it, csv.DictReader(file))
+
+    @dataclasses.dataclass
+    class DriverHelper:
+        scraper: OK
+        driver: webdrivers.Chrome
+
+        async def run(self) -> None:
+            self.driver.get(self.scraper.latest_url)
+            await utils.Wait(timeout=10).until(self.loaded)
+            self.ordertable()
+            with self.scraper.cache.open('latest.csv', 'w') as file:
+                writer = csv.writer(file)
+                writer.writerow(self.header)
+                writer.writerows(self.rows())
+
+        @lazy
+        def header(self) -> list[str]:
+            "Lazy fetch the column headers"
+            ths = self.findall('//thead//th[@role="columnheader"]')
+            return [th.text.splitlines()[1] for th in ths]
+
+        def rows(self) -> Iterator[tuple[str, ...]]:
+            "Yield the data rows"
+            button = self.find('//button[text()="Next"]')
+            while True:
+                it = self.findall('//tbody//lightning-primitive-cell-factory')
+                it = (c.text for c in it)
+                yield from batched(it, len(self.header))
+                if not button.is_enabled():
+                    break
+                button.click()
+
+        def findall(self, q: str) -> list[webdrivers.WebElement]:
+            return self.driver.find_elements('xpath', f'//*[@role="main"]{q}')
+
+        def find(self, q: str) -> webdrivers.WebElement:
+            return self.driver.find_element('xpath', f'//*[@role="main"]{q}')
+
+        def loaded(self) -> list[webdrivers.WebElement]:
+            return self.findall('//lightning-primitive-cell-factory')
+
+        def ordertable(self) -> None:
+            "Sort the table by notice date descending"
+            a = self.find('//thead//th[@aria-label="Notice Date"]//a[@role="button"]')
+            a.click()
+            a.click()
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
