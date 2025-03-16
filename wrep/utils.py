@@ -218,7 +218,7 @@ class Wait:
         ignored = tuple(self.ignored or ())
         while True:
             try:
-                value = callback(*self.args, **self.kwargs)
+                value = await wait(callback(*self.args, **self.kwargs))
                 if self.oper(value):
                     return value
             except ignored as exc:

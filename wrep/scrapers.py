@@ -193,7 +193,7 @@ class AK(Scraper):
             for td in tr.find_all('td'):
                 yield ' '.join(td.text.split())
 
-        def readtable(table: Soup):
+        def readtable(table: Soup) -> Iterator[list[str]]:
             for tr in table.find_all('tr'):
                 url = parseurl(tr)
                 values = [*readtr(tr), url]
@@ -312,14 +312,14 @@ class CT(Scraper):
 
     def statobjs(self):
         yield from super().statobjs()
-        yield self.cache.topath('artifacts.json')
+        yield self.cache/'artifacts.json'
 
-    @wrapcontext
+    @contextmanager
     def extract(self):
         "Yield augmented records from CSV rows"
         index: dict[str, list[str]] = self.cache.read_json('artifacts.json')
-        with self.runner.file.open() as file:
-            it = csv.reader(file)
+        def readfile(fp):
+            it = csv.reader(fp)
             headers = next(it)
             for values in it:
                 row = dict(zip(headers, values))
@@ -330,6 +330,8 @@ class CT(Scraper):
                         download=url,
                         artifacts_json=json.dumps({key: url}))
                 yield row
+        with self.runner.file.open() as file:
+            yield readfile(file)
 
     def row_key(self, values: Iterable[str]) -> str:
         "Values hash key from CSV row for artifact index"
@@ -538,15 +540,16 @@ class GA(Scraper):
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36')
     extra_headers = ['entry_url', 'submitted_date', 'artifacts_json']
 
-    async def scrape(self):
+    async def scrape(self) -> None:
         await self.download('latest.html', self.latest_url)
         payload = dict(self.payload, nonce=self.extract_nonce())
-        rep = await self.request('POST', self.api_url, data=payload)
+        async def getbody():
+            return (await self.request('POST', self.api_url, data=payload)).json()
+        wait = utils.Wait(timeout=20, poll=2, ignored=(requests.exceptions.JSONDecodeError,))
         try:
-            body = rep.json()
-        except requests.exceptions.JSONDecodeError:
-            self.logger.error(f'{rep.status_code} {rep.url} {payload=} content={rep.content}')
-            raise
+            body = await wait.until(getbody)
+        except TimeoutError as err:
+            raise err.__cause__ or err
         self.cache.write_json('latest.json', body, indent=2)
         index = self.build_index()
         if self.needs_scrape():
@@ -559,16 +562,16 @@ class GA(Scraper):
                 artifacts[notice_id] = infos
         self.cache.write_json('artifacts.json', artifacts, indent=2)
         it = chain.from_iterable(map(dict.items, artifacts.values()))
-        for cachekey, url in it:
-            await self.download(cachekey, url, missing_only=True)
-            self.artifacts.add(cachekey)
+        for key, url in it:
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
 
-    async def clean(self):
+    async def clean(self) -> None:
         await super().clean()
         self.cache.delete('latest.html', '*.json', glob=True)
 
-    def statobjs(self):
-        yield from self.cache.glob('*.json')
+    def statobjs(self) -> Iterator[Any]:
+        yield from sorted(self.cache.glob('*.json'))
         yield from sorted(self.cache.glob('*.format3'), reverse=True)
 
     def build_index(self) -> dict[str, tuple[str, str]]:
@@ -1189,7 +1192,7 @@ class NJ(Scraper):
         await self.download('latest.xlsx', self.latest_url)
 
     def statobjs(self):
-        yield self.cache.topath('latest.xlsx')
+        yield self.cache/'latest.xlsx'
 
     async def clean(self):
         self.cache.delete('latest.xlsx')
@@ -1514,14 +1517,15 @@ class OK(Scraper):
             async with webdrivers.selenium() as driver:
                 await self.DriverHelper(self, driver).run()
 
-    def statobjs(self):
-        yield from self.cache.glob('latest.csv', 'historical.csv')
+    def statobjs(self) -> Iterator[Any]:
+        yield self.cache/'latest.csv'
+        yield self.cache/'historical.csv'
 
-    async def clean(self):
+    async def clean(self) -> None:
         self.cache.delete('*.csv', glob=True)
 
     @contextmanager
-    def extract(self):
+    def extract(self) -> Generator[Iterator[dict[str, str]]]:
         def isnew(data: dict[str, str]) -> bool:
             return self.historical_cutoff < utils.parse_date(data['Notice Date'])
         with self.cache.open('latest.csv') as file:
@@ -1549,7 +1553,7 @@ class OK(Scraper):
             ths = self.findall('//thead//th[@role="columnheader"]')
             return [th.text.splitlines()[1] for th in ths]
 
-        def rows(self) -> Iterator[tuple[str, ...]]:
+        def rows(self) -> Generator[tuple[str, ...]]:
             "Yield the data rows"
             button = self.find('//button[text()="Next"]')
             while True:
@@ -1891,7 +1895,7 @@ class VA(Scraper):
 
 class Runner:
 
-    def __init__(self, state: str):
+    def __init__(self, state: str) -> None:
         self.state = state.upper()
         self.logger = utils.get_logger(f'scrapers.{self.state}')
         self.cache_dir = settings.BUILD_DIR/Stage.Scrape
