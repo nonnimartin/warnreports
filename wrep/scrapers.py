@@ -1265,7 +1265,7 @@ class NY(Scraper):
 
     def parse_record_key_url(self, href: str) -> tuple[str, str]:
         "Return an artifact key and download URL from the href value"
-        url = self.absurl(href)
+        url = self.absurl(href.strip())
         url = self.artifact_map.get(url, url)
         filename = Path(urlparse(url).path).name
         key = f'records/{filename}'

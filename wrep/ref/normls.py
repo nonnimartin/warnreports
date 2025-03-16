@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, Iterable, Iterator
+from re import compile as _r
+from typing import Callable, Iterable
 
-type Norms = dict[str|re.Pattern, str|Callable[[re.Match], str]]
-type SrchSpec = str|re.Pattern|Callable[[str], Iterable[str|re.Pattern]]
+type StrPat = str|re.Pattern
+type Norms = dict[StrPat, str|Callable[[re.Match], str]]
+type SpecFunc = Callable[[str], StrPat|Iterable[StrPat]]
+type SrchSpec = StrPat|SpecFunc
 type NormDefs = dict[str, SrchSpec|list[SrchSpec]|tuple[SrchSpec, ...]]
-_r = re.compile
 PAT_NONALPHA = _r(r'[^a-z\d\s]')
 PAT_SPACES = _r(r'\s+')
 
-def _sw(s: str) -> Iterable[str|re.Pattern]:
-    s = re.escape(s)
-    yield _r(r'^'f'{s}'r'.*', re.I)
+def _sw(s: str, *strings: str) -> re.Pattern:
+    "Build a 'starts with' case-insensitive pattern"
+    strings = (s, *strings)
+    return _r(f'^({'|'.join(map(re.escape, strings))}).*', re.I)
 
 COMPANY_NAMES: NormDefs = {
     '3M': _sw('3M '),
@@ -35,15 +38,18 @@ COMPANY_NAMES: NormDefs = {
     ],
     'Alorica': _sw,
     'Amazon': [
-        'Amazon.com',
+        _sw('Amazon.com'),
+        _r(r'^Amazon.[A-Z]{3}.*'),
     ],
-    'Amentum': [_sw, _sw('PAE Shared Services')],
+    'Amentum': [
+        _sw('Amentum', 'PAE Shared Services'),
+    ],
     'Ameri-Kleen': _sw,
     'Applied Materials': _sw,
     'Aramark': [
         _r(r'^Aramark (-|\(|@|at )', re.I),
     ],
-    'Apen Sports': _sw,
+    'Aspen Sports': _sw,
     'AT&T': _sw,
     'Avis Budget': _sw,
     'BAE Systems': _sw,
@@ -62,9 +68,13 @@ COMPANY_NAMES: NormDefs = {
         'Carbon Health Medical Group',
     ],
     'Caterpillar': _sw,
-    'Centerra': _sw,
     'Cisco Systems': _sw('Cisco'),
-    'Concentrix': _r(r'^(Concentrix|Convergys).*', re.I),
+    'Concentrix': [
+        _sw('Concentrix', 'Convergys'),
+    ],
+    'Constellis': [
+        _sw('Centerra', 'Constellis', 'Triple Canopy'),
+    ],
     'CVS': [
         _r(r'^cvs\s.*', re.I),
     ],
@@ -79,12 +89,13 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^Ericsson,? Inc.*', re.I),
     ],
     'Federal Express': [
-        _sw,
-        _sw('FedEx'),
+        _sw('Federal Express', 'FedEx'),
     ],
     'First Student': _sw,
     'First Transit': _sw,
-    'Forever 21': [_sw, _sw('F21')],
+    'Forever 21': [
+        _sw('Forever 21', 'F21'),
+    ],
     'G2 Secure Staff': _sw,
     'GCA Education Services': [
         _r(r'^(ABM/)?GCA Education.*$', re.I),
@@ -110,9 +121,12 @@ COMPANY_NAMES: NormDefs = {
         _r(r'^(The )?International Paper.*', re.I),
     ],
     'Jabil': [
-        _r(r'^(Nypro .*)?Jabil( .*)$', re.I),
+        _r(r'^(Nypro .*)?Jabil( .*)?$', re.I),
     ],
     'Jack Cooper': _sw,
+    'JCPenney': [
+        _r(r'^.*JCPenney.*$', re.I),
+    ],
     'John Deere': _sw,
     'Kaiser Foundation': _sw,
     'Kmart': [
@@ -156,7 +170,7 @@ COMPANY_NAMES: NormDefs = {
     ],
     'Packers Sanitation Services': _sw('Packers Sanitation'),
     'PepsiCo': _sw,
-    'Pioneer Hi-Bred': [_sw],
+    'Pioneer Hi-Bred': _sw,
     'Pitney Bowes': [
         _r(r'^(Newgistics.*)?Pitney Bowes.*', re.I),
     ],
@@ -215,14 +229,16 @@ COMPANY_NAMES: NormDefs = {
         'Tesla Inc',
     ],
     'The Home Depot': [
-        _r(r'^(The )?Home Depot.*', re.I),
+        _sw('The Home Depot', 'Home Depot'),
     ],
     'The North Face': _sw,
     'Thermo Fisher Scientific': _sw('Thermo Fisher'),
     'Transamerica Insurance': _sw('Transamerica Life'),
     'Transdev Services': _sw,
-    'Triple Canopy': _sw,
-    'True Value': [_sw, 'Ziegler True Value'],
+    'True Value': [
+        _sw,
+        'Ziegler True Value',
+    ],
     'Tyson Foods': [
         _r(r'^(Tyson|Keystone) Food.*', re.I),
     ],
@@ -236,8 +252,7 @@ COMPANY_NAMES: NormDefs = {
     'US Foods': _r(r'^US Foods(,? .*)?$'),
     'Visionworks': _sw,
     'Walgreens': [
-        _sw,
-        _r(r'^Walgreen (Co|Lab).*', re.I),
+        _sw('Walgreens', 'Walgreen Co', 'Walgreen Lab'),
     ],
     'Walmart': _sw,
     'Wells Fargo': [
@@ -298,12 +313,10 @@ def _build(norms: Norms, *defs: NormDefs):
                 values = (values,)
             for value in values:
                 if callable(value):
-                    for value in value(name):
-                        norms[value] = name
-                elif isinstance(value, Iterator):
-                    for value in value:
-                        norms[value] = name
-                else:
+                    value = value(name)
+                if isinstance(value, (str, re.Pattern)):
+                    value = (value,)
+                for value in value:
                     norms[value] = name
     for key in list(norms):
         if isinstance(key, str):
