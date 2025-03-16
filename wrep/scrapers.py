@@ -1499,6 +1499,61 @@ class OH(Scraper):
         it = chain.from_iterable(map(readfile, sources))
         with self.cache.open('oh_historical.csv') as file:
             yield chain(it, readhistorical(csv.reader(file)))
+    
+class OK(Scraper):
+    
+    async def scrape(self) -> None:
+        if settings.SELENIUM_ENABLED:
+            async with webdrivers.selenium() as driver:
+                await self.WorkerHelper(self, driver).run()
+        else:
+            self.runner.scrape()
+
+    @dataclasses.dataclass
+    class WorkerHelper:
+        scraper: OK
+        driver: webdrivers.Chrome
+        url: ClassVar = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
+        
+        @property
+        def cache(self) -> FileCache:
+            return self.scraper.cache
+        
+        @property
+        def logger(self) -> utils.logging.Logger:
+            return self.scraper.logger
+        
+        def yield_rows(self) -> Iterable[list[str]]:
+            yield_headers = True
+            while True:
+                element = self.driver.find_element('css selector', '.body')
+                header_elements = element.find_elements('xpath', "//th[@role = 'columnheader']")
+                headers = [header.text.split('\n')[1] for header in header_elements]
+                headers_len = len(headers)
+                next_button = element.find_element('xpath', '//button[text()="Next"]')
+                cells = element.find_elements('tag name', 'lightning-primitive-cell-factory')
+                cells = [(i.text) for i in cells]
+                if yield_headers:
+                    yield headers
+                    yield_headers = False
+                # Group cells into rows by header length
+                yield from (cells[x:x+headers_len] for x in range(0, len(cells), headers_len))
+                if not next_button.is_enabled():
+                    break
+                else:
+                    next_button.click()
+
+        def is_loaded(self) -> list[webdrivers.WebElement]:
+            body = self.driver.find_elements('css selector', '.body')[0]
+            return body.find_elements('tag name', 'lightning-primitive-cell-factory')
+
+        async def run(self) -> None:
+            self.driver.get(self.url)
+            wait = utils.Wait(timeout=10)
+            await wait.until(self.is_loaded)
+            with self.scraper.runner.file.open('w') as file:
+                writer = csv.writer(file)
+                writer.writerows(self.yield_rows())
 
 class PA(Scraper):
     base_url = 'https://www.pa.gov'
