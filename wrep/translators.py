@@ -1177,11 +1177,11 @@ class OH(Translator):
 class OK(Translator):
     default_url = 'https://www.employoklahoma.gov/Participants/s/warnnotices'
     fieldsmap = dict(
-        company=['Employer'],
-        reported=['Notice Date'],
-        location=['City'],
-        employees=[],
-        action=['Notice Type'],
+        company=['Employer', 'employer'],
+        reported=['Notice Date', 'notice_date'],
+        location=['City', 'city'],
+        employees=['number_of_employees_affected'],
+        action=['Notice Type', 'warn_type'],
         industry=[],
         report_id=[],
         naics=[],
