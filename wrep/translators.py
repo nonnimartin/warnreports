@@ -1465,7 +1465,7 @@ class UT(Translator):
     )
 
 class VA(Translator):
-    default_url = 'https://www.vec.virginia.gov/warn-notices'
+    default_url = 'https://www.virginiaworks.gov/warn-notices/'
     # action_headers = ['Closure', 'Layoff', 'Permanent Reduction', 'Realignment']
     fieldsmap = dict(
         company=['Company', 'Company Name'],

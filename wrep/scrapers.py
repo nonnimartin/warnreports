@@ -1877,21 +1877,39 @@ class UT(Scraper):
                 yield dict(zip(headers, values))|extra
 
 class VA(Scraper):
-    # TODO: detail url: https://www.vec.virginia.gov/warn-notice-detail/18595
-    base_url = 'https://www.vec.virginia.gov'
-    latest_url = '/warn-notices'
-    rss_url = '/warn-notices-rss-1'
-    """
-    the downloadable csv does not have links
-    <ul class="pagination">
-        <li class="next"><a title="Go to next page" href="/warn-notices?page=2">
-    
-    NB: there are about 50 pages. you can filter by year. there is a select box that lists them.
-    """
-    csv_url = 'https://www.virginiaworks.gov/warn_notices.csv'
+    latest_csvurl = 'https://www.virginiaworks.gov/warn_notices.csv'
+    bads = {
+        # The rows with these Notice Dates have crap values for Impact Date.
+        # In some cases it is always the current date, which breaks hashing
+        # in a way that is hard to fix in the translator.
+        '09/22/2010',
+        '11/17/2010',
+        '10/26/2012',
+        '07/14/2020'}
 
-    async def scrape(self):
-        await self.download(self.runner.file, self.csv_url)
+    async def scrape(self) -> None:
+        await self.download('download.csv', self.latest_csvurl)
+        with self.cache.open('download.csv') as file:
+            reader = csv.DictReader(file)
+            first = next(reader)
+            with self.cache.open('latest.csv', 'w') as file:
+                writer = csv.DictWriter(file, first)
+                writer.writeheader()
+                for data in chain((first,), reader):
+                    if data['Notice Date'] in self.bads:
+                        data['Impact Date'] = ''
+                    writer.writerow(data)
+
+    def statobjs(self) -> Iterator[Any]:
+        yield self.cache/'latest.csv'
+
+    async def clean(self) -> None:
+        self.cache.delete('*.csv', glob=True)
+
+    @contextmanager
+    def extract(self) -> Generator[Iterator[dict[str, str]]]:
+        with self.cache.open('latest.csv') as file:
+            yield csv.DictReader(file)
 
 class Runner:
 
