@@ -6,7 +6,7 @@ RUN npm install && npm run build
 # -----------------
 
 FROM docker.io/nginx:stable-alpine AS vite
-COPY ./extra/vite-nginx.conf /etc/nginx/conf.d/
+COPY ./vite/vite-nginx.conf /etc/nginx/conf.d/
 COPY --from=vitebuild /workdir/build/client /srv/vite
 
 # -----------------
