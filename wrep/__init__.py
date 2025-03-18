@@ -13,6 +13,7 @@ if settings.SENTRY_ENABLED and settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=settings.SENTRY_ENVIRONMENT,
+        auto_session_tracking=False,
         # Set traces_sample_rate to 1.0 to capture 100%
         # of transactions for performance monitoring.
         # traces_sample_rate=1.0,
