@@ -16,6 +16,7 @@ FRONTEND_SRC = BASEDIR/'frontend'/'src'
 FRONTEND_DIST = Path(getenv('FRONTEND_DIST', BUILD_DIR/'dist'))
 FRONTEND_AUTO_BUILD = getenv('FRONTEND_AUTO_BUILD', '').lower() == 'true'
 FRONTEND_CACHE_HTML = getenv('FRONTEND_CACHE_HTML', 'true').lower() == 'true'
+VITE_DIST = Path(getenv('VITE_DIST', REPODIR/'vite'/'dist'))
 NAICS_DOWNLOAD = 'https://archive.warnreports.org/naics/dist/2022-2/2022.min.json'
 LOG_LEVEL = getenv('LOG_LEVEL', 'INFO').upper()
 QUERY_LOGGING = getenv('QUERY_LOGGING', '').lower() == 'true'

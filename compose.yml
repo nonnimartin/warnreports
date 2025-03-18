@@ -38,6 +38,18 @@ services:
     command: ./scripts/wait-for-it.sh -h postgres -p 5432 -t 0 -- sh -c 'wrep migrations migrate --auto-only && python -m wrep.main'
     depends_on: [postgres]
 
+  vite:
+    image: localhost/warnreports:${APP_IMAGE_TARGET:-dev}
+    build:
+      context: .
+      target: ${APP_IMAGE_TARGET:-dev}
+    volumes:
+      - .:/code
+    ports: [127.0.0.1:5000:8000]
+    environment:
+      UVICORN_ROLE: vite
+      UVICORN_RELOAD: false
+
   mongo-express:
     image: docker.io/mongo-express
     ports: [127.0.0.1:8081:8081]

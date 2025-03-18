@@ -1,6 +1,11 @@
+FROM docker.io/node:alpine AS vitebuild
+WORKDIR /workdir
+COPY ./vite /workdir
+RUN npm install && npm run build
+
 FROM docker.io/python:3.12-alpine AS base
-VOLUME /build
-VOLUME /srv/artifacts
+# VOLUME /build
+# VOLUME /srv/artifacts
 WORKDIR /code
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
@@ -23,6 +28,8 @@ CMD ["python", "-m", "wrep.main"]
 
 FROM base AS prodbase
 ENV FRONTEND_DIST=/srv/dist
+ENV VITE_DIST=/srv/vite
+COPY --from=vitebuild /workdir/dist /srv/vite
 COPY . .
 RUN apk --no-cache -q add g++ libc-dev libffi-dev &&\
     wrep frontend build &&\
