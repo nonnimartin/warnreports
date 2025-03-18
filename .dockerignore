@@ -7,9 +7,11 @@
 **/*.pyc
 **/*.sqlite*
 **/node_modules
+**/.react-router
 build
 Dockerfile
 extra
 lib/bootstrap
 warn
+vite/build
 vite/dist
