@@ -6,7 +6,6 @@ from functools import cached_property as lazy
 from typing import Any, Callable, Coroutine, Sequence
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
-from fastapi.staticfiles import StaticFiles
 from sentry_sdk import capture_exception
 
 from . import frontend, routers, settings, utils
@@ -30,14 +29,6 @@ class Apps:
             lifespan=frontend.lifespan,
             title='warnreports frontend')
         app.include_router(frontend.router, include_in_schema=False)
-        return app
-
-    @lazy
-    @wapp
-    def vite(self):
-        app = self.create_app(title='warnreports vite frontend')
-        static = StaticFiles(directory=settings.VITE_DIST, check_dir=False, html=True)
-        app.mount('/', static)
         return app
 
     @lazy
