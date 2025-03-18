@@ -3,6 +3,14 @@ WORKDIR /workdir
 COPY ./vite /workdir
 RUN npm install && npm run build
 
+# -----------------
+
+FROM docker.io/nginx:stable-alpine AS vite
+COPY ./extra/vite-nginx.conf /etc/nginx/conf.d/
+COPY --from=vitebuild /workdir/build/client /srv/vite
+
+# -----------------
+
 FROM docker.io/python:3.12-alpine AS base
 WORKDIR /code
 ENV BUILD_DIR=/build
