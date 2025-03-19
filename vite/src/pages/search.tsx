@@ -1,4 +1,3 @@
-import React from 'react'
 import coldefs from '../lib/coldefs'
 import Datatable from '../components/Datatable'
 import SearchForm from '../components/SearchForm'
@@ -18,11 +17,20 @@ export default function () {
       topStart: null,
     },
   }
+  const slots = {
+    company: (data, type, row) => {
+      if (type === 'display') {
+        return ( <a href={`/r/${row.id}`}>{data}</a> )
+      }
+      return data
+    }
+  }
   return (
     <Datatable
       collection='reports'
-      columns={coldefs.reports}
+      columns={coldefs.reports} 
       searchForm={searchForm}
-      options={opts} />
+      options={opts}
+      slots={slots} />
   )
 }

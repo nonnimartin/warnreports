@@ -1,10 +1,11 @@
-import React from 'react'
 import { NavLink } from 'react-router'
 
 export default function () {
   const links = [
     ['/', 'Home'],
     ['/search', 'Search'],
+    ['/feed', 'Feed'],
+    ['/api', 'API'],
     ['/about', 'About'],
   ]
   return (

@@ -1,4 +1,5 @@
-export const reports = {
+import type {ColDef, ColDefs} from './models'      
+export const reports: ColDefs = {
   state: { title: 'State' },
   company: { title: 'Company' },
   reported: { title: 'Reported', type: 'date' },

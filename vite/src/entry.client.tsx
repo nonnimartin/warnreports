@@ -5,7 +5,5 @@ import './index.css'
 
 ReactDOM.hydrateRoot(
   document,
-  <React.StrictMode>
     <HydratedRouter />
-  </React.StrictMode>
 )

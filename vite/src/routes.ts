@@ -1,9 +1,16 @@
-import { type RouteConfig, route } from '@react-router/dev/routes'
+import { type RouteConfig, route, index } from '@react-router/dev/routes'
+
+const page = (name: string) => `./pages/${name}.tsx`
+const pageroute = (name: string) => route(name, page(name))
 
 export default [
-  route('/', './pages/home.tsx'),
-  route('/search', './pages/search.tsx'),
-  route('/about', './pages/about.tsx'),
-  // * matches all URLs, the ? makes it optional so it will match / as well
-  route('*?', 'catchall.tsx'),
+  index(page('home')),
+  ...[
+    'search',
+    'feed',
+    'api',
+    'about',
+  ].map(pageroute),
+  route('r/:id', page('report')),
+  route('*', './catchall.tsx'),
 ] satisfies RouteConfig

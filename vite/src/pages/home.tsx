@@ -1,4 +1,3 @@
-import React from 'react'
 import coldefs from '../lib/coldefs'
 import Datatable from '../components/Datatable'
 
