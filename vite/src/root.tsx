@@ -6,6 +6,7 @@ import {
   Scripts,
   ScrollRestoration,
 } from 'react-router'
+import Nav from './components/Nav'
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -21,6 +22,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
+        <Nav />
         {children}
         <ScrollRestoration />
         <Scripts />
