@@ -29,3 +29,15 @@ docker compose exec app wrep migrations migrate
 # Generate migration
 docker compose exec app wrep migrations auto
 ```
+
+## React Development (WIP)
+
+It is best to run the react dev server directly on your machine, not in a container.
+Make sure you have `npm` installed, then install the dependencies:
+
+```sh
+cd vite
+npm install
+```
+
+Then start the dev server with `npm run dev`
