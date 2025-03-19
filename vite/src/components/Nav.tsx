@@ -1,14 +1,21 @@
 import React from 'react'
 import { NavLink } from 'react-router'
 
-export default function Component() {
+export default function () {
+  const links = [
+    ['/', 'Home'],
+    ['/search', 'Search'],
+    ['/about', 'About'],
+  ]
   return (
     <div className="container-flex bg-light">
       <div className="container" id="id_mainnav">
-        <nav>
-          <NavLink to='/' className='nav-link'>Home</NavLink>
-          <NavLink to='/search' className='nav-link'>Search</NavLink>
-          <NavLink to='/about' className='nav-link'>About</NavLink>
+        <nav className="nav main-nav nav-pills">
+          {links.map(([to, text]) => (
+            <NavLink key={to} to={to} className='nav-link'>
+              {text}
+            </NavLink>
+          ))}
         </nav>
       </div>
     </div>

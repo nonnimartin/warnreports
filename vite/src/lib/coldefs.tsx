@@ -1,4 +1,4 @@
-export const report = {
+export const reports = {
   state: { title: 'State' },
   company: { title: 'Company' },
   reported: { title: 'Reported', type: 'date' },
@@ -6,8 +6,15 @@ export const report = {
   employees: { title: 'Employees', type: 'num' },
   action: { title: 'Action', orderable: false },
 }
-export const state = {
+const reports_count = { title: 'Reports Count' }
+export const states = {
   id: { title: 'State' },
-  reports_count: { title: 'Reports Count' },
+  reports_count,
+  last_reported: { title: 'Last Reported' },
 }
-export default { report, state }
+export const naics = {
+  id: { title: 'ID' },
+  title: { title: 'Title' },
+  reports_count,
+}
+export default { reports, states, naics }

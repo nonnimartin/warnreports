@@ -1,16 +1,48 @@
 import React from 'react'
-import { fetchok } from './utils'
+import { fetchok } from '../lib/utils'
 import * as bootstrap from 'bootstrap'
-import DataTable from 'datatables.net-react'
+import DataTableBase from 'datatables.net-react'
 import DataTablesCore from 'datatables.net-bs5'
+import 'datatables.net-responsive-bs5'
+
+export default function (
+  { collection, columns, title, options, fixedParams, searchForm }:
+    {
+      collection: string,
+      columns: any,
+      title?: string,
+      options?: any,
+      fixedParams?: any,
+      searchForm?: any,
+    }
+) {
+  const classes = ['display', 'table', 'table-striped', 'responsive']
+  const opts = {
+    serverSide: true,
+    responsive: true,
+    processing: true,
+    ...(options || {}),
+  }
+  return (
+    <div>
+      {searchForm}
+      {title && <h2>{title}</h2>}
+      <DataTableBase
+        ajax={dtajax(collection, fixedParams)}
+        columns={dtcolumns(columns)}
+        className={classes.join(' ')}
+        options={opts}><></></DataTableBase>
+    </div>
+  )
+}
 
 // https://datatables.net/manual/react
 DataTablesCore.use(bootstrap)
-DataTable.use(DataTablesCore)
+DataTableBase.use(DataTablesCore)
 
-function dtcolumns(defns: {[name: string]: {}}) {
+function dtcolumns(defns: { [name: string]: {} }) {
   return Object.entries(defns).map(([name, defn]) => (
-    {name, data: name, title: name, ...defn}
+    { name, data: name, title: name, ...defn }
   ))
 }
 
@@ -19,7 +51,6 @@ function dtajax(collection: string, fixedParams?: any) {
     const path = `/api/v0/${collection}`
     const params = dtparams(data, fixedParams)
     const uri = `${path}?${params}`
-    console.log({data})
     const tasks = [
       fetchok(uri),
       getstats(),
@@ -40,7 +71,7 @@ async function getstats() {
   return await rep.json()
 }
 
-const oparam = ({name, dir}) => (
+const oparam = ({ name, dir }) => (
   (dir[0] === 'd' ? '-' : '') + name
 )
 
@@ -66,20 +97,4 @@ function dtparams(data: any, fixedParams?: any) {
     }
   }
   return params
-}
-
-export function makedt(opts: any) {
-  const {collection, columns, options, fixedParams} = opts
-  return (
-    <DataTable
-      ajax={dtajax(collection, fixedParams)}
-      columns={dtcolumns(columns)}
-      className='display'
-      options={{
-        serverSide: true,
-        processing: true,
-        ...(options || {})
-      }}
-      ><></></DataTable>
-  )
 }

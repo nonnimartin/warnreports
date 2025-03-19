@@ -1,31 +1,10 @@
 import React from 'react'
 import coldefs from '../lib/coldefs'
-import { makedt } from '../lib/datatables'
+import Datatable from '../components/Datatable'
 
-export async function clientLoader() {
-  // you can now fetch data here
-  return {
-    title: 'Home',
-  }
-}
-
-export default function Component({ loaderData }) {
-  return (
-    <div>
-      <h1>{loaderData.title}</h1>
-      {makedt(tableConfig)}
-    </div>
-  )
-}
-
-const tableConfig = {
-  collection: 'reports',
-  fixedParams: {
-    employees_min: 50,
-    order: '-reported',
-  },
-  columns: coldefs.report,
-  options: {
+export default function () {
+  const opts = {
+    autoWidth: false,
     pageLength: 10,
     ordering: false,
     lengthChange: false,
@@ -33,6 +12,16 @@ const tableConfig = {
     layout: {
       bottomStart: null,
     },
-    autoWidth: false,
-  },
+  }
+  return (
+    <Datatable
+      title='Recent 50+ employees'
+      collection='reports'
+      fixedParams={{
+        employees_min: 50,
+        order: '-reported',
+      }}
+      columns={coldefs.reports}
+      options={opts} />
+  )
 }

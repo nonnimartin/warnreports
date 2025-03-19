@@ -10,7 +10,7 @@ import Nav from './components/Nav'
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" data-bs-theme="dark">
       <head>
         <meta charSet="UTF-8" />
         <meta
@@ -23,7 +23,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <Nav />
-        {children}
+        <div className="container">
+          {children}
+        </div>
         <ScrollRestoration />
         <Scripts />
       </body>

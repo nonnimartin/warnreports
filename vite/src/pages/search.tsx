@@ -1,29 +1,28 @@
 import React from 'react'
 import coldefs from '../lib/coldefs'
-import { makedt } from '../lib/datatables'
+import Datatable from '../components/Datatable'
+import SearchForm from '../components/SearchForm'
 
-export async function clientLoader() {
-  // you can now fetch data here
-  return {
-    title: 'Search',
-  }
-}
-
-export default function Component({ loaderData }) {
-  return (
-    <div>
-      <h1>{loaderData.title}</h1>
-      {makedt(tableConfig)}
-    </div>
-  )
-}
-
-const tableConfig = {
-  collection: 'reports',
-  columns: coldefs.report,
-  options: {
-    order: {name: 'reported', dir: 'desc'},
+export default function () {
+  const defaultOrder = [{ name: 'reported', dir: 'desc' }]
+  const searchForm = (<SearchForm />)
+  const opts = {
+    order: defaultOrder,
     pageLength: 25,
     autoWidth: false,
-  },
+    layout: {
+      topEnd: null,
+      bottomStart: 'pageLength',
+      bottomEnd: 'paging',
+      bottom2Start: 'info',
+      topStart: null,
+    },
+  }
+  return (
+    <Datatable
+      collection='reports'
+      columns={coldefs.reports}
+      searchForm={searchForm}
+      options={opts} />
+  )
 }
