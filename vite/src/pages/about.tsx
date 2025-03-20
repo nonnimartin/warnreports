@@ -1,4 +1,4 @@
-import coldefs from '../lib/coldefs'
+import {naicsFields, stateFields} from '../lib/fielddefs'
 import Datatable from '../components/Datatable'
 
 export default function () {
@@ -15,7 +15,7 @@ export default function () {
       <Datatable
         title='State Stats'
         collection='states'
-        columns={coldefs.states}
+        columns={stateFields}
         options={opts} />
       <Datatable
         title='NAICS Stats'
@@ -24,7 +24,7 @@ export default function () {
           reports_count_min: 1,
           depth_max: 0,
         }}
-        columns={coldefs.naics}
+        columns={naicsFields}
         options={opts} />
     </div>
   )

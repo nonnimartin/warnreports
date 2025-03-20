@@ -8,8 +8,14 @@ export interface Naic extends Partial {
 }
 export interface ReportData extends Partial {
   id: string
+  state: string
   company: string
   reported: string
+  starting?: string
+  employees?: number
+  action?: string
+  location?: string
+  url?: string
   artifacts: Artifact[]
   naics: Naic[]
 }

@@ -40,12 +40,6 @@ export default function (
     serverSide: true,
     ...(options || {}),
   }
-  // const slots = {}
-  // for (const spec of colspecs) {
-  //   if (spec.slot) {
-  //     slots[spec.name] = spec.slot
-  //   }
-  // }
   return (
     <div>
       {searchForm}

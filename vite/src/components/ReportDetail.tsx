@@ -1,30 +1,35 @@
-import fielddefs from '../lib/fielddefs'
-import type { FieldDefs, ReportData } from '../lib/models'
+import {reportFields} from '../lib/fielddefs'
+import type { ReportData } from '../lib/models'
 
-function row(title: string, content: any) {
-  return (
-    <tr>
-      <th scope='row'>{title}</th>
-      <td>{content}</td>
-    </tr>
-  )
-}
-
-function* rows(fields: FieldDefs, report: ReportData) {
-  for (const [name, { title }] of Object.entries(fields)) {
+const fieldNames = [
+  'state',
+  'reported',
+  'starting',
+  'employees',
+  'action',
+  'location',
+  'url',
+]
+function* rows(report: ReportData) {
+  for (const name of fieldNames) {
+    const {title} = reportFields[name]
     const value = report[name]
-    yield row(title, value)
+    yield (
+      <tr>
+        <th scope='row'>{title}</th>
+        <td>{value}</td>
+      </tr>
+    )
   }
 }
 
 export default function ({ report }: { report: ReportData }) {
-  const fields = fielddefs.report
   return (
     <div>
       <h2>{report.company}</h2>
       <table className='report-detail-table'>
         <tbody>
-          {...Array.from(rows(fields, report))}
+          {...Array.from(rows(report))}
         </tbody>
       </table>
     </div>
