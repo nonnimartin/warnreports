@@ -12,8 +12,12 @@
       "resolveJsonModule": true,
       "isolatedModules": true,
       "noEmit": true,
-      "jsx": "react-jsx"
+      "jsx": "react-jsx",
+
+      /* https://reactrouter.com/how-to/route-module-type-safety */
+      "rootDirs": [".", "./.react-router/types"],
+      "verbatimModuleSyntax": true
     },
-    "include": ["src/**/*.ts"],
+    "include": ["src/**/*.ts", ".react-router/types/**/*"],
     "references": [{ "path": "./tsconfig.node.json" }]
   }

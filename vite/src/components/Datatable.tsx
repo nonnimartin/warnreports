@@ -1,38 +1,56 @@
-import React from 'react'
+import type { ColDef, ColDefs } from '../lib/models'
 import { fetchok } from '../lib/utils'
 import * as bootstrap from 'bootstrap'
 import DataTableBase from 'datatables.net-react'
 import DataTablesCore from 'datatables.net-bs5'
 import 'datatables.net-responsive-bs5'
-
+export interface TableProps {
+  collection: string
+  columns: ColDefs
+  title?: string|any
+  options?: any
+  fixedParams?: any
+  searchForm?: any
+  slots?: any
+}
+export interface ColSpec extends ColDef {
+  name: string
+  data: string
+  title: string
+  render?: Function
+}
 export default function (
-  { collection, columns, title, options, fixedParams, searchForm }:
-    {
-      collection: string,
-      columns: any,
-      title?: string,
-      options?: any,
-      fixedParams?: any,
-      searchForm?: any,
-    }
+  {
+    collection,
+    columns,
+    title,
+    options,
+    fixedParams,
+    searchForm,
+    slots,
+  }: TableProps
 ) {
   const classes = ['display', 'table', 'table-striped', 'responsive']
-  const opts = {
-    serverSide: true,
+  const colspecs: any[] = Object.entries(columns).map(([name, defn]) => (
+    { name, data: name, title: name, ...defn }
+  ))
+  options = {
     responsive: true,
     processing: true,
+    serverSide: true,
     ...(options || {}),
   }
   return (
     <div>
       {searchForm}
-      {title && <h2>{title}</h2>}
+      {typeof title === 'string' ? <h2>{title}</h2> : title}
       <DataTableBase
         ajax={dtajax(collection, fixedParams)}
-        columns={dtcolumns(columns)}
+        columns={colspecs}
+        slots={slots}
         className={classes.join(' ')}
-        options={opts}><></></DataTableBase>
-    </div>
+        options={options}><></></DataTableBase>
+    </div> 
   )
 }
 

@@ -4,7 +4,8 @@
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
     "@react-router/node": "^7.3.0",

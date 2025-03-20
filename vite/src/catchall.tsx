@@ -1,6 +1,5 @@
-import React from 'react'
-export default function Component() {
+export default function () {
     return (
-        <div>catchall</div>
+        <div>Not Found</div>
     )
 }

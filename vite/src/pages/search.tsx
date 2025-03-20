@@ -1,12 +1,23 @@
-import React from 'react'
-import coldefs from '../lib/coldefs'
+import {reportFields, reportSlots} from '../lib/fielddefs'
 import Datatable from '../components/Datatable'
 import SearchForm from '../components/SearchForm'
+
+const colNames = [
+  'state',
+  'company',
+  'reported',
+  'starting',
+  'employees',
+  'action',
+]
+const columns = Object.fromEntries(
+  colNames.map(key => ([key, reportFields[key]]))
+)
 
 export default function () {
   const defaultOrder = [{ name: 'reported', dir: 'desc' }]
   const searchForm = (<SearchForm />)
-  const opts = {
+  const options = {
     order: defaultOrder,
     pageLength: 25,
     autoWidth: false,
@@ -21,8 +32,9 @@ export default function () {
   return (
     <Datatable
       collection='reports'
-      columns={coldefs.reports}
+      columns={columns}
       searchForm={searchForm}
-      options={opts} />
+      options={options}
+      slots={reportSlots} />
   )
 }
