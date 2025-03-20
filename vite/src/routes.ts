@@ -10,6 +10,7 @@ export default [
     'feed',
     'api',
     'about',
+    'map',
   ].map(pageroute),
   route('r/:id', page('report')),
   route('*', './catchall.tsx'),
