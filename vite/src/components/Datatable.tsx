@@ -12,6 +12,7 @@ DataTablesCore.use(bootstrap)
 DataTableBase.use(DataTablesCore)
 
 interface TableProps {
+  id?: string
   collection: string
   columns?: string[]
   coldefs?: ColDefs
@@ -20,11 +21,13 @@ interface TableProps {
   options?: any
   fixedParams?: any
   searchFormId?: string
+  className?: string
   ref?: React.RefObject<DataTableRef>
 }
 
 export default function (
   {
+    id,
     collection,
     coldefs,
     columns,
@@ -33,13 +36,24 @@ export default function (
     options,
     fixedParams,
     searchFormId,
+    className,
     ref,
   }: TableProps
 ) {
+  id = id || `id_${String(Math.random()).substring(2)}`
   coldefs = { ...Fields[collection], ...(coldefs || {}) }
   slots = { ...Slots[collection], ...(slots || {}) }
   columns = columns || Object.keys(coldefs)
-  const classes = ['display', 'table', 'table-striped', 'responsive']
+  const classSet = new Set(['display', 'table', 'table-striped', 'responsive'])
+  if (className) {
+    for (let name of className.split(' ')) {
+      name = name.trim()
+      if (name.length) {
+        classSet.add(name)
+      }
+    }
+  }
+  className = Array.from(classSet).sort().join(' ')
   const colspecs: any[] = columns.map(name => {
     const defn = coldefs[name]
     return { name, data: name, title: name, ...defn }
@@ -51,24 +65,19 @@ export default function (
     responsive: true,
     processing: true,
     serverSide: true,
+    stateSaveCallback: (settings: any, data: any) => {
+      localStorage.setItem(`dtstate_${id}`, JSON.stringify(data))
+    },
+    stateLoadCallback: () => {
+      const json = localStorage.getItem(`dtstate_${id}`)
+      if (!json) {
+        return null
+      }
+      return JSON.parse(json)
+    },
     ...(options || {}),
   }
-  return (
-    <div>
-      {head}
-      <DataTableBase
-        ref={ref}
-        ajax={dtajax(collection, searchFormId, fixedParams)}
-        columns={colspecs}
-        slots={slots}
-        className={classes.join(' ')}
-        options={options}><></></DataTableBase>
-    </div>
-  )
-}
-
-function dtajax(collection: string, searchFormId?: string, fixedParams?: any) {
-  return async (data: any, callback: Function, settings: any) => {
+  async function ajax(data: any, callback: Function, settings: any) {
     const path = `/api/v0/${collection}`
     const params = dtparams(data, searchFormId, fixedParams)
     const uri = `${path}?${params}`
@@ -85,6 +94,45 @@ function dtajax(collection: string, searchFormId?: string, fixedParams?: any) {
       draw: data.draw,
     })
   }
+  function onStateSaveParams(e: any, settings: any, data: any) {
+    if (!searchFormId) {
+      return
+    }
+    const params = new URLSearchParams
+    for (const [key, value] of getSearchFormData(searchFormId)) {
+      params.append(key, value)
+    }
+    Object.assign(data, Object.fromEntries(params.entries()))
+  }
+  function onStateLoadParams(e: any, settings: any, data: any) {
+    if (!searchFormId) {
+      return
+    }
+    const form = document.getElementById(searchFormId) as HTMLFormElement
+    for (const key of new FormData(form).keys()) {
+      if (data[key]) {
+        const el = form.querySelector(`[name="${key}"]`) as HTMLInputElement
+        if (el) {
+          el.value = data[key]
+        }
+      }
+    }
+  }
+  return (
+    <div>
+      {head}
+      <DataTableBase
+        key={id}
+        ref={ref}
+        ajax={ajax}
+        onStateSaveParams={onStateSaveParams}
+        onStateLoadParams={onStateLoadParams}
+        columns={colspecs}
+        slots={slots}
+        className={className}
+        options={options}><></></DataTableBase>
+    </div>
+  )
 }
 
 async function getstats() {
@@ -101,7 +149,7 @@ function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
     offset: data.start,
   })
   if (data.length >= 0) {
-    params.set('limit', data.length)
+    params.set('limit', String(data.length))
   }
   const optional = {
     order: data.order.map(oparam).join(','),
@@ -113,17 +161,8 @@ function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
     }
   }
   if (searchFormId) {
-    const formData = new FormData(
-      document.getElementById(searchFormId) as HTMLFormElement
-    )
-    for (const [key, value] of formData.entries()) {
-      const { length } = value as string
-      if (key === 'text' && length < 2) {
-        continue
-      }
-      if (length) {
-        params.append(key, value as string)
-      }
+    for (const [key, value] of getSearchFormData(searchFormId)) {
+      params.append(key, value)
     }
   }
   if (fixedParams) {
@@ -132,4 +171,24 @@ function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
     }
   }
   return params
+}
+
+function* getSearchFormData(searchFormId: string) {
+  if (!searchFormId) {
+    return
+  }
+  const form = document.getElementById(searchFormId) as HTMLFormElement
+  if (!form) {
+    return
+  }
+  const formData = new FormData(form)
+  for (const [key, value] of formData.entries()) {
+    const { length } = value as string
+    if (key === 'text' && length < 2) {
+      continue
+    }
+    if (length) {
+      yield [key, String(value)]
+    }
+  }
 }

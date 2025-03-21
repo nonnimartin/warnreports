@@ -25,11 +25,12 @@ export default function ({ loaderData }) {
     'employees',
     'action',
   ]
-  const defaultOrder = [{ name: 'reported', dir: 'desc' }]
+  const defaultOrder = [['reported', 'desc']]
   const options = {
-    order: defaultOrder,
+    order: [{ name: 'reported', dir: 'desc' }],
     pageLength: 25,
     autoWidth: false,
+    stateSave: true,
     layout: {
       top: null,
       topStart: null,
@@ -48,6 +49,7 @@ export default function ({ loaderData }) {
         states={loaderData.states}
         naics={loaderData.naics} />
       <Datatable
+        id='id_search_table'
         collection='reports'
         ref={table}
         columns={columns}
