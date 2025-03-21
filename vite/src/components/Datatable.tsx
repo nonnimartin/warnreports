@@ -1,73 +1,85 @@
-import type { ColDef, ColDefs } from '../lib/models'
+import type { ColDefs } from '../lib/models'
+import { Fields, Slots } from '../lib/fielddefs'
 import { fetchok } from '../lib/utils'
 import * as bootstrap from 'bootstrap'
 import DataTableBase from 'datatables.net-react'
 import DataTablesCore from 'datatables.net-bs5'
+import type { DataTableRef } from 'datatables.net-react'
 import 'datatables.net-responsive-bs5'
-export interface TableProps {
-  collection: string
-  columns: ColDefs
-  title?: string|any
-  options?: any
-  fixedParams?: any
-  searchForm?: any
-  slots?: any
-}
-export interface ColSpec extends ColDef {
-  name: string
-  data: string
-  title: string
-  render?: Function
-}
-export default function (
-  {
-    collection,
-    columns,
-    title,
-    options,
-    fixedParams,
-    searchForm,
-    slots,
-  }: TableProps
-) {
-  const classes = ['display', 'table', 'table-striped', 'responsive']
-  const colspecs: any[] = Object.entries(columns).map(([name, defn]) => (
-    { name, data: name, title: name, ...defn }
-  ))
-  options = {
-    responsive: true,
-    processing: true,
-    serverSide: true,
-    ...(options || {}),
-  }
-  return (
-    <div>
-      {searchForm}
-      {typeof title === 'string' ? <h2>{title}</h2> : title}
-      <DataTableBase
-        ajax={dtajax(collection, fixedParams)}
-        columns={colspecs}
-        slots={slots}
-        className={classes.join(' ')}
-        options={options}><></></DataTableBase>
-    </div> 
-  )
-}
 
 // https://datatables.net/manual/react
 DataTablesCore.use(bootstrap)
 DataTableBase.use(DataTablesCore)
 
-function dtcolumns(defns: { [name: string]: {} }) {
-  return Object.entries(defns).map(([name, defn]) => (
-    { name, data: name, title: name, ...defn }
-  ))
+interface TableProps {
+  id?: string
+  collection: string
+  columns?: string[]
+  coldefs?: ColDefs
+  slots?: any
+  title?: string | any
+  options?: any
+  fixedParams?: any
+  searchFormId?: string
+  className?: string
+  ref?: React.RefObject<DataTableRef>
 }
 
-function dtajax(collection: string, fixedParams?: any) {
-  return async (data: any, callback: Function, settings: any) => {
+export default function (
+  {
+    id,
+    collection,
+    coldefs,
+    columns,
+    slots,
+    title,
+    options,
+    fixedParams,
+    searchFormId,
+    className,
+    ref,
+  }: TableProps
+) {
+  id = id || `id_${String(Math.random()).substring(2)}`
+  coldefs = { ...Fields[collection], ...(coldefs || {}) }
+  slots = { ...Slots[collection], ...(slots || {}) }
+  columns = columns || Object.keys(coldefs)
+  const classSet = new Set(['display', 'table', 'table-striped', 'responsive'])
+  if (className) {
+    for (let name of className.split(' ')) {
+      name = name.trim()
+      if (name.length) {
+        classSet.add(name)
+      }
+    }
+  }
+  className = Array.from(classSet).sort().join(' ')
+  const colspecs: any[] = columns.map(name => {
+    const defn = coldefs[name]
+    return { name, data: name, title: name, ...defn }
+  })
+  const head = typeof title === 'string'
+    ? (<h2>{title}</h2>)
+    : title
+  options = {
+    responsive: true,
+    processing: true,
+    serverSide: true,
+    stateSaveCallback: (settings: any, data: any) => {
+      localStorage.setItem(`dtstate_${id}`, JSON.stringify(data))
+    },
+    stateLoadCallback: () => {
+      const json = localStorage.getItem(`dtstate_${id}`)
+      if (!json) {
+        return null
+      }
+      return JSON.parse(json)
+    },
+    ...(options || {}),
+  }
+  async function ajax(data: any, callback: Function, settings: any) {
     const path = `/api/v0/${collection}`
-    const params = dtparams(data, fixedParams)
+    const params = dtparams(data, searchFormId, fixedParams)
     const uri = `${path}?${params}`
     const tasks = [
       fetchok(uri),
@@ -82,6 +94,45 @@ function dtajax(collection: string, fixedParams?: any) {
       draw: data.draw,
     })
   }
+  function onStateSaveParams(e: any, settings: any, data: any) {
+    if (!searchFormId) {
+      return
+    }
+    const params = new URLSearchParams
+    for (const [key, value] of getSearchFormData(searchFormId)) {
+      params.append(key, value)
+    }
+    Object.assign(data, Object.fromEntries(params.entries()))
+  }
+  function onStateLoadParams(e: any, settings: any, data: any) {
+    if (!searchFormId) {
+      return
+    }
+    const form = document.getElementById(searchFormId) as HTMLFormElement
+    for (const key of new FormData(form).keys()) {
+      if (data[key]) {
+        const el = form.querySelector(`[name="${key}"]`) as HTMLInputElement
+        if (el) {
+          el.value = data[key]
+        }
+      }
+    }
+  }
+  return (
+    <div>
+      {head}
+      <DataTableBase
+        key={id}
+        ref={ref}
+        ajax={ajax}
+        onStateSaveParams={onStateSaveParams}
+        onStateLoadParams={onStateLoadParams}
+        columns={colspecs}
+        slots={slots}
+        className={className}
+        options={options}><></></DataTableBase>
+    </div>
+  )
 }
 
 async function getstats() {
@@ -93,12 +144,12 @@ const oparam = ({ name, dir }) => (
   (dir[0] === 'd' ? '-' : '') + name
 )
 
-function dtparams(data: any, fixedParams?: any) {
+function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
   const params = new URLSearchParams({
     offset: data.start,
   })
   if (data.length >= 0) {
-    params.set('limit', data.length)
+    params.set('limit', String(data.length))
   }
   const optional = {
     order: data.order.map(oparam).join(','),
@@ -109,10 +160,35 @@ function dtparams(data: any, fixedParams?: any) {
       params.set(key, value)
     }
   }
+  if (searchFormId) {
+    for (const [key, value] of getSearchFormData(searchFormId)) {
+      params.append(key, value)
+    }
+  }
   if (fixedParams) {
     for (const [key, value] of Object.entries(fixedParams)) {
-      params.set(key, value as string)
+      params.set(key, String(value))
     }
   }
   return params
+}
+
+function* getSearchFormData(searchFormId: string) {
+  if (!searchFormId) {
+    return
+  }
+  const form = document.getElementById(searchFormId) as HTMLFormElement
+  if (!form) {
+    return
+  }
+  const formData = new FormData(form)
+  for (const [key, value] of formData.entries()) {
+    const { length } = value as string
+    if (key === 'text' && length < 2) {
+      continue
+    }
+    if (length) {
+      yield [key, String(value)]
+    }
+  }
 }

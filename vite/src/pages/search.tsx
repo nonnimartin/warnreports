@@ -1,40 +1,60 @@
-import {reportFields, reportSlots} from '../lib/fielddefs'
+import { useRef } from 'react'
 import Datatable from '../components/Datatable'
 import SearchForm from '../components/SearchForm'
+import { fetchok } from '../lib/utils'
+import type { DataTableRef } from 'datatables.net-react'
 
-const colNames = [
-  'state',
-  'company',
-  'reported',
-  'starting',
-  'employees',
-  'action',
-]
-const columns = Object.fromEntries(
-  colNames.map(key => ([key, reportFields[key]]))
-)
+export async function clientLoader() {
+  const tasks = [
+    fetchok(`/api/v0/states`),
+    fetchok(`/api/v0/naics?depth_max=0`),
+  ]
+  const states: any[] = await (await tasks[0]).json()
+  const naics: any[] = await (await tasks[1]).json()
+  return { states, naics }
+}
 
-export default function () {
-  const defaultOrder = [{ name: 'reported', dir: 'desc' }]
-  const searchForm = (<SearchForm />)
+export default function ({ loaderData }) {
+  const formId = 'id_search_form'
+  const table = useRef<DataTableRef>(null)
+  const columns = [
+    'state',
+    'company',
+    'reported',
+    'starting',
+    'employees',
+    'action',
+  ]
+  const defaultOrder = [['reported', 'desc']]
   const options = {
-    order: defaultOrder,
+    order: [{ name: 'reported', dir: 'desc' }],
     pageLength: 25,
     autoWidth: false,
+    stateSave: true,
     layout: {
+      top: null,
+      topStart: null,
       topEnd: null,
       bottomStart: 'pageLength',
       bottomEnd: 'paging',
       bottom2Start: 'info',
-      topStart: null,
     },
   }
   return (
-    <Datatable
-      collection='reports'
-      columns={columns}
-      searchForm={searchForm}
-      options={options}
-      slots={reportSlots} />
+    <>
+      <SearchForm
+        id={formId}
+        table={table}
+        defaultOrder={defaultOrder}
+        states={loaderData.states}
+        naics={loaderData.naics} />
+      <Datatable
+        id='id_search_table'
+        collection='reports'
+        ref={table}
+        columns={columns}
+        searchFormId={formId}
+        options={options} />
+    </>
   )
 }

@@ -5,7 +5,7 @@ export default function () {
     ['/', 'Home'],
     ['/search', 'Search'],
     ['/feed', 'Feed'],
-    ['/api', 'API'],
+    ['/api/docs', 'API'],
     ['/about', 'About'],
   ]
   return (

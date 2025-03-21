@@ -8,7 +8,7 @@ export default [
   ...[
     'search',
     'feed',
-    'api',
+    'api/docs',
     'about',
   ].map(pageroute),
   route('r/:id', page('report')),

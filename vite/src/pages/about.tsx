@@ -1,8 +1,7 @@
-import {naicsFields, stateFields} from '../lib/fielddefs'
 import Datatable from '../components/Datatable'
 
 export default function () {
-  const opts = {
+  const options = {
     autoWidth: false,
     paging: false,
     filter: false,
@@ -15,8 +14,7 @@ export default function () {
       <Datatable
         title='State Stats'
         collection='states'
-        columns={stateFields}
-        options={opts} />
+        options={options} />
       <Datatable
         title='NAICS Stats'
         collection='naics'
@@ -24,8 +22,7 @@ export default function () {
           reports_count_min: 1,
           depth_max: 0,
         }}
-        columns={naicsFields}
-        options={opts} />
+        options={options} />
     </div>
   )
 }

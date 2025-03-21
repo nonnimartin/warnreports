@@ -1,19 +1,14 @@
-import {reportFields, reportSlots as slots} from '../lib/fielddefs'
 import Datatable from '../components/Datatable'
 
-const colNames = [
-  'state',
-  'company',
-  'reported',
-  'starting',
-  'employees',
-  'action',
-]
-const columns = Object.fromEntries(
-  colNames.map(key => ([key, reportFields[key]]))
-)
-
 export default function () {
+  const columns = [
+    'state',
+    'company',
+    'reported',
+    'starting',
+    'employees',
+    'action',
+  ]
   const options = {
     autoWidth: false,
     pageLength: 10,
@@ -24,17 +19,16 @@ export default function () {
       bottomStart: null,
     },
   }
+  const fixedParams = {
+    employees_min: 50,
+    order: '-reported',
+  }
   return (
     <Datatable
       title='Recent 50+ employees'
       collection='reports'
       columns={columns}
       options={options}
-      slots={slots}
-      fixedParams={{
-        employees_min: 50,
-        order: '-reported',
-      }}
-      />
+      fixedParams={fixedParams} />
   )
 }
