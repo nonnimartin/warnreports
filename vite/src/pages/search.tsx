@@ -1,6 +1,8 @@
+import { useRef } from 'react'
 import Datatable from '../components/Datatable'
 import SearchForm from '../components/SearchForm'
 import { fetchok } from '../lib/utils'
+import type { DataTableRef } from 'datatables.net-react'
 
 export async function clientLoader() {
   const tasks = [
@@ -13,6 +15,8 @@ export async function clientLoader() {
 }
 
 export default function ({ loaderData }) {
+  const formId = 'id_search_form'
+  const table = useRef<DataTableRef>(null)
   const columns = [
     'state',
     'company',
@@ -22,30 +26,33 @@ export default function ({ loaderData }) {
     'action',
   ]
   const defaultOrder = [{ name: 'reported', dir: 'desc' }]
-  const searchForm = (
-    <SearchForm
-      id='id_search_form'
-      states={loaderData.states}
-      naics={loaderData.naics} />
-  )
   const options = {
     order: defaultOrder,
     pageLength: 25,
     autoWidth: false,
     layout: {
+      top: null,
       topStart: null,
       topEnd: null,
       bottomStart: 'pageLength',
       bottomEnd: 'paging',
       bottom2Start: 'info',
-      top: () => document.getElementById('id_search_form'),
     },
   }
   return (
-    <Datatable
-      collection='reports'
-      columns={columns}
-      searchForm={searchForm}
-      options={options} />
+    <>
+      <SearchForm
+        id={formId}
+        table={table}
+        defaultOrder={defaultOrder}
+        states={loaderData.states}
+        naics={loaderData.naics} />
+      <Datatable
+        collection='reports'
+        ref={table}
+        columns={columns}
+        searchFormId={formId}
+        options={options} />
+    </>
   )
 }

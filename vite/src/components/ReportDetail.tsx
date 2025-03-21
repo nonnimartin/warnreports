@@ -1,4 +1,4 @@
-import { reportFields, reportSlots } from '../lib/fielddefs'
+import { Fields, Slots } from '../lib/fielddefs'
 import type { ReportData } from '../lib/models'
 
 const fieldNames = [
@@ -12,13 +12,13 @@ const fieldNames = [
 ]
 function* rows(report: ReportData) {
   for (const name of fieldNames) {
-    const { title } = reportFields[name]
+    const { title } = Fields.reports[name]
     if (!report[name]) {
       continue
     }
-    const render = reportSlots[name]
+    const render = Slots.reports[name]
     const value = render
-      ? render(report[name], 'display', report)
+      ? render(report[name], 'detail', report)
       : report[name]
     yield (
       <tr>

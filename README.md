@@ -17,17 +17,10 @@ Mongo Express is available at http://127.0.0.1:8081/
 
 Pgadmin is available at http://127.0.0.1:8082/ (blank password)
 
-Example commands:
+For available command run:
 
 ```sh
-# Run pipeline
-docker compose exec app wrep pipeline all
-
-# Run migrations
-docker compose exec app wrep migrations migrate
-
-# Generate migration
-docker compose exec app wrep migrations auto
+docker compose exec app wrep -h
 ```
 
 ## React Development (WIP)
@@ -40,4 +33,24 @@ cd vite
 npm install
 ```
 
-Then start the dev server with `npm run dev`
+Then start the dev server:
+
+```sh
+npm run dev
+```
+
+The react dev server will be available at http://127.0.0.1:5173/
+
+### Frontend only
+
+By default, the react dev server proxies `/api/v0` to the API container running at
+http://127.0.0.1:8000 (see `vite.config.ts`).
+
+Alternatively, you can set the environment variable `API_PROXY_TARGET` to the
+production server:
+
+```sh
+API_PROXY_TARGET=https://warnreports.org npm run dev
+```
+
+This allow you to develop the frontend only, without running any of the containers.
