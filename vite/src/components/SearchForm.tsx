@@ -1,6 +1,17 @@
-export default function () {
+interface SearchFormProps {
+  id: string
+  states: any[]
+  naics: any[]
+}
+export default function ({ id, states, naics }: SearchFormProps) {
   return (
-    <form className="row g-3 search-form">
+    <form
+      className="row g-3 search-form"
+      id={id}
+      onSubmit={(e) => {
+        e.preventDefault()
+      }}
+      >
       <div className="col-3">
         <label htmlFor="search_text">Search</label>
         <input className="form-control" name="text" id="search_text" />
@@ -9,6 +20,7 @@ export default function () {
         <label htmlFor="search_state">State</label>
         <select className="form-select" name="state" id="search_state">
           <option value="">-</option>
+          {...states.map(({id}) => ( <option value={id}>{id}</option> ))}
         </select>
       </div>
       <div className="col-2">
@@ -27,6 +39,7 @@ export default function () {
         <label htmlFor="search_naics">Industry</label>
         <select className="form-select" name="naics" id="search_naics">
           <option value="">-</option>
+          {...naics.map(({id, title}) => ( <option value={id}>{id} - {title}</option> ))}
         </select>
       </div>
       <div className="col-1">

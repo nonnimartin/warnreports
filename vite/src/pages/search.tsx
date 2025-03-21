@@ -1,32 +1,44 @@
-import {reportFields, reportSlots} from '../lib/fielddefs'
 import Datatable from '../components/Datatable'
 import SearchForm from '../components/SearchForm'
+import { fetchok } from '../lib/utils'
 
-const colNames = [
-  'state',
-  'company',
-  'reported',
-  'starting',
-  'employees',
-  'action',
-]
-const columns = Object.fromEntries(
-  colNames.map(key => ([key, reportFields[key]]))
-)
+export async function clientLoader() {
+  const tasks = [
+    fetchok(`/api/v0/states`),
+    fetchok(`/api/v0/naics?depth_max=0`),
+  ]
+  const states: any[] = await (await tasks[0]).json()
+  const naics: any[] = await (await tasks[1]).json()
+  return { states, naics }
+}
 
-export default function () {
+export default function ({ loaderData }) {
+  const columns = [
+    'state',
+    'company',
+    'reported',
+    'starting',
+    'employees',
+    'action',
+  ]
   const defaultOrder = [{ name: 'reported', dir: 'desc' }]
-  const searchForm = (<SearchForm />)
+  const searchForm = (
+    <SearchForm
+      id='id_search_form'
+      states={loaderData.states}
+      naics={loaderData.naics} />
+  )
   const options = {
     order: defaultOrder,
     pageLength: 25,
     autoWidth: false,
     layout: {
+      topStart: null,
       topEnd: null,
       bottomStart: 'pageLength',
       bottomEnd: 'paging',
       bottom2Start: 'info',
-      topStart: null,
+      top: () => document.getElementById('id_search_form'),
     },
   }
   return (
@@ -34,7 +46,6 @@ export default function () {
       collection='reports'
       columns={columns}
       searchForm={searchForm}
-      options={options}
-      slots={reportSlots} />
+      options={options} />
   )
 }

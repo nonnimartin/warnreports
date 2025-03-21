@@ -1,27 +1,26 @@
-import type { ColDef, ColDefs } from '../lib/models'
+import type { ColDefs } from '../lib/models'
+import { Fields, Slots } from '../lib/fielddefs'
 import { fetchok } from '../lib/utils'
 import * as bootstrap from 'bootstrap'
 import DataTableBase from 'datatables.net-react'
 import DataTablesCore from 'datatables.net-bs5'
 import 'datatables.net-responsive-bs5'
-export interface TableProps {
+
+interface TableProps {
   collection: string
-  columns: ColDefs
+  columns?: string[]
+  coldefs?: ColDefs
+  slots?: any
   title?: string|any
   options?: any
   fixedParams?: any
   searchForm?: any
-  slots?: any
 }
-export interface ColSpec extends ColDef {
-  name: string
-  data: string
-  title: string
-  render?: Function
-}
+
 export default function (
   {
     collection,
+    coldefs,
     columns,
     title,
     options,
@@ -30,10 +29,14 @@ export default function (
     slots,
   }: TableProps
 ) {
+  coldefs = {...Fields[collection], ...(coldefs || {})}
+  slots = {...Slots[collection], ...(slots || {})}
+  columns = columns || Object.keys(coldefs)
   const classes = ['display', 'table', 'table-striped', 'responsive']
-  const colspecs: any[] = Object.entries(columns).map(([name, defn]) => (
-    { name, data: name, title: name, ...defn }
-  ))
+  const colspecs: any[] = columns.map(name => {
+    const defn = coldefs[name]
+    return {name, data: name, title: name, ...defn}
+  })
   options = {
     responsive: true,
     processing: true,
@@ -57,12 +60,6 @@ export default function (
 // https://datatables.net/manual/react
 DataTablesCore.use(bootstrap)
 DataTableBase.use(DataTablesCore)
-
-function dtcolumns(defns: { [name: string]: {} }) {
-  return Object.entries(defns).map(([name, defn]) => (
-    { name, data: name, title: name, ...defn }
-  ))
-}
 
 function dtajax(collection: string, fixedParams?: any) {
   return async (data: any, callback: Function, settings: any) => {
@@ -111,7 +108,7 @@ function dtparams(data: any, fixedParams?: any) {
   }
   if (fixedParams) {
     for (const [key, value] of Object.entries(fixedParams)) {
-      params.set(key, value as string)
+      params.set(key, String(value))
     }
   }
   return params
