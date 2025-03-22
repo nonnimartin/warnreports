@@ -10,13 +10,17 @@ export default function Map() {
   maptilersdk.config.apiKey = 'ADifuwf2XQ4HVeGoLsWP';
 
   useEffect(() => {
-    if (map.current) return; // stops map from intializing more than once
+    if (map.current) return;
 
     map.current = new maptilersdk.Map({
       container: mapContainer.current,
       center: [usa.lng, usa.lat],
       zoom: zoom
     });
+    // Adding a marker
+    const marker = new maptilersdk.Marker()
+      .setLngLat([30.5, 50.5])
+      .addTo(map.current);
 
   }, [usa.lng, usa.lat, zoom]);
 
