@@ -1,11 +1,11 @@
-import type { ColDefs } from '../lib/models'
-import { Fields, Slots } from '../lib/fielddefs'
-import { fetchok } from '../lib/utils'
 import * as bootstrap from 'bootstrap'
-import DataTableBase from 'datatables.net-react'
 import DataTablesCore from 'datatables.net-bs5'
 import type { DataTableRef } from 'datatables.net-react'
+import DataTableBase from 'datatables.net-react'
 import 'datatables.net-responsive-bs5'
+import { Fields, Slots } from '../lib/fielddefs'
+import type { ColDefs } from '../lib/models'
+import { fetchok } from '../lib/utils'
 
 // https://datatables.net/manual/react
 DataTablesCore.use(bootstrap)
@@ -23,6 +23,7 @@ interface TableProps {
   searchFormId?: string
   className?: string
   ref?: React.RefObject<DataTableRef>
+  onAjax?(res: any, rep: Response): void
 }
 
 export default function (
@@ -38,6 +39,7 @@ export default function (
     searchFormId,
     className,
     ref,
+    onAjax,
   }: TableProps
 ) {
   id = id || `id_${String(Math.random()).substring(2)}`
@@ -86,13 +88,17 @@ export default function (
       getstats(),
     ]
     const stats = await tasks.pop()
-    const rep = await tasks.pop()
-    callback({
+    const rep = await tasks.pop() as Response
+    const res = {
       data: await rep.json(),
       recordsFiltered: Number(rep.headers.get('count')),
       recordsTotal: stats.collections[collection].count,
       draw: data.draw,
-    })
+    }
+    callback(res)
+    if (onAjax) {
+      onAjax(res, rep)
+    }
   }
   function onStateSaveParams(e: any, settings: any, data: any) {
     if (!searchFormId) {
