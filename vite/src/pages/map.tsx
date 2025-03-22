@@ -1,6 +1,14 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
+import type { Route } from './+types/report'
+import { fetchok } from '../lib/utils'
 import * as maptilersdk from '@maptiler/sdk';
 import "@maptiler/sdk/dist/maptiler-sdk.css";
+
+export async function clientLoader({ params }: Route.LoaderArgs) {
+  const rep = await fetchok(`/api/v0/reports/${params.id}`)
+  const report = await rep.json()
+  return { report }
+}
 
 export default function Map() {
   const mapContainer = useRef(null);
