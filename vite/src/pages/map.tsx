@@ -1,24 +1,28 @@
-import * as React from 'react';
-import Map from 'react-map-gl/maplibre';
-import 'maplibre-gl/dist/maplibre-gl.css';
+import React, { useRef, useEffect } from 'react';
 import * as maptilersdk from '@maptiler/sdk';
+import "@maptiler/sdk/dist/maptiler-sdk.css";
 
-const map = (<Map
-initialViewState={{
-  longitude: -90.2446,
-  latitude: 38.12924,
-  zoom: 3
-}}
-style={{width: 600, height: 400}}
-mapStyle="https://api.maptiler.com/maps/0195b4e1-ab90-7ad0-9fb2-445919d31f36/style.json?key=ADifuwf2XQ4HVeGoLsWP"
-/>);
+export default function Map() {
+  const mapContainer = useRef(null);
+  const map = useRef(null);
+  const usa = { lng: -95.2446, lat: 38.12924 };
+  const zoom = 3;
+  maptilersdk.config.apiKey = 'ADifuwf2XQ4HVeGoLsWP';
 
-const marker = new maptilersdk.Marker()
-  .setLngLat([30.5, 50.5])
-  .addTo(map);
+  useEffect(() => {
+    if (map.current) return; // stops map from intializing more than once
 
-function App() {
-  return (map);
+    map.current = new maptilersdk.Map({
+      container: mapContainer.current,
+      center: [usa.lng, usa.lat],
+      zoom: zoom
+    });
+
+  }, [usa.lng, usa.lat, zoom]);
+
+  return (
+    <div className="map-wrap">
+      <div ref={mapContainer} className="map" />
+    </div>
+  );
 }
-
-export default App

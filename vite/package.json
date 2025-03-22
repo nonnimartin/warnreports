@@ -8,6 +8,7 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@maptiler/sdk": "^3.0.1",
     "@react-router/node": "^7.3.0",
     "bootstrap": "^5.3.3",
     "datatables.net-bs5": "^2.2.2",
