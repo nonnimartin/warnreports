@@ -51,19 +51,16 @@ ENV SELENIUM_ENABLED=true
 
 # -----------------
 
-FROM base AS devbase
+FROM base AS etl-dev
 RUN apk --no-cache -q add g++ libc-dev libffi-dev &&\
     pip install -qqq --no-cache-dir --no-input -r requirements-etl.txt
 ENV UVICORN_RELOAD=true
 ENV FRONTEND_AUTO_BUILD=true
 
-FROM devbase AS etl-dev
-
-FROM devbase AS etl-selenium-dev
+FROM etl-dev AS etl-selenium-dev
 RUN apk --no-cache -q add chromium-chromedriver &&\
     pip install -qqq --no-cache-dir --no-input -r requirements-selenium.txt
 ENV SELENIUM_ENABLED=true
 
-FROM etl-selenium-dev AS selenium
 FROM etl-dev AS dev
 FROM dev
