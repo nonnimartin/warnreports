@@ -8,7 +8,10 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@codemirror/lang-xml": "^6.1.0",
     "@react-router/node": "^7.3.0",
+    "@uiw/codemirror-theme-vscode": "^4.23.10",
+    "@uiw/react-codemirror": "^4.23.10",
     "bootstrap": "^5.3.3",
     "datatables.net-bs5": "^2.2.2",
     "datatables.net-react": "^1.0.0",

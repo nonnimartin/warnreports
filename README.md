@@ -2,10 +2,6 @@
 
 ## Install
 
-### Using docker compose
-
-The compose config includes MongoDB.
-
 ```sh
 docker compose build
 docker compose up -d
@@ -23,7 +19,17 @@ For available command run:
 docker compose exec app wrep -h
 ```
 
-## React Development (WIP)
+## Selenium
+
+To enable selenium, set the following in `.env`:
+
+```sh
+APP_IMAGE_TARGET=etl-selenium-dev
+```
+
+Then rebuild the image.
+
+## React Development
 
 It is best to run the react dev server directly on your machine, not in a container.
 Make sure you have `npm` installed, then install the dependencies:
@@ -41,9 +47,9 @@ npm run dev
 
 The react dev server will be available at http://127.0.0.1:5173/
 
-### Frontend only
+### Frontend only development
 
-By default, the react dev server proxies `/api/v0` to the API container running at
+By default, the react dev server proxies backend requests to the API container running at
 http://127.0.0.1:8000 (see `vite.config.ts`).
 
 Alternatively, you can set the environment variable `API_PROXY_TARGET` to the

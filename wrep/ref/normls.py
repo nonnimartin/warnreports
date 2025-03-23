@@ -54,6 +54,9 @@ COMPANY_NAMES: NormDefs = {
     'Avis Budget': _sw,
     'BAE Systems': _sw,
     'Bank of America': _sw,
+    'BH Security': [
+        _sw('BH Security', 'Brinks Home'),
+    ],
     'Big Lots': [
         _r(r'^Big Lots(,?\s+.*)?$', re.I),
     ],
@@ -78,6 +81,7 @@ COMPANY_NAMES: NormDefs = {
     'CVS': [
         _r(r'^cvs\s.*', re.I),
     ],
+    'Danimer Scientific': _sw,
     'DHL': [
         _r(r'^.*DHL.*'),
     ],
@@ -176,6 +180,7 @@ COMPANY_NAMES: NormDefs = {
     ],
     'Qualcomm': _sw,
     'Radisson Hotel': _sw('Radisson '),
+    'Ryder': _sw,
     'Safeway': [
         _r(r'^Safeway(,?\s+Inc.*)?$', re.I),
     ],

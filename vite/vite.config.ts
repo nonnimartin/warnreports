@@ -13,6 +13,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/feed/atom': {
+        target: API_PROXY_TARGET,
+        changeOrigin: true,
+        secure: false,
+      },
+      '/feed/rss': {
+        target: API_PROXY_TARGET,
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
 })

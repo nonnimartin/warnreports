@@ -1528,10 +1528,16 @@ class OK(Scraper):
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         def isnew(data: dict[str, str]) -> bool:
             return self.historical_cutoff < utils.parse_date(data['Notice Date'])
-        with self.cache.open('latest.csv') as file:
-            it = filter(isnew, csv.DictReader(file))
-            with self.cache.open('historical.csv') as file:
-                yield chain(it, csv.DictReader(file))
+        with self.cache.open('historical.csv') as file:
+            it = csv.DictReader(file)
+            if self.cache.exists('latest.csv'):
+                with self.cache.open('latest.csv') as file:
+                    yield chain(filter(isnew, csv.DictReader(file)), it)
+            else:
+                self.logger.warning(
+                    f'Missing latest.csv, including historical data only. '
+                    f'Latest data requires selenium, check setting SELENIUM_ENABLED')
+                yield it
 
     @dataclasses.dataclass
     class DriverHelper:
