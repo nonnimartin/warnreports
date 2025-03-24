@@ -1,79 +1,101 @@
-import { useRef, useEffect } from 'react';
-import type { Route } from './+types/report'
-import { fetchok } from '../lib/utils'
+import { useState } from 'react';
+import ReactMapGL, { Source, Layer } from 'react-map-gl/maplibre'; // Use react-map-gl/maplibre
+import 'maplibre-gl/dist/maplibre-gl.css'; // Import MapLibre GL CSS
 import * as maptilersdk from '@maptiler/sdk';
-import "@maptiler/sdk/dist/maptiler-sdk.css";
 
-export async function clientLoader() {
-  const rep = await fetchok(`/api/v0/reports?offset=0&limit=25&order=-reported`);
-  const reports = await rep.json();
-  let queryString = '';
-  let addedLocations = [];
-  for (const report in reports){
-    let reportObj = reports[report];
-    console.log(reportObj);
-    if (reportObj.location == null){ continue }
-    console.log(reportObj.location);
-    if (!addedLocations.includes(reportObj.location)) queryString += reportObj.location + ';';
-    console.log(addedLocations);
-    addedLocations.push(reportObj.location);
-  }
-  console.log(queryString);
-  let coordsMap = await fetchok(`https://api.maptiler.com/geocoding/` + queryString + `.json?key=ADifuwf2XQ4HVeGoLsWP&country=us`);
-  let locationMap = {};
-  console.log('json');
-  console.log(coordsMap);
-  coordsMap.json().then((response) => {
-    for (const location in response){
-      let thisLocation = response[location];
-      console.log(thisLocation);
-      if (thisLocation['features'].length == 0) continue;
-      if (thisLocation['features'][0].length == 0) continue;
-      let longitude = thisLocation['features'][0]['geometry']['coordinates'][0];
-      console.log(longitude);
-      let latitude = thisLocation['features'][0]['geometry']['coordinates'][1];
-      console.log(latitude);
-      let placeName = thisLocation['features'][0]['place_name'];
-      locationMap[placeName] = {'latitude':latitude, 'longitude':longitude};
-    }
-    console.log(locationMap);
-    reports['coordsMap'] = locationMap;
-  });
-  return reports;
-}
+// Set your MapTiler API key
+maptilersdk.config.apiKey = 'ADifuwf2XQ4HVeGoLsWP'; // Replace with your actual key
 
-export default function Map({loaderData}) {
-  const { reports } = loaderData ?? {}
-  const mapContainer = useRef(null);
-  const map = useRef(null);
-  const usa = { lng: -95.2446, lat: 38.12924 };
-  const zoom = 3;
-  maptilersdk.config.apiKey = 'ADifuwf2XQ4HVeGoLsWP';
-
-  useEffect(() => {
-    if (map.current) return;
-
-    map.current = new maptilersdk.Map({
-      container: mapContainer.current,
-      center: [usa.lng, usa.lat],
-      zoom: zoom
-    });
-    console.log(reports);
-    for (const report of reports)((thisReport) => {
-    console.log('this report');
-    console.log(thisReport);
-
-    //Adding a marker
-      let marker = new maptilersdk.Marker()
-        .setLngLat([30.5, 50.5])
-        .addTo(map.current);
+const Map = () => {
+  const [viewport, setViewport] = useState({
+    latitude: 37.8, // Center of the U.S.
+    longitude: -96,
+    zoom: 3, // Zoom level to show the entire U.S.
   });
 
-  }, [usa.lng, usa.lat, zoom]);
+  // GeoJSON data for smaller squares centered within states
+  const statesGeoJSON = {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { name: 'California' },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [-119.5, 36.5], // Top-left corner of the square
+              [-116.5, 36.5], // Top-right corner
+              [-116.5, 38.5], // Bottom-right corner
+              [-119.5, 38.5], // Bottom-left corner
+              [-119.5, 36.5], // Close the polygon
+            ],
+          ],
+        },
+      },
+      {
+        type: 'Feature',
+        properties: { name: 'Texas' },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [
+            [
+              [-100.0, 31.0], // Top-left corner of the square
+              [-97.0, 31.0], // Top-right corner
+              [-97.0, 33.0], // Bottom-right corner
+              [-100.0, 33.0], // Bottom-left corner
+              [-100.0, 31.0], // Close the polygon
+            ],
+          ],
+        },
+      },
+      // Add more states as needed
+    ],
+  };
+
+  // Define the MapTiler style URL
+  const mapStyle = `https://api.maptiler.com/maps/streets/style.json?key=${maptilersdk.config.apiKey}`;
 
   return (
-    <div className="map-wrap">
-      <div ref={mapContainer} className="map" />
+    <div style={{ width: '100%', height: '100vh' }}>
+      <ReactMapGL
+        {...viewport}
+        width="100%"
+        height="100%"
+        mapStyle={mapStyle}
+        onViewportChange={setViewport}
+        scrollZoom={false}
+        dragPan={false}
+        doubleClickZoom={false} 
+      >
+        {/* Add a GeoJSON layer for the smaller squares */}
+        <Source id="states-data" type="geojson" data={statesGeoJSON}>
+          <Layer
+            id="states-fill"
+            type="fill"
+            paint={{
+              'fill-color': [
+                'match',
+                ['get', 'name'],
+                'California', '#FF0000', 
+                'Texas', '#00FF00', 
+                '#888888', 
+              ],
+              'fill-opacity': 0.6, 
+            }}
+          />
+          <Layer
+            id="states-outline"
+            type="line"
+            paint={{
+              'line-color': '#000000', 
+              'line-width': 2,
+            }}
+          />
+        </Source>
+      </ReactMapGL>
     </div>
   );
-}
+};
+
+export default Map;
