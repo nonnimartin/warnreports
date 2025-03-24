@@ -8,9 +8,7 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
-    "@mapbox/mapbox-gl-draw": "^1.5.0",
-    "@maptiler/geocoding-control": "^2.1.6",
-    "@maptiler/sdk": "^3.0.1",
+    "@mirawision/usa-map-react": "^1.0.6",
     "@react-router/node": "^7.3.0",
     "bootstrap": "^5.3.3",
     "datatables.net-bs5": "^2.2.2",
@@ -18,10 +16,8 @@
     "datatables.net-responsive-bs5": "^3.0.4",
     "isbot": "^5",
     "mapbox-gl": "^3.10.0",
-    "maplibre-gl": "^5.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-map-gl": "^8.0.1",
     "react-router": "^7.3.0"
   },
   "devDependencies": {
