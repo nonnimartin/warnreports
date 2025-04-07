@@ -33,6 +33,7 @@ from .tools.dom import Soup, bs
 from .tools.files import (ArtifactStore, FileCache, clean_filename, excachectx,
                           jsoncache)
 from .utils import wrapcontext
+import openpyxl
 
 scrapers: dict[str, type[Scraper]] = {}
 
@@ -271,6 +272,9 @@ class CO(Scraper):
     async def scrape(self):
         self.runner.scrape()
         index = await self.build_index()
+        for url, key in index.items():
+            await self.download(key, url, missing_only=False)
+            self.artifacts.add(key)
         await asyncio.sleep(0)
         with self.runner.file.open() as file:
             # upstream scraper uses set() for header, which is unordered & breaks hashing.
@@ -292,12 +296,26 @@ class CO(Scraper):
         warns_el = bs(self.cache/'main/source.html').find('a', text=lambda text: text == 'View Real Time Warns')
         href = warns_el.get('href')
         base_url = href.split('edit')[0]
-        print(base_url)
-        print(base_url + 'export?format=xlsx')
-        await self.download('latest.xlsx', base_url + 'export?format=xlsx')
-        file = self.cache/'latest.xlsx'
-
         
+        await self.download('latest.xlsx', base_url + 'export?format=xlsx')
+        key = f'records/source.html'
+        file = self.cache/'latest.xlsx'
+        workbook = openpyxl.load_workbook(file)
+        first_sheet = workbook.worksheets[0]
+        # get column headers
+        headers = [cell.value for cell in first_sheet[1] if cell.value is not None]
+        headers_len = len(headers)
+        for row in first_sheet.iter_rows():
+            key = f'records/'
+            for cell in range(headers_len):
+                this_cell = row[cell]
+                # only process hyperlinks if not an empty row
+                if not all(this_cell.value is None for cell in row):
+                    key += str(this_cell.value)
+                    if this_cell.hyperlink:
+                        doc_id = this_cell.hyperlink.target.split('https://drive.google.com/file/d/')[1].split('?')[0].split('/view')[0]
+                        hyperlink_target = 'https://drive.google.com/uc?export=download&id=' + doc_id
+                        items.append((hyperlink_target, key + '.pdf'))
         index = dict(sorted(items))
         self.cache.write_json('index.json', index, indent=2)
         return index
