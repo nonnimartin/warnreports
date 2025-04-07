@@ -17,7 +17,7 @@ from itertools import batched, chain, filterfalse
 from pathlib import Path
 from re import compile as _r
 from typing import Any, ClassVar, Generator, Iterable, Iterator
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse, urlunparse
 
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -266,8 +266,11 @@ class CA(Scraper):
 
 class CO(Scraper):
 
+    warn_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'    
+
     async def scrape(self):
         self.runner.scrape()
+        index = await self.build_index()
         await asyncio.sleep(0)
         with self.runner.file.open() as file:
             # upstream scraper uses set() for header, which is unordered & breaks hashing.
@@ -282,6 +285,22 @@ class CO(Scraper):
 
     async def clean(self):
         self.cache.delete('normalized.csv')
+    
+    async def build_index(self) -> dict[str, str]:
+        'Mapping from url to cache key'
+        items: deque[tuple[str, str]] = deque()
+        warns_el = bs(self.cache/'main/source.html').find('a', text=lambda text: text == 'View Real Time Warns')
+        href = warns_el.get('href')
+        base_url = href.split('edit')[0]
+        print(base_url)
+        print(base_url + 'export?format=xlsx')
+        await self.download('latest.xlsx', base_url + 'export?format=xlsx')
+        file = self.cache/'latest.xlsx'
+
+        
+        index = dict(sorted(items))
+        self.cache.write_json('index.json', index, indent=2)
+        return index
 
     def statobjs(self):
         yield self.cache.topath('normalized.csv')
