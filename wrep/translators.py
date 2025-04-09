@@ -415,7 +415,7 @@ class CO(Translator):
         industry=['naics'],
         report_id=[],
         naics=['naics'],
-        artifacts=[])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         reported=[
             REWRITE_COMPACT_DATERANGE,

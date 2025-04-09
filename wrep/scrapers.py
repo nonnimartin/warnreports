@@ -273,7 +273,7 @@ class CO(Scraper):
         self.runner.scrape()
         index = await self.build_index()
         for url, key in index.items():
-            await self.download(key, url, missing_only=False)
+            await self.download(key, url, missing_only=True)
             self.artifacts.add(key)
         await asyncio.sleep(0)
         with self.runner.file.open() as file:
@@ -286,39 +286,70 @@ class CO(Scraper):
                 writer.writeheader()
                 writer.writerows(reader)
         self.runner.file.unlink()
-
-    async def clean(self):
-        self.cache.delete('normalized.csv')
     
     async def build_index(self) -> dict[str, str]:
+        skip_list = ['https://drive.google.com/open?id=1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4', 
+                     'https://docs.google.com/spreadsheets/d/1dpKX0g31Fkv8Hs3k3cVCJ19ce4RANNlYSCwpEQA2nrI/edit#gid=0', 
+                     'https://doc-00-58-sheets.googleusercontent.com/export/54bogvaave6cua4cdnls17ksc4/gdfbn4ld6dj2b3fneii78f2g0s/1744062295000/101151664349843394864/*/1HO8Fnm_4xey3Ctt6mYIig61Zx5iNq6_j_dlIaJvBS6o?format=xlsx',
+                     'https://doc-0o-58-sheets.googleusercontent.com/export/54bogvaave6cua4cdnls17ksc4/idvvkdlc8kjko03l8uv38jpo3c/1744062640000/101151664349843394864/*/1ATu4-rs7Rw59UOYcdN-tNZCuyEe3am59Fm8wKqATl7E?format=xlsx',
+                     'https://drive.google.com/uc?export=download&id=1CL',
+                     'https://drive.usercontent.google.com/download?id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
+                     'https://drive.google.com/uc?export=download&id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri'
+                     ]
         'Mapping from url to cache key'
         items: deque[tuple[str, str]] = deque()
+        spreadsheets = list()
+        # add current warns to list
         warns_el = bs(self.cache/'main/source.html').find('a', text=lambda text: text == 'View Real Time Warns')
-        href = warns_el.get('href')
-        base_url = href.split('edit')[0]
+        spreadsheets.append(warns_el)
+        # add archived warns to list
+        archived_warns_el = bs(self.cache/'main/source.html').find(class_='ckeditor-accordion')
+        archived_warns = archived_warns_el.find_all('a')
+        spreadsheets += archived_warns
+
+        for sheet in spreadsheets:
+            href = sheet.get('href')
+            base_url = href.split('edit')[0]
+            file_name = sheet.text + '.xlsx'
+            # download artifacts
+            if base_url in skip_list: 
+                continue
+            await self.download(file_name, base_url + 'export?format=xlsx')
+            file = self.cache/file_name
+            workbook = openpyxl.load_workbook(file)
+            first_sheet = workbook.worksheets[0]
+            # get column headers
+            headers = [cell.value for cell in first_sheet[1] if cell.value is not None]
+            headers_len = len(headers)
+            for row in first_sheet.iter_rows():
+                key = f'records/'
+                for cell in range(headers_len):
+                    this_cell = row[cell]
+                    # only process hyperlinks if not an empty row
+                    if not all(this_cell.value is None for cell in row):
+                        if not len(key + str(this_cell.value)) >= 200: key += str(this_cell.value)
+                        if this_cell.hyperlink:
+                            target = this_cell.hyperlink.target
+                            hyperlink_target = ''
+                            # handle Google docs artifacts urls differently
+                            if target.startswith('https://docs.google.com/document/d/'):
+                                hyperlink_target = target
+                            elif target.startswith('https://drive.google.com/open'):
+                                doc_id = target.split('https://drive.google.com/open?id=')[1]
+                                hyperlink_target = 'https://drive.google.com/uc?export=download&id=' + doc_id
+                            else:
+                                doc_id = target.split('https://drive.google.com/file/d/')[1].split('?')[0].split('/view')[0]
+                                hyperlink_target = 'https://drive.google.com/uc?export=download&id=' + doc_id
+                            
+                            if hyperlink_target in skip_list: continue
+                            items.append((hyperlink_target, key + '.pdf'))
         
-        await self.download('latest.xlsx', base_url + 'export?format=xlsx')
-        key = f'records/source.html'
-        file = self.cache/'latest.xlsx'
-        workbook = openpyxl.load_workbook(file)
-        first_sheet = workbook.worksheets[0]
-        # get column headers
-        headers = [cell.value for cell in first_sheet[1] if cell.value is not None]
-        headers_len = len(headers)
-        for row in first_sheet.iter_rows():
-            key = f'records/'
-            for cell in range(headers_len):
-                this_cell = row[cell]
-                # only process hyperlinks if not an empty row
-                if not all(this_cell.value is None for cell in row):
-                    key += str(this_cell.value)
-                    if this_cell.hyperlink:
-                        doc_id = this_cell.hyperlink.target.split('https://drive.google.com/file/d/')[1].split('?')[0].split('/view')[0]
-                        hyperlink_target = 'https://drive.google.com/uc?export=download&id=' + doc_id
-                        items.append((hyperlink_target, key + '.pdf'))
         index = dict(sorted(items))
         self.cache.write_json('index.json', index, indent=2)
         return index
+
+    async def clean(self):
+        self.cache.delete('latest.html', 'index.json')
 
     def statobjs(self):
         yield self.cache.topath('normalized.csv')
@@ -327,6 +358,7 @@ class CO(Scraper):
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
         with self.cache.open('normalized.csv') as file:
             yield csv.DictReader(file)
+
 
 class CT(Scraper):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
