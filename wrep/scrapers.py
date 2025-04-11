@@ -270,22 +270,37 @@ class CO(Scraper):
     warn_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'    
 
     async def scrape(self):
-        self.runner.scrape()
-        index = await self.build_index()
-        for url, key in index.items():
-            await self.download(key, url, missing_only=True)
-            self.artifacts.add(key)
-        await asyncio.sleep(0)
-        with self.runner.file.open() as file:
-            # upstream scraper uses set() for header, which is unordered & breaks hashing.
-            headers = sorted(next(csv.reader(file)))
-        with self.runner.file.open() as file:
-            reader = csv.DictReader(file)
-            with self.cache.open('normalized.csv', 'w') as file:
-                writer = csv.DictWriter(file, fieldnames=headers)
-                writer.writeheader()
-                writer.writerows(reader)
-        self.runner.file.unlink()
+            self.runner.scrape()
+            index = await self.build_index()
+            inv_index = {v: k for k, v in index.items()}
+            for url, key in index.items():
+                await self.download(key, url, missing_only=True)
+                self.artifacts.add(key)
+            await asyncio.sleep(0)
+            with self.runner.file.open() as file:
+                # upstream scraper uses set() for header, which is unordered & breaks hashing.
+                headers = sorted(next(csv.reader(file)))
+                headers += ['artifacts_json']
+            with self.runner.file.open() as file:
+                reader = csv.DictReader(file)
+                with self.cache.open('normalized.csv', 'w') as file:
+                    writer = csv.DictWriter(file, fieldnames=headers)
+                    writer.writeheader()
+                    for row in reader:
+                        this_key = self.generate_key(row)
+                        artifacts_json = inv_index.get(this_key)
+                        row['artifacts_json'] = artifacts_json
+                        writer.writerow(row)
+            self.runner.file.unlink()
+
+    def generate_key(self, row, prefix="key_", max_length=64) -> str:
+        # Convert all values to strings and concatenate
+        row_str = ''.join(str(value) for value in row.values())
+        # Remove whitespace (optional)
+        row_str = ''.join(row_str.split())
+        # Hash and truncate
+        hash_str = hashlib.sha256(row_str.encode()).hexdigest()
+        return (hash_str)[:max_length] + '.pdf'
     
     async def build_index(self) -> dict[str, str]:
         skip_list = ['https://drive.google.com/open?id=1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4', 
@@ -294,11 +309,54 @@ class CO(Scraper):
                      'https://doc-0o-58-sheets.googleusercontent.com/export/54bogvaave6cua4cdnls17ksc4/idvvkdlc8kjko03l8uv38jpo3c/1744062640000/101151664349843394864/*/1ATu4-rs7Rw59UOYcdN-tNZCuyEe3am59Fm8wKqATl7E?format=xlsx',
                      'https://drive.google.com/uc?export=download&id=1CL',
                      'https://drive.usercontent.google.com/download?id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
-                     'https://drive.google.com/uc?export=download&id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri'
+                     'https://drive.google.com/uc?export=download&id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
+                     'https://drive.usercontent.google.com/download?id=1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
+                     'https://drive.google.com/uc?export=download&id=1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
+                     'See note below.',
+                     'None'
                      ]
+
+        def excel_to_dict_with_hyperlinks(input_excel_path) -> list:
+            wb = openpyxl.load_workbook(input_excel_path)
+            sheet = wb.worksheets[0]
+
+            # Get and transform headers
+            headers = []
+            # Deal with excel spreadsheets with misplaced headers
+            if input_excel_path == '/build/scrape/co/View 2017 WARN List.xlsx':
+                headers = ['Company Name', 'Layoff Total', 'Workforce Region', 'WARN Date', 'Reason for Layoff']
+            elif input_excel_path == '/build/scrape/co/View 2019 WARN List.xlsx':
+                headers = ['Company Name',	'Layoff Total', 'Workforce Local Area', 'WARN Date', 'Reason for Layoff', 'Occupations	Layoff Date(s)']
+            else:
+                for cell in sheet[1]:
+                    header = cell.value
+                    if header == 'WARN Letter':
+                        header = 'artifacts_json'
+                    headers.append(header)
+
+            results = []
+            for row in sheet.iter_rows(min_row=2):
+                row_dict = {}
+                for idx, cell in enumerate(row):
+                    header = headers[idx] if idx < len(headers) else f'Column_{idx+1}'
+                    cell_val = cell.value
+
+                    if cell_val and type(cell_val) is str:
+                        if cell.value.startswith('=HYPERLINK('):
+                            cell_val = re.search(r'=HYPERLINK\("([^"]+)"', cell_val).group(1)
+                    cells = cell.hyperlink.target if cell.hyperlink else cell_val
+                    if cells == header:
+                        continue
+                    row_dict[header] = cells
+                if all(value is None for value in row_dict.values()): continue
+                results.append(row_dict)
+            
+            return results
+
         'Mapping from url to cache key'
         items: deque[tuple[str, str]] = deque()
         spreadsheets = list()
+
         # add current warns to list
         warns_el = bs(self.cache/'main/source.html').find('a', text=lambda text: text == 'View Real Time Warns')
         spreadsheets.append(warns_el)
@@ -315,34 +373,32 @@ class CO(Scraper):
             if base_url in skip_list: 
                 continue
             await self.download(file_name, base_url + 'export?format=xlsx')
-            file = self.cache/file_name
-            workbook = openpyxl.load_workbook(file)
-            first_sheet = workbook.worksheets[0]
-            # get column headers
-            headers = [cell.value for cell in first_sheet[1] if cell.value is not None]
-            headers_len = len(headers)
-            for row in first_sheet.iter_rows():
+
+            csv_sheet = excel_to_dict_with_hyperlinks(str(self.cache/file_name))
+            
+            for row in csv_sheet:
+                if 'Company Name' not in row.keys():
+                    continue
+                if row['Company Name'] == None:
+                    continue
                 key = f'records/'
-                for cell in range(headers_len):
-                    this_cell = row[cell]
-                    # only process hyperlinks if not an empty row
-                    if not all(this_cell.value is None for cell in row):
-                        if not len(key + str(this_cell.value)) >= 200: key += str(this_cell.value)
-                        if this_cell.hyperlink:
-                            target = this_cell.hyperlink.target
-                            hyperlink_target = ''
-                            # handle Google docs artifacts urls differently
-                            if target.startswith('https://docs.google.com/document/d/'):
-                                hyperlink_target = target
-                            elif target.startswith('https://drive.google.com/open'):
-                                doc_id = target.split('https://drive.google.com/open?id=')[1]
-                                hyperlink_target = 'https://drive.google.com/uc?export=download&id=' + doc_id
-                            else:
-                                doc_id = target.split('https://drive.google.com/file/d/')[1].split('?')[0].split('/view')[0]
-                                hyperlink_target = 'https://drive.google.com/uc?export=download&id=' + doc_id
-                            
-                            if hyperlink_target in skip_list: continue
-                            items.append((hyperlink_target, key + '.pdf'))
+                if 'artifacts_json' not in row.keys():
+                    row['artifacts_json'] = None
+                target = str(row['artifacts_json'])
+
+                key += self.generate_key(row)
+
+                if target != None:
+                    # handle Google docs artifacts urls differently
+                    if target.startswith('https://drive.google.com/open'):
+                        doc_id = target.split('https://drive.google.com/open?id=')[1]
+                        target = 'https://drive.google.com/uc?export=download&id=' + doc_id
+                    elif target.startswith('https://drive.google.com/file/d/'):
+                        doc_id = target.split('https://drive.google.com/file/d/')[1].split('?')[0].split('/view')[0]
+                        target = 'https://drive.google.com/uc?export=download&id=' + doc_id
+
+                if target in skip_list: continue
+                items.append((target, key))
         
         index = dict(sorted(items))
         self.cache.write_json('index.json', index, indent=2)

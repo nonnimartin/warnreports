@@ -404,6 +404,7 @@ class CA(Translator):
 
 class CO(Translator):
     default_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'
+    values_hash_exclude = ['artifacts_json']
     fieldsmap = dict(
         company=['company'],
         reported=['received_date', 'notice_date'],
