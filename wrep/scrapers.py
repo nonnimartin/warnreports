@@ -270,37 +270,112 @@ class CO(Scraper):
     warn_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'    
 
     async def scrape(self):
-            self.runner.scrape()
-            index = await self.build_index()
-            inv_index = {v: k for k, v in index.items()}
-            for url, key in index.items():
-                await self.download(key, url, missing_only=True)
-                self.artifacts.add(key)
-            await asyncio.sleep(0)
-            with self.runner.file.open() as file:
-                # upstream scraper uses set() for header, which is unordered & breaks hashing.
-                headers = sorted(next(csv.reader(file)))
-                headers += ['artifacts_json']
-            with self.runner.file.open() as file:
-                reader = csv.DictReader(file)
-                with self.cache.open('normalized.csv', 'w') as file:
-                    writer = csv.DictWriter(file, fieldnames=headers)
-                    writer.writeheader()
-                    for row in reader:
-                        this_key = self.generate_key(row)
-                        artifacts_json = inv_index.get(this_key)
-                        row['artifacts_json'] = artifacts_json
-                        writer.writerow(row)
-            self.runner.file.unlink()
+        self.runner.scrape()
+        index = await self.build_index()
+        inv_index = {v: k for k, v in index.items()}
+        for url, key in index.items():
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
+        await asyncio.sleep(0)
+        
+        with self.runner.file.open() as file:
+            original_headers = sorted(next(csv.reader(file)))
+            normalized_headers = self.normalize_headers(original_headers)
+            normalized_headers.append('artifacts_json')
+            
+            header_map = dict(zip(original_headers, normalized_headers))
+            
+        with self.runner.file.open() as file:
+            reader = csv.DictReader(file)
+            with self.cache.open('normalized.csv', 'w') as out_file:
+                writer = csv.DictWriter(out_file, fieldnames=normalized_headers)
+                writer.writeheader()
+                
+                for row in reader:
+                    normalized_row = {}
+                    for orig_key, value in row.items():
+                        new_key = header_map.get(orig_key, orig_key)
+                        normalized_row[new_key] = value
+                    # Add artifacts_json
+                    this_key = self.generate_key(normalized_row)
+                    if this_key in inv_index.keys(): 
+                        normalized_row['artifacts_json'] = this_key
+                    writer.writerow(normalized_row)
+        self.runner.file.unlink()
 
-    def generate_key(self, row, prefix="key_", max_length=64) -> str:
-        # Convert all values to strings and concatenate
-        row_str = ''.join(str(value) for value in row.values())
-        # Remove whitespace (optional)
-        row_str = ''.join(row_str.split())
-        # Hash and truncate
-        hash_str = hashlib.sha256(row_str.encode()).hexdigest()
-        return (hash_str)[:max_length] + '.pdf'
+    def remove_invisible_chars(text: str) -> str:
+        if not isinstance(text, str):
+            return str(text)
+        
+        invisible_re = re.compile(r'[\x00-\x1F\x7F\xA0\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F\u2060\u3000\uFEFF]')
+        
+        return invisible_re.sub('', text)
+
+    def generate_key(self, row, max_length=64) -> str:
+
+        try:
+            layoffs = int(row.get('total layoffs', 0))
+        except (ValueError, TypeError):
+            layoffs = 0
+        
+        warn_date = row.get('warn date')
+        if isinstance(warn_date, datetime):
+            warn_date = warn_date.strftime('%m-%d-%Y')
+        elif warn_date and isinstance(warn_date, str):
+            try:
+                if '-' in warn_date and len(warn_date.split('-')[0]) == 4:
+                    parsed_date = datetime.strptime(warn_date, '%Y-%m-%d')
+                elif '/' in warn_date:
+                    try:
+                        parsed_date = datetime.strptime(warn_date, '%m/%d/%Y')
+                    except ValueError:
+                        parsed_date = datetime.strptime(warn_date, '%m/%d/%y')
+                else:
+                    parsed_date = datetime.strptime(warn_date, '%m-%d-%Y')
+                warn_date = parsed_date.strftime('%m-%d-%Y')
+            except (ValueError, TypeError):
+                warn_date = ''.join(c for c in warn_date if c.isdigit() or c == '-')
+                parts = warn_date.split('-')
+                if len(parts) == 3:
+                    warn_date = f"{parts[0].zfill(2)}-{parts[1].zfill(2)}-{parts[2]}"
+        
+        if not warn_date:
+            warn_date = '00-00-0000'
+
+        company = str(row.get('company', '')).replace('-', '').replace(' ', '')
+        row_str = f"{company}-{layoffs}-{warn_date}"
+        
+        # Remove all whitespace and problematic characters
+        clean_str = ''.join(c for c in row_str if c.isprintable()).lower()
+        
+        # Ensure we don't exceed max length (accounting for prefix/suffix)
+        key_body = clean_str[:max_length - 15]  # 15 = len('records/') + len('.pdf')
+        return f'records/{key_body}.pdf'
+    
+    def normalize_headers(self, headers: list[str]) -> list[str]:
+        key_mapping = {
+            'company name': 'company',
+            'company': 'company',
+            'total layoffs': 'total layoffs',
+            'layoff total': 'total layoffs',
+            'co layoffs': 'total layoffs',
+            'jobs': 'total layoffs',
+            'warn date': 'warn date',
+            'notice_date': 'warn date',
+            'received': 'warn date',
+            'warn letter': 'artifacts_json'
+        }
+        
+        normalized = []
+        for header in headers:
+            if header is None:
+                continue
+                
+            clean_key = str(header).strip().lower()
+            normalized_header = key_mapping.get(clean_key, clean_key)
+            normalized.append(normalized_header)
+        
+        return normalized
     
     async def build_index(self) -> dict[str, str]:
         skip_list = ['https://drive.google.com/open?id=1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4', 
@@ -312,44 +387,48 @@ class CO(Scraper):
                      'https://drive.google.com/uc?export=download&id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
                      'https://drive.usercontent.google.com/download?id=1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
                      'https://drive.google.com/uc?export=download&id=1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
+                     '513 Hotel Operating',
                      'See note below.',
                      'None'
                      ]
 
-        def excel_to_dict_with_hyperlinks(input_excel_path) -> list:
-            wb = openpyxl.load_workbook(input_excel_path)
+        def excel_to_dict_with_hyperlinks(input_excel_path):
+            wb = openpyxl.load_workbook(input_excel_path, data_only=False)
             sheet = wb.worksheets[0]
-
-            # Get and transform headers
-            headers = []
-            # Deal with excel spreadsheets with misplaced headers
-            if input_excel_path == '/build/scrape/co/View 2017 WARN List.xlsx':
-                headers = ['Company Name', 'Layoff Total', 'Workforce Region', 'WARN Date', 'Reason for Layoff']
-            elif input_excel_path == '/build/scrape/co/View 2019 WARN List.xlsx':
-                headers = ['Company Name',	'Layoff Total', 'Workforce Local Area', 'WARN Date', 'Reason for Layoff', 'Occupations	Layoff Date(s)']
-            else:
-                for cell in sheet[1]:
-                    header = cell.value
-                    if header == 'WARN Letter':
-                        header = 'artifacts_json'
-                    headers.append(header)
-
+            headers = [cell.value for cell in sheet[1]]
+            headers = self.normalize_headers(headers)
+            
             results = []
             for row in sheet.iter_rows(min_row=2):
                 row_dict = {}
+                
                 for idx, cell in enumerate(row):
-                    header = headers[idx] if idx < len(headers) else f'Column_{idx+1}'
-                    cell_val = cell.value
-
-                    if cell_val and type(cell_val) is str:
-                        if cell.value.startswith('=HYPERLINK('):
-                            cell_val = re.search(r'=HYPERLINK\("([^"]+)"', cell_val).group(1)
-                    cells = cell.hyperlink.target if cell.hyperlink else cell_val
-                    if cells == header:
+                    # Skip extra columns without headers
+                    if idx >= len(headers):  
                         continue
-                    row_dict[header] = cells
-                if all(value is None for value in row_dict.values()): continue
-                results.append(row_dict)
+                        
+                    header = headers[idx]
+                    cell_value = None
+                    
+                    # First try to get hyperlink URL
+                    if cell.hyperlink:
+                        cell_value = cell.hyperlink.target
+                    # Fallback to check for HYPERLINK formula
+                    elif isinstance(cell.value, str) and cell.value.startswith('=HYPERLINK('):
+                        match = re.search(r'=HYPERLINK\(\s*"([^"]+)"', cell.value)
+                        if match:
+                            cell_value = match.group(1)
+                    
+                    # If no hyperlink found, use cell value
+                    if cell_value is None:
+                        cell_value = cell.value
+                    
+                    if cell_value is not None and str(cell_value).strip() != header:
+                        row_dict[header] = cell_value
+                
+                # Only add row if it has data
+                if row_dict:
+                    results.append(row_dict)
             
             return results
 
@@ -377,11 +456,11 @@ class CO(Scraper):
             csv_sheet = excel_to_dict_with_hyperlinks(str(self.cache/file_name))
             
             for row in csv_sheet:
-                if 'Company Name' not in row.keys():
+
+                if 'company' not in row.keys():
                     continue
-                if row['Company Name'] == None:
-                    continue
-                key = f'records/'
+
+                key = f''
                 if 'artifacts_json' not in row.keys():
                     row['artifacts_json'] = None
                 target = str(row['artifacts_json'])
