@@ -269,7 +269,7 @@ class CO(Scraper):
 
     warn_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'    
 
-    async def scrape(self):
+    async def scrape(self) -> None:
         self.runner.scrape()
         index = await self.build_index()
         inv_index = {v: k for k, v in index.items()}
@@ -392,7 +392,7 @@ class CO(Scraper):
                      'None'
                      ]
 
-        def excel_to_dict_with_hyperlinks(input_excel_path):
+        def excel_to_dict_with_hyperlinks(input_excel_path: str) -> dict[str,str]:
             wb = openpyxl.load_workbook(input_excel_path, data_only=False)
             sheet = wb.worksheets[0]
             headers = [cell.value for cell in sheet[1]]
