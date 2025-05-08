@@ -298,7 +298,7 @@ class CO(Scraper):
                         normalized_row[new_key] = value
                     # Add artifacts_json
                     this_key = self.generate_key(normalized_row)
-                    
+
                     if this_key in inv_index.keys(): 
                         normalized_row['artifacts_json'] = json.dumps({this_key: inv_index[this_key]})
                     writer.writerow(normalized_row)
@@ -355,6 +355,7 @@ class CO(Scraper):
     
     def normalize_headers(self, headers: list[str]) -> list[str]:
         key_mapping = {
+            '5': 'company',
             'company name': 'company',
             'company': 'company',
             'total layoffs': 'total layoffs',
@@ -457,7 +458,6 @@ class CO(Scraper):
             csv_sheet = excel_to_dict_with_hyperlinks(str(self.cache/file_name))
             
             for row in csv_sheet:
-
                 if 'company' not in row.keys():
                     continue
 
