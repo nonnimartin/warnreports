@@ -17,7 +17,7 @@ from itertools import batched, chain, filterfalse
 from pathlib import Path
 from re import compile as _r
 from typing import Any, ClassVar, Generator, Iterable, Iterator
-from urllib.parse import parse_qs, unquote_plus, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter, Retry
