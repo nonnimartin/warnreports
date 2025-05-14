@@ -350,14 +350,13 @@ class CO(Scraper):
         clean_str = ''.join(c for c in row_str if c.isprintable()).lower()
         
         # Ensure we don't exceed max length (accounting for prefix/suffix)
-        key_body = clean_str[:max_length - 15]  # 15 = len('records/') + len('.pdf')
+        key_body = clean_str[:max_length - 15]
         return f'records/{key_body}.pdf'
     
     def normalize_headers(self, headers: list[str]) -> list[str]:
         key_mapping = {
-            '5': 'company',
+            'name': 'company',
             'company name': 'company',
-            'company': 'company',
             'total layoffs': 'total layoffs',
             'layoff total': 'total layoffs',
             'co layoffs': 'total layoffs',
