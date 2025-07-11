@@ -347,7 +347,7 @@ class CO(Scraper):
         row_str = f"{company}-{layoffs}-{warn_date}"
         
         # Remove all whitespace and problematic characters
-        clean_str = ''.join(c for c in row_str if c.isprintable()).lower()
+        clean_str = ''.join(c for c in row_str if c.isprintable()).lower().replace('/', '-')
         
         # Ensure we don't exceed max length (accounting for prefix/suffix)
         key_body = clean_str[:max_length - 15]
@@ -355,6 +355,7 @@ class CO(Scraper):
     
     def normalize_headers(self, headers: list[str]) -> list[str]:
         key_mapping = {
+            '': 'company',
             'name': 'company',
             'company name': 'company',
             'total layoffs': 'total layoffs',
@@ -397,6 +398,7 @@ class CO(Scraper):
             wb = openpyxl.load_workbook(input_excel_path, data_only=False)
             sheet = wb.worksheets[0]
             headers = [cell.value for cell in sheet[1]]
+            print('got here for', input_excel_path)
             headers = self.normalize_headers(headers)
             
             results = []
