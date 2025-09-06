@@ -6,11 +6,16 @@ from pathlib import Path
 from typing import Iterator
 
 import openpyxl
+from openpyxl.cell import Cell as Cell
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .. import utils
+
+logger = utils.get_logger('xlsx')
 
 @wraps(openpyxl.load_workbook)
 def load_workbook(file: Path, read_only=True, **kw):
+    logger.debug(f'Loading {file.name}')
     return openpyxl.load_workbook(file, read_only=read_only, **kw)
 
 def extract_workbook(file: Path, **kw) -> Iterator[dict[str, str]]:
