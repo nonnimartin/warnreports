@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 from argparse import ArgumentParser, _SubParsersAction
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Iterable
 
 from .. import utils
+from ..models import StateCode
 
 type AP = ArgumentParser
 type SubParsers = _SubParsersAction[ArgumentParser]
@@ -151,3 +152,23 @@ class AppCommand(BaseCommand):
     def add_arguments(cls, parser: AP):
         parser.add_argument('--log-level', default=None)
         super().add_arguments(parser)
+
+
+def resolve_statesopt(statesopt: Iterable[StateCode], allstates: Iterable[StateCode]|None = None) -> list[StateCode]:
+    if allstates is None:
+        from ..translators import TranslationFactory
+        allstates = TranslationFactory.translators
+    states: set[StateCode] = set()
+    skips: set[StateCode] = set()
+    for opt in map(str.upper, statesopt):
+        if opt.startswith('^'):
+            skips.add(opt[1:])
+        else:
+            states.add(opt)
+    if not states:
+        states.update(allstates)
+    states.difference_update(skips)
+    bad = states.difference(allstates)
+    if bad:
+        raise ValueError(f'Invalid states: {sorted(bad)}')
+    return sorted(states)
