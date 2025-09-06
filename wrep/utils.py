@@ -56,6 +56,11 @@ def deltaparse(value: Delta, default_unit: str|None = None) -> timedelta:
     if isinstance(value, timedelta):
         return value
     value = str(value)
+    if value.startswith('-'):
+        mult = -1
+        value = value[1:]
+    else:
+        mult = 1
     match = DELTA_PAT.match(value)
     if match:
         kw = {
@@ -65,7 +70,7 @@ def deltaparse(value: Delta, default_unit: str|None = None) -> timedelta:
         if not default_unit:
             raise ValueError(value)
         kw = {default_unit: float(value)}
-    return timedelta(**kw)
+    return mult * timedelta(**kw)
 
 def deltaopt(default_unit: str):
     timedelta(**{default_unit: 1})

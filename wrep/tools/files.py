@@ -19,8 +19,8 @@ clean_filename_subs = [
 ]
 clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
 
-def clean_filename[T](value: str, default: T = None) -> str|T:
-    parts = value.rsplit('.', 1)
+def clean_filename[T](value: str, default: T = None, noext: bool = False) -> str|T:
+    parts = [value] if noext else value.rsplit('.', 1)
     clean = utils.rewrite_all(parts[0], clean_filename_subs)
     clean = clean.strip('_-')
     if clean:
