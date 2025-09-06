@@ -12,7 +12,7 @@ from .. import settings, utils
 from ..models import DataModel
 from ..orm import *
 from ..orm import Base, MapReduceBase, dump_update, load_naics, select
-from .base import AppCommand, BaseCommand, FuncCommand
+from .base import AppCommand, BaseCommand, FuncCommand, resolve_statesopt
 
 logger = utils.get_logger('orm')
 
@@ -151,56 +151,70 @@ class ArtifactsCommand(BaseCommand):
                 dest='change',
                 help='Check only, do not make changes')
             arg(
-                'dir',
-                nargs='?',
+                '--dir', '-d',
                 type=Path,
-                help=f'Alternate artifacts dir')
+                help=f'Alternate artifacts base dir')
+            arg(
+                'states',
+                nargs='*',
+                metavar='state',
+                help='Restrict to a specific states')
             super().add_arguments(parser)
 
         def setup(self, opts):
             super().setup(opts)
+            self.states = resolve_statesopt(opts.states)
+            if not self.states:
+                raise ValueError(f'No states selected')
             self.root: Path = opts.dir or settings.ARTIFACTS_DIR
+            self.change: bool = opts.change
 
     class Prune(Base):
         'Delete orphan artifacts from file system'
 
         def run(self):
-            it = glob.iglob('**/*.*', root_dir=self.root, recursive=True)
-            with SessionLocal() as session:
-                for path in it:
-                    file = self.root/path
-                    if path.endswith('.sha1'):
-                        logger.info(f'Cruft {path=}')
-                        if self.opts.change:
-                            file.unlink()
-                        continue
-                    id = Artifact.path_to_id(path)
-                    try:
-                        session.get(Artifact, id)
-                    except NoResultFound:
-                        logger.info(f'Orphan {path=} {id=}')
-                        if self.opts.change:
-                            file.unlink()
-                            utils.digestfile(file).unlink(missing_ok=True)
-                    else:
-                        logger.debug(f'Found {path=} {id=}')
+            for state in self.states:
+                logger.debug(f'Checking {state=}')
+                it = glob.iglob(f'{state.lower()}/**/*.*', root_dir=self.root, recursive=True)
+                with SessionLocal() as session:
+                    for path in it:
+                        logger.debug(f'Checking {path=}')
+                        file = self.root/path
+                        if path.endswith('.sha1'):
+                            logger.info(f'Cruft {path=}')
+                            if self.change:
+                                file.unlink()
+                            continue
+                        id = Artifact.path_to_id(path)
+                        try:
+                            session.get_one(Artifact, id)
+                        except NoResultFound:
+                            logger.info(f'Orphan {path=} {id=}')
+                            if self.change:
+                                file.unlink()
+                                utils.digestfile(file).unlink(missing_ok=True)
+                        else:
+                            logger.debug(f'Found {path=} {id=}')
 
     class Update(Base):
         'Update artifacts in DB from files'
 
         def run(self):
-            stmt = select(Artifact)
             with SessionLocal() as session:
-                for art in session.scalars(stmt):
-                    file = self.root/art.path
-                    if file.exists():
-                        logger.debug(f'Found path={art.path} id={art.id}')
-                        if art.self_update(root=self.root):
-                            logger.info(f'Updated path={art.path} id={art.id}')
-                            session.add(art)
-                    else:
-                        logger.warning(f'Missing path={art.path} id={art.id}')
-                if self.opts.change:
+                for state in self.states:
+                    logger.debug(f'Updating {state=}')
+                    stmt = (select(Artifact)
+                        .where(Artifact.path.startswith(f'{state.lower()}/')))
+                    for art in session.scalars(stmt):
+                        file = self.root/art.path
+                        if file.exists():
+                            logger.debug(f'Found path={art.path} id={art.id}')
+                            if art.self_update(root=self.root):
+                                logger.info(f'Updated path={art.path} id={art.id}')
+                                session.add(art)
+                        else:
+                            logger.warning(f'Missing path={art.path} id={art.id}')
+                if self.change:
                     session.commit()
                 else:
                     session.rollback()

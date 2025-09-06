@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .base import BaseCommand
 from . import etl, frontend, migrations, orm, pipeline, search
+from .base import BaseCommand
 
 __all__ = [
     'Command',
