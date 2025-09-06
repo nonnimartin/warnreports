@@ -8,7 +8,7 @@ from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
-from pydantic import BaseModel as DataModel
+from pydantic import BaseModel
 from pydantic import (BeforeValidator, ConfigDict, Field, HttpUrl,
                       NonNegativeFloat, NonNegativeInt, PlainSerializer,
                       StringConstraints, field_serializer, model_validator)
@@ -65,7 +65,7 @@ def utcreplace(dt: datetime|None) -> datetime|None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
-class DataModel(DataModel):
+class DataModel(BaseModel):
     pass
 
 class ReportData(DataModel):

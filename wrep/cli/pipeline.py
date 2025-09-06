@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .. import Stage, settings, utils
-from ..translators import TranslationFactory
-from .base import AppCommand
+from .base import AppCommand, resolve_statesopt
 
 logger = utils.get_logger('pipeline')
 
@@ -46,7 +45,7 @@ class Command(AppCommand):
 
     Available States
     ----------------
-    """ + ' '.join(sorted(TranslationFactory.translators))
+    """ + ' '.join(resolve_statesopt([]))
 
     usage = '{prog} [OPTIONS] <stages> [state ...]'
 
@@ -62,7 +61,8 @@ class Command(AppCommand):
             metavar='state',
             help=(
                 'Optionally specify states as additional arguments. '
-                'If not specified, include all states'))
+                'If not specified, include all states. To exclude a '
+                'state, prefix with ^'))
         arg('--clean', '-c',
             action='store_true',
             help='Clean each stage before running')
@@ -133,7 +133,9 @@ class Command(AppCommand):
         from .. import search
         from ..backends import etl
         from ..pipeline import PipelineRunner
-        opts.states = opts.states or sorted(TranslationFactory.translators)
+        opts.states = resolve_statesopt(opts.states)
+        if not opts.states:
+            raise ValueError(f'No states selected')
         runner_opts = dict(vars(opts))
         self.idfile: Path|None = runner_opts.pop('idfile')
         runner_opts['context'] = {

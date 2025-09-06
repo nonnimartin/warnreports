@@ -13,9 +13,9 @@ from openpyxl.worksheet.worksheet import Worksheet
 def load_workbook(file: Path, read_only=True, **kw):
     return openpyxl.load_workbook(file, read_only=read_only, **kw)
 
-def extract_workbook(file: Path) -> Iterator[dict[str, str]]:
-    worksheet = load_workbook(file, read_only=True).worksheets[0]
-    return extract_worksheet(worksheet)
+def extract_workbook(file: Path, **kw) -> Iterator[dict[str, str]]:
+    ws = load_workbook(file, **kw).worksheets[0]
+    return extract_worksheet(ws)
 
 def extract_worksheet(ws: Worksheet) -> Iterator[dict[str, str]]:
     it = ([cell.value for cell in row] for row in ws.rows)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from bs4 import BeautifulSoup as Soup
+from bs4 import BeautifulSoup as SoupBase
 from bs4.element import PageElement, ResultSet, Tag
 
 
@@ -14,7 +14,7 @@ def bs(markup: Any, features='html.parser', **kw):
 
 if TYPE_CHECKING:
     from typing import overload
-    class Soup(Soup):
+    class Soup(SoupBase):
         @overload
         def find_all(
             self,
@@ -24,3 +24,5 @@ if TYPE_CHECKING:
             string:str|Any=...,
             limit:int|None=...,
             **kwargs) -> ResultSet[Soup|PageElement|Tag]: ...
+else:
+    Soup = SoupBase
