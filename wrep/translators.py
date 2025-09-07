@@ -407,7 +407,7 @@ class CO(Translator):
     fieldsmap = dict(
         company=['company'],
         reported=['received_date', 'notice_date'],
-        location=['city'],
+        location=['city', 'location'],
         employees=['jobs'],
         starting=['begin_date'],
         action=['reason'],
@@ -415,7 +415,8 @@ class CO(Translator):
         industry=['naics'],
         report_id=[],
         naics=['naics'],
-        artifacts=[])
+        artifacts=['artifacts_json'])
+    values_hash_exclude = ['artifacts_json', 'row_key']
     rewrites = dict(
         reported=[
             REWRITE_COMPACT_DATERANGE,
@@ -432,7 +433,10 @@ class CO(Translator):
         industry=[
             (_r(r'^[\d\s,]+: (.*)$'), r'\1'),
             (_r(r'Practioners'), 'Practitioners'),
-        ]
+        ],
+        location=[
+            (_r(r'^\d+$'), ''),
+        ],
     )
 
 class CT(Translator):
