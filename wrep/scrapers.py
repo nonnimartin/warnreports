@@ -28,12 +28,11 @@ from typing_extensions import Buffer
 from . import Stage, settings, utils
 from .backends import webdrivers
 from .models import ScraperOpts, StateCode
-from .tools import dom, matx, pdfs, xlsx
+from .tools import dom, matx, pdfs, strs, xlsx
 from .tools.dom import Soup, bs
 from .tools.files import (ArtifactStore, FileCache, clean_filename, excachectx,
                           jsoncache)
 from .utils import wrapcontext
-import openpyxl
 
 scrapers: dict[str, type[Scraper]] = {}
 
@@ -266,236 +265,216 @@ class CA(Scraper):
         return index
 
 class CO(Scraper):
-
-    warn_url = 'https://cdle.colorado.gov/employers/layoff-separations/layoff-warn-list'    
+    sheets_urlmap: ClassVar[dict[str, str]] = {
+        'https://drive.google.com/open?id=1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4':
+            'https://docs.google.com/spreadsheets/d/1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4'}
+    rowkey_maxlen: ClassVar[int] = 1024
+    artifacts_minyear: ClassVar[int] = 2020
 
     async def scrape(self) -> None:
         self.runner.scrape()
-        index = await self.build_index()
-        inv_index = {v: k for k, v in index.items()}
-        for url, key in index.items():
-            await self.download(key, url, missing_only=True)
-            self.artifacts.add(key)
         await asyncio.sleep(0)
-        
+        # Rewrite CSV
         with self.runner.file.open() as file:
-            original_headers = sorted(next(csv.reader(file)))
-            normalized_headers = self.normalize_headers(original_headers)
-            normalized_headers.append('artifacts_json')
-            
-            header_map = dict(zip(original_headers, normalized_headers))
-            
+            # upstream scraper uses set() for header, which is unordered & breaks hashing.
+            headers = sorted(next(csv.reader(file)))
         with self.runner.file.open() as file:
             reader = csv.DictReader(file)
-            with self.cache.open('normalized.csv', 'w') as out_file:
-                writer = csv.DictWriter(out_file, fieldnames=normalized_headers)
+            with self.cache.open('normalized.csv', 'w') as file:
+                writer = csv.DictWriter(file, fieldnames=headers)
                 writer.writeheader()
-                
-                for row in reader:
-                    normalized_row = {}
-                    for orig_key, value in row.items():
-                        new_key = header_map.get(orig_key, orig_key)
-                        normalized_row[new_key] = value
-                    # Add artifacts_json
-                    this_key = self.generate_key(normalized_row)
-
-                    if this_key in inv_index.keys(): 
-                        normalized_row['artifacts_json'] = json.dumps({this_key: inv_index[this_key]})
-                    writer.writerow(normalized_row)
+                writer.writerows(reader)
         self.runner.file.unlink()
-
-    def remove_invisible_chars(text: str) -> str:
-        if not isinstance(text, str):
-            return str(text)
-        
-        invisible_re = re.compile(r'[\x00-\x1F\x7F\xA0\u1680\u180E\u2000-\u200F\u2028-\u202F\u205F\u2060\u3000\uFEFF]')
-        
-        return invisible_re.sub('', text)
-
-    def generate_key(self, row, max_length=64) -> str:
-
-        try:
-            layoffs = int(row.get('total layoffs', 0))
-        except (ValueError, TypeError):
-            layoffs = 0
-        
-        warn_date = row.get('warn date')
-        if isinstance(warn_date, datetime):
-            warn_date = warn_date.strftime('%m-%d-%Y')
-        elif warn_date and isinstance(warn_date, str):
-            try:
-                if '-' in warn_date and len(warn_date.split('-')[0]) == 4:
-                    parsed_date = datetime.strptime(warn_date, '%Y-%m-%d')
-                elif '/' in warn_date:
-                    try:
-                        parsed_date = datetime.strptime(warn_date, '%m/%d/%Y')
-                    except ValueError:
-                        parsed_date = datetime.strptime(warn_date, '%m/%d/%y')
-                else:
-                    parsed_date = datetime.strptime(warn_date, '%m-%d-%Y')
-                warn_date = parsed_date.strftime('%m-%d-%Y')
-            except (ValueError, TypeError):
-                warn_date = ''.join(c for c in warn_date if c.isdigit() or c == '-')
-                parts = warn_date.split('-')
-                if len(parts) == 3:
-                    warn_date = f"{parts[0].zfill(2)}-{parts[1].zfill(2)}-{parts[2]}"
-        
-        if not warn_date:
-            warn_date = '00-00-0000'
-
-        company = str(row.get('company', '')).replace('-', '').replace(' ', '')
-        row_str = f"{company}-{layoffs}-{warn_date}"
-        
-        # Remove all whitespace and problematic characters
-        clean_str = ''.join(c for c in row_str if c.isprintable()).lower().replace('/', '-')
-        
-        # Ensure we don't exceed max length (accounting for prefix/suffix)
-        key_body = clean_str[:max_length - 15]
-        return f'records/{key_body}.pdf'
-    
-    def normalize_headers(self, headers: list[str]) -> list[str]:
-        key_mapping = {
-            '': 'company',
-            'name': 'company',
-            'company name': 'company',
-            'total layoffs': 'total layoffs',
-            'layoff total': 'total layoffs',
-            'co layoffs': 'total layoffs',
-            'jobs': 'total layoffs',
-            'warn date': 'warn date',
-            'notice_date': 'warn date',
-            'received': 'warn date',
-            'warn letter': 'artifacts_json'
-        }
-        
-        normalized = []
-        for header in headers:
-            if header is None:
+        # Download xlsx files for building artifacts index
+        doc = bs(self.cache/'main/source.html')
+        currtext = 'View Real Time Warns'
+        links = (
+            doc.find('a', text=currtext),
+            *doc.find(class_='ckeditor-accordion').find_all('a'))
+        now = utils.now()
+        params = dict(format='xlsx')
+        for a in links:
+            # Normalize whitespace & null bytes
+            text = ' '.join(a.text.split())
+            if text == currtext:
+                year = now.year
+                key = f'current.xlsx'
+            else:
+                year = int(text.split()[1])
+                key = f'{year}.xlsx'
+            if year < self.artifacts_minyear:
+                # No need to download xlsx that won't contain artifacts data
                 continue
-                
-            clean_key = str(header).strip().lower()
-            normalized_header = key_mapping.get(clean_key, clean_key)
-            normalized.append(normalized_header)
-        
-        return normalized
-    
-    async def build_index(self) -> dict[str, str]:
-        skip_list = ['https://drive.google.com/open?id=1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4', 
-                     'https://docs.google.com/spreadsheets/d/1dpKX0g31Fkv8Hs3k3cVCJ19ce4RANNlYSCwpEQA2nrI/edit#gid=0', 
-                     'https://doc-00-58-sheets.googleusercontent.com/export/54bogvaave6cua4cdnls17ksc4/gdfbn4ld6dj2b3fneii78f2g0s/1744062295000/101151664349843394864/*/1HO8Fnm_4xey3Ctt6mYIig61Zx5iNq6_j_dlIaJvBS6o?format=xlsx',
-                     'https://doc-0o-58-sheets.googleusercontent.com/export/54bogvaave6cua4cdnls17ksc4/idvvkdlc8kjko03l8uv38jpo3c/1744062640000/101151664349843394864/*/1ATu4-rs7Rw59UOYcdN-tNZCuyEe3am59Fm8wKqATl7E?format=xlsx',
-                     'https://drive.google.com/uc?export=download&id=1CL',
-                     'https://drive.usercontent.google.com/download?id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
-                     'https://drive.google.com/uc?export=download&id=1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
-                     'https://drive.usercontent.google.com/download?id=1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
-                     'https://drive.google.com/uc?export=download&id=1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
-                     '513 Hotel Operating',
-                     'See note below.',
-                     'None'
-                     ]
+            url = a['href'].split('edit')[0].rstrip('/')
+            url = self.sheets_urlmap.get(url, url)
+            url = f'{url}/export'
+            is_recent = year >= now.year
+            # Redownload prior year util July
+            is_recent = is_recent or year == now.year - 1 and now.month <= 6
+            await self.download(key, url, params=params, missing_only=not is_recent)
+        # Download artifacts
+        index = await self.build_index()
+        for rowkey in index.values():
+            for key, url in rowkey.items():
+                await self.download(key, url, missing_only=True)
+                self.artifacts.add(key)
 
-        def excel_to_dict_with_hyperlinks(input_excel_path: str) -> dict[str,str]:
-            wb = openpyxl.load_workbook(input_excel_path, data_only=False)
-            sheet = wb.worksheets[0]
-            headers = [cell.value for cell in sheet[1]]
-            print('got here for', input_excel_path)
-            headers = self.normalize_headers(headers)
-            
-            results = []
-            for row in sheet.iter_rows(min_row=2):
-                row_dict = {}
-                
-                for idx, cell in enumerate(row):
-                    # Skip extra columns without headers
-                    if idx >= len(headers):  
-                        continue
-                        
-                    header = headers[idx]
-                    cell_value = None
-                    
-                    # First try to get hyperlink URL
-                    if cell.hyperlink:
-                        cell_value = cell.hyperlink.target
-                    # Fallback to check for HYPERLINK formula
-                    elif isinstance(cell.value, str) and cell.value.startswith('=HYPERLINK('):
-                        match = re.search(r'=HYPERLINK\(\s*"([^"]+)"', cell.value)
-                        if match:
-                            cell_value = match.group(1)
-                    
-                    # If no hyperlink found, use cell value
-                    if cell_value is None:
-                        cell_value = cell.value
-                    
-                    if cell_value is not None and str(cell_value).strip() != header:
-                        row_dict[header] = cell_value
-                
-                # Only add row if it has data
-                if row_dict:
-                    results.append(row_dict)
-            
-            return results
-
-        'Mapping from url to cache key'
-        items: deque[tuple[str, str]] = deque()
-        spreadsheets = list()
-
-        # add current warns to list
-        warns_el = bs(self.cache/'main/source.html').find('a', text=lambda text: text == 'View Real Time Warns')
-        spreadsheets.append(warns_el)
-        # add archived warns to list
-        archived_warns_el = bs(self.cache/'main/source.html').find(class_='ckeditor-accordion')
-        archived_warns = archived_warns_el.find_all('a')
-        spreadsheets += archived_warns
-
-        for sheet in spreadsheets:
-            href = sheet.get('href')
-            base_url = href.split('edit')[0]
-            file_name = sheet.text + '.xlsx'
-            # download artifacts
-            if base_url in skip_list: 
-                continue
-            await self.download(file_name, base_url + 'export?format=xlsx')
-
-            csv_sheet = excel_to_dict_with_hyperlinks(str(self.cache/file_name))
-            
-            for row in csv_sheet:
-                if 'company' not in row.keys():
-                    continue
-
-                key = f''
-                if 'artifacts_json' not in row.keys():
-                    row['artifacts_json'] = None
-                target = str(row['artifacts_json'])
-
-                key += self.generate_key(row)
-
-                if target != None:
-                    # handle Google docs artifacts urls differently
-                    if target.startswith('https://drive.google.com/open'):
-                        doc_id = target.split('https://drive.google.com/open?id=')[1]
-                        target = 'https://drive.google.com/uc?export=download&id=' + doc_id
-                    elif target.startswith('https://drive.google.com/file/d/'):
-                        doc_id = target.split('https://drive.google.com/file/d/')[1].split('?')[0].split('/view')[0]
-                        target = 'https://drive.google.com/uc?export=download&id=' + doc_id
-
-                if target in skip_list: continue
-                items.append((target, key))
-        
-        index = dict(sorted(items))
-        self.cache.write_json('index.json', index, indent=2)
-        return index
-
-    async def clean(self):
-        self.cache.delete('latest.html', 'index.json')
+    async def clean(self) -> None:
+        self.cache.delete('*.json', '*.csv', '*.xlsx', 'main/*.html', glob=True)
 
     def statobjs(self):
-        yield self.cache.topath('normalized.csv')
+        yield self.cache/'normalized.csv'
+        yield self.cache/'index.json'
 
     @contextmanager
     def extract(self) -> Generator[Iterable[dict[str, str]]]:
-        with self.cache.open('normalized.csv') as file:
-            yield csv.DictReader(file)
+        index: dict[str, dict[str, str]] = self.cache.read_json('index.json')
+        todo = set(index)
 
+        def makerow(row: dict[str, str]) -> dict[str, str]:
+            key = self.rowkey(row)
+            if key:
+                row['row_key'] = key
+                if key in index:
+                    row['artifacts_json'] = json.dumps(index[key])
+                    todo.discard(key)
+            return row
+
+        with self.cache.open('normalized.csv') as file:
+            reader = csv.DictReader(file)
+            yield map(makerow, reader)
+            for key in todo:
+                self.logger.warning(f'Unassociated artifacts {key=}')
+
+    def rowkey(self, row: dict[str, str]) -> str|None:
+        """
+        Get artifacts row key from either a CSV row or xlsx file.
+
+        Given how the upstream runner processes the data, there is no simple,
+        uniform way to exactly match each row in the CSV to exaclty one row in
+        the xlsx files. Here we use just the company name and the first of
+        notice_date/received_date to form the row key.
+
+        In cases where there are multiple rows with the same row key, the
+        corresponding artifacts will be associated with all rows. This is
+        preferred over the alternatives of either missing associations by
+        complicating the row key, or dropping artifacts by overwriting
+        duplicate rowkey values.
+        """
+        notice_date = row.get('notice_date', row.get('received_date'))
+        parsed_date = utils.parse_date(notice_date)
+        company = row.get('company', '').replace('-', '').replace(' ', '')
+        if not (parsed_date and company):
+            return
+        datestr = parsed_date.strftime(f'%Y-%m-%d')
+        keystr = f'{company}-{datestr}'
+        return clean_filename(keystr[:self.rowkey_maxlen], noext=True)
+    
+    async def build_index(self) -> dict[str, dict[str, str]]:
+        """
+        Extracts artifact data from downloaded xlsx files and returns mapping
+        of row key to mapping of cache key to URL.
+        """
+        field_sources: dict[str, list[str]] = dict(
+            company=['company', 'company name'],
+            received_date=['received_date', 'received'],
+            notice_date=['notice_date', 'warn date'],
+            url=['warn letter', ''])
+        skipurl_searchpat = _r(r'|'.join([
+            '1Vt0x-2oxV0NJuIJbdQScctVxdFKb7Rk4',
+            '1ogPXaZ2LYg0zRMkYscrkkv0HxdZielri',
+            '1uhBFt0cZe7poL3s4yW2gJlkjtcp0ndg5']))
+
+        def extract_workbook(file: Path) -> Iterator[dict[str, str]]:
+            'Extract artifact info data from xslx workbook file'
+            # Use read_only=False to generate cells with hyperlink attribute
+            ws = xlsx.load_workbook(file, read_only=False).worksheets[0]
+            it = (tuple(map(cellstr, cells)) for cells in ws.iter_rows())
+            headers = tuple(map(str.lower, next(it)))
+            for header in field_sources['company']:
+                if header in headers:
+                    break
+            else:
+                raise ValueError(f'Cannot find headers {file=}')
+            for values in it:
+                # Load in reverse order, so duplicate headers favor the first
+                # occurrence. Example case is first empty string header for
+                # the URL in 2021, followed by additional empty headers for
+                # junk columns.
+                row = dict(zip(*(map(reversed, (headers, values)))))
+                info: dict[str, str] = {}
+                for field, sources in field_sources.items():
+                    for header in sources:
+                        if row.get(header):
+                            info[field] = row[header]
+                            break
+                rowkey = self.rowkey(info)
+                if rowkey and info.get('url', '').startswith('https://'):
+                    cachekey, url = getkeyurl(rowkey, info['url'])
+                    info.update(cachekey=cachekey, url=url, rowkey=rowkey)
+                    yield info
+
+        def cellstr(cell: xlsx.Cell) -> str:
+            'Get the hyperlink target or string value for an xlsx data cell'
+            return xlsx.cellurl(cell) or xlsx.cellstr(cell).strip()
+
+        def getkeyurl(rowkey: str, url: str) -> tuple[str, str]:
+            """
+            Get the cache key and PDF download URL for the given row key and
+            URL as found. Google Drive/Docs URLs are converted to download
+            or export URLs.
+            """
+            # Handle Google Drive/Docs URLs
+            fileid, isdoc = None, False
+            if url.startswith((
+                'https://drive.google.com/open',
+                'https://drive.google.com/uc',
+                'https://docs.google.com/document/u/0/export')):
+                fileid = parse_qs(URL(url).query)['id'][0]
+            elif url.startswith('https://drive.google.com/file/d/'):
+                fileid = URL(url).path.rsplit('/')[-2]
+            elif url.startswith('https://docs.google.com/document/d/'):
+                fileid = URL(url).path.rsplit('/')[-2]
+                isdoc = True
+            if fileid:
+                if isdoc:
+                    # Export doc as PDF
+                    url = str(
+                        URL('https://docs.google.com/document/u/0/export')
+                        .include_query_params(format='pdf', id=fileid))
+                else:
+                    url = str(
+                        URL('https://drive.google.com/uc')
+                        .include_query_params(export='download', id=fileid))
+                urlid = fileid
+            else:
+                # In case there is no Google file ID, use a hash of the URL
+                urlid = strs.struuid(url).hex[:16]
+            cachekey = f'records/{rowkey}-{urlid}.pdf'
+            return cachekey, url
+
+        # Sequence of (rowkey, cachekey, URL)
+        items: deque[tuple[str, str, str]] = deque()
+        for file in sorted(self.cache.glob('*.xlsx'), reverse=True):
+            cached = Path(f'{file}.json')
+            with jsoncache(file, cached) as infos:
+                if infos is None:
+                    infos = list(extract_workbook(file))
+                    with cached.open('w') as fp:
+                        json.dump(infos, fp, indent=2)
+            for info in infos:
+                rowkey = info['rowkey']
+                url = info['url']
+                if skipurl_searchpat.search(url):
+                    self.logger.debug(f'Skip {url=} {rowkey=}')
+                    continue
+                items.append((rowkey, info['cachekey'], url))
+        # Mapping of {rowkey: {cachekey: URL}}
+        index: dict[str, dict[str, str]] = defaultdict(dict)
+        for rowkey, cachekey, url in sorted(items):
+            index[rowkey][cachekey] = url
+        self.cache.write_json('index.json', index, indent=2)
+        return dict(index)
 
 class CT(Scraper):
     base_url = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
