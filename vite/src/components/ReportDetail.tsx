@@ -10,6 +10,7 @@ const fieldNames = [
   'location',
   'url',
 ]
+
 function* rows(report: ReportData) {
   for (const name of fieldNames) {
     const { title } = Fields.reports[name]

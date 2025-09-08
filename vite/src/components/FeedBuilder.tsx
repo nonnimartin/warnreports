@@ -10,6 +10,7 @@ interface FeedBuilderProps {
   states: any[]
   params: URLSearchParams
 }
+type FormRef = React.RefObject<HTMLFormElement>
 const sample =
   `<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
   <id>https://warnreports.org/feed/atom/c3RhdGU9Q1QmdGV4dD0lMjJmb28rYmFyJTIy</id>
@@ -21,23 +22,27 @@ const sample =
 const extensions = [xml()]
 
 export default function ({ states, params }: FeedBuilderProps) {
+  const formRef = useRef<HTMLFormElement>(null)
   const [feedInfo, setFeedInfo] = useState()
   return (
     <>
       <h2>Custom Feed</h2>
-      <FeedForm states={states} params={params} />
-      <FeedTable setFeedInfo={setFeedInfo} />
+      <FeedForm states={states} params={params} formRef={formRef} />
+      <FeedTable setFeedInfo={setFeedInfo} formRef={formRef} />
       {/* {feedInfo} */}
     </>
   )
 }
 
-function FeedForm({ states, params }: FeedBuilderProps) {
-  const formRef = useRef(null)
+interface FeedFormProps extends FeedBuilderProps {
+  formRef: FormRef
+}
+
+function FeedForm({ states, params, formRef }: FeedFormProps) {
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const formData = new FormData(formRef.current as HTMLFormElement)
+    const formData = new FormData(formRef.current)
     const params = new URLSearchParams
     for (const [key, value] of formData.entries()) {
       if (value) {
@@ -56,7 +61,7 @@ function FeedForm({ states, params }: FeedBuilderProps) {
     if (window.location.search) {
       window.location.href = window.location.pathname
     } else {
-      (formRef.current as HTMLFormElement).reset()
+      formRef.current.reset()
     }
   }
 
@@ -64,7 +69,6 @@ function FeedForm({ states, params }: FeedBuilderProps) {
     <form
       className="row g-3"
       ref={formRef}
-      id="id_feed_form"
       onSubmit={onSubmit}>
       <div className="col-4">
         <label htmlFor="search_text">Search</label>
@@ -121,7 +125,7 @@ function FeedForm({ states, params }: FeedBuilderProps) {
   )
 }
 
-function FeedTable({ setFeedInfo }: { setFeedInfo: Function }) {
+function FeedTable({ setFeedInfo, formRef }: { setFeedInfo: Function, formRef: FormRef }) {
   let isResponse = false
 
   function onAjax(res: any, rep: Response) {
@@ -161,7 +165,7 @@ function FeedTable({ setFeedInfo }: { setFeedInfo: Function }) {
       id='feed_table'
       collection='reports'
       columns={columns}
-      searchFormId='id_feed_form'
+      searchFormRef={formRef}
       options={options}
       fixedParams={fixedParams}
       onAjax={onAjax}

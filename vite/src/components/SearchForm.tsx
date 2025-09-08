@@ -1,7 +1,7 @@
 import type { DataTableRef } from 'datatables.net-react'
 
 interface SearchFormProps {
-  id: string
+  formRef: React.RefObject<HTMLFormElement>
   states: any[]
   naics: any[]
   table: React.RefObject<DataTableRef>
@@ -10,7 +10,7 @@ interface SearchFormProps {
 
 export default function (
   {
-    id,
+    formRef,
     states,
     naics,
     table,
@@ -22,14 +22,10 @@ export default function (
   let reqTimeout: any = null
   let hash = ''
 
-  function getForm(): HTMLFormElement {
-    return document.getElementById(id) as HTMLFormElement
-  }
-
   function handleResetClick(e: React.MouseEvent) {
     e.preventDefault()
     clearTimeout(reqTimeout)
-    getForm().querySelectorAll(
+    formRef.current.querySelectorAll(
       'input.form-control, select.form-select'
     ).forEach(el => {
       (el as HTMLInputElement).value = ''
@@ -48,7 +44,7 @@ export default function (
 
   function getHash() {
     const params = new URLSearchParams
-    for (const [key, value] of new FormData(getForm()).entries()) {
+    for (const [key, value] of new FormData(formRef.current).entries()) {
       const { length } = value as string
       if (key === 'text' && length < 2) {
         continue
@@ -77,7 +73,7 @@ export default function (
   return (
     <form
       className="row g-3 search-form"
-      id={id}
+      ref={formRef}
       onKeyUp={() => queueDraw()}
       onKeyDown={() => queueDraw()}
       onChange={() => queueDraw()}

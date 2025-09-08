@@ -11,6 +11,8 @@ import { fetchok } from '../lib/utils'
 DataTablesCore.use(bootstrap)
 DataTableBase.use(DataTablesCore)
 
+type FormRef = React.RefObject<HTMLFormElement>
+
 interface TableProps {
   id?: string
   collection: string
@@ -20,7 +22,7 @@ interface TableProps {
   title?: string | any
   options?: any
   fixedParams?: any
-  searchFormId?: string
+  searchFormRef?: FormRef
   className?: string
   ref?: React.RefObject<DataTableRef>
   onAjax?(res: any, rep: Response): void
@@ -36,7 +38,7 @@ export default function (
     title,
     options,
     fixedParams,
-    searchFormId,
+    searchFormRef,
     className,
     ref,
     onAjax,
@@ -81,7 +83,7 @@ export default function (
   }
   async function ajax(data: any, callback: Function, settings: any) {
     const path = `/api/v0/${collection}`
-    const params = dtparams(data, searchFormId, fixedParams)
+    const params = dtparams(data, searchFormRef, fixedParams)
     const uri = `${path}?${params}`
     const tasks = [
       fetchok(uri),
@@ -101,20 +103,20 @@ export default function (
     }
   }
   function onStateSaveParams(e: any, settings: any, data: any) {
-    if (!searchFormId) {
+    if (!searchFormRef) {
       return
     }
     const params = new URLSearchParams
-    for (const [key, value] of getSearchFormData(searchFormId)) {
+    for (const [key, value] of getSearchFormData(searchFormRef)) {
       params.append(key, value)
     }
     Object.assign(data, Object.fromEntries(params.entries()))
   }
   function onStateLoadParams(e: any, settings: any, data: any) {
-    if (!searchFormId) {
+    if (!searchFormRef) {
       return
     }
-    const form = document.getElementById(searchFormId) as HTMLFormElement
+    const form = searchFormRef.current
     for (const key of new FormData(form).keys()) {
       if (data[key]) {
         const el = form.querySelector(`[name="${key}"]`) as HTMLInputElement
@@ -150,7 +152,7 @@ const oparam = ({ name, dir }) => (
   (dir[0] === 'd' ? '-' : '') + name
 )
 
-function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
+function dtparams(data: any, searchFormRef?: FormRef, fixedParams?: any) {
   const params = new URLSearchParams({
     offset: data.start,
   })
@@ -166,8 +168,8 @@ function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
       params.set(key, value)
     }
   }
-  if (searchFormId) {
-    for (const [key, value] of getSearchFormData(searchFormId)) {
+  if (searchFormRef) {
+    for (const [key, value] of getSearchFormData(searchFormRef)) {
       params.append(key, value)
     }
   }
@@ -179,11 +181,11 @@ function dtparams(data: any, searchFormId?: string, fixedParams?: any) {
   return params
 }
 
-function* getSearchFormData(searchFormId: string) {
-  if (!searchFormId) {
+function* getSearchFormData(formRef: FormRef) {
+  if (!formRef) {
     return
   }
-  const form = document.getElementById(searchFormId) as HTMLFormElement
+  const form = formRef.current
   if (!form) {
     return
   }

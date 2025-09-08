@@ -16,6 +16,7 @@ export async function clientLoader() {
 
 export default function ({ loaderData }) {
   const formId = 'id_search_form'
+  const formRef = useRef<HTMLFormElement>(null)
   const table = useRef<DataTableRef>(null)
   const columns = [
     'state',
@@ -43,7 +44,7 @@ export default function ({ loaderData }) {
   return (
     <>
       <SearchForm
-        id={formId}
+        formRef={formRef}
         table={table}
         defaultOrder={defaultOrder}
         states={loaderData.states}
@@ -53,7 +54,7 @@ export default function ({ loaderData }) {
         collection='reports'
         ref={table}
         columns={columns}
-        searchFormId={formId}
+        searchFormRef={formRef}
         options={options} />
     </>
   )
