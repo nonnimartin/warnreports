@@ -11,7 +11,7 @@ COPY --from=vitebuild /workdir/build/client /srv/vite
 
 # -----------------
 
-FROM docker.io/python:3.12-alpine AS base
+FROM docker.io/python:3.13-alpine AS base
 WORKDIR /code
 ENV BUILD_DIR=/build
 ENV ARTIFACTS_DIR=/srv/artifacts
