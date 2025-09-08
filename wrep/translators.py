@@ -19,6 +19,7 @@ from .models import *
 from .orm import ReportMod
 from .ref.dt import MONTHNAME_REWRITES
 from .ref.tz import zoneinfos
+from .tools import strs
 
 PAT_NONALPHANUM = _r(r'[^a-z0-9]+', re.I)
 PAT_NONDIGITS = _r(r'[^\d]+')
@@ -105,7 +106,7 @@ class TranslationFactory:
     def value(self, translator: Translator, field: str, value: str, info: TranslateInfo) -> Any:
         'Translate a field value'
         if field in translator.rewrites:
-            value = utils.rewrite_all(value, translator.rewrites[field])
+            value = strs.rewrite_all(value, translator.rewrites[field])
         method = f'value_{field}'
         if (func := getattr(translator, method, None)):
             value = varcall(func, value, info)
@@ -269,7 +270,7 @@ class Translator:
             return
         # For cases like TN:
         #   June 12, 2023 - August 11, 2023
-        v2 = utils.rewrite_all(value, MONTHNAME_REWRITES)
+        v2 = strs.rewrite_all(value, MONTHNAME_REWRITES)
         if v2 != value:
             # Only try this strategy if we matched a month name
             if len(parts := value.split(' - ')) > 1:
@@ -454,7 +455,7 @@ class CT(Translator):
         report_id=[],
         naics=[],
         artifacts=['artifacts_json'])
-    values_hash_exclude = ['download', 'artifacts_json']
+    values_hash_exclude = ['download', 'row_key', 'artifacts_json']
     rewrites = dict(
         company=[
             (_r(r'\*'), ''),
@@ -544,7 +545,7 @@ class DE(Translator):
         action=['WARN Type'],
         url=['URL'],
         industry=[],
-        report_id=['URL'],
+        report_id=['record_num'],
         naics=[],
         artifacts=[])
     rewrites = dict(
@@ -552,7 +553,8 @@ class DE(Translator):
             (_r(r'^(/.+)$'), f'{base_url}\\1')
         ],
         report_id=[
-            (_r(r'/(\d+)$'), r'\1')
+            # Compatibility for prior mistake
+            (_r(r'^'), '/search/warn_lookups'),
         ]
     )
 
@@ -723,7 +725,7 @@ class IA(Translator):
         if all(addrvals):
             location = ', '.join([addrvals[0], ' '.join(addrvals[1:])])
             location = ' '.join(location.split())
-            location = utils.rewrite_all(location, self.rewrites['location'])
+            location = strs.rewrite_all(location, self.rewrites['location'])
             if location:
                 inst.location = location
 
