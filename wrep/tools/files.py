@@ -2,33 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import shutil
 from collections import defaultdict
 from contextlib import contextmanager
 from itertools import chain
 from pathlib import Path
-from re import compile as _r
 from typing import Any, Iterator, Self
 
 from .. import SaveType, utils
 
-clean_filename_subs = [
-    (_r(r'[^a-z\d_]', re.I), '-'),
-    (_r(r'([-_])+'), r'\1'),
-]
-clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
-
-def clean_filename[T](value: str, default: T = None, noext: bool = False) -> str|T:
-    parts = [value] if noext else value.rsplit('.', 1)
-    clean = utils.rewrite_all(parts[0], clean_filename_subs)
-    clean = clean.strip('_-')
-    if clean:
-        if len(parts) == 2:
-            ext = utils.rewrite_all(parts[1], clean_extension_subs)
-            clean = f'{clean}.{ext}'
-        return clean
-    return default
+__all__ = [
+    'ArtifactStore',
+    'cachectx',
+    'FileCache',
+    'jsoncache']
 
 class FileCache:
 
@@ -147,7 +134,7 @@ class ArtifactStore:
         return save, sta.st_size
 
 @contextmanager
-def excachectx(src: Path, dest: Path):
+def cachectx(src: Path, dest: Path):
     sta = src.stat()
     if dest.exists():
         stb = dest.stat()
@@ -160,7 +147,7 @@ def excachectx(src: Path, dest: Path):
 
 @contextmanager
 def jsoncache(src: Path, dest: Path):
-    with excachectx(src, dest) as saved:
+    with cachectx(src, dest) as saved:
         if saved:
             with saved.open() as f:
                 saved = json.load(f)

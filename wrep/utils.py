@@ -23,7 +23,6 @@ import yaml
 type Delta = float|str|timedelta
 type EitherIterable[T] = Iterable[T]|AsyncIterable[T]
 type EitherContext[T] = AbstractContextManager[T]|AbstractAsyncContextManager[T]
-type SrchRepl = tuple[str|re.Pattern, str|Callable[[re.Match], str]]
 
 def get_logger(name: str|None = None) -> logging.Logger:
     if name:
@@ -84,6 +83,11 @@ def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
             return True
     return False
 
+def absurl(base_url: str|None, url: str) -> None:
+    if base_url and not any(map(url.startswith, ('http://', 'https://'))):
+        url = base_url.rstrip('/') + '/' + url.lstrip('/')
+    return url
+
 def unique[T](it: Iterable[T]) -> Iterator[T]:
     done = set()
     for value in it:
@@ -125,14 +129,6 @@ def monthend(dt: datetime) -> datetime:
         cand = dt + timedelta(days=days)
         if cand.month == dt.month:
             return cand
-
-def rewrite_all(value: str, rewrites: Iterable[SrchRepl]) -> str:
-    for srch, repl in rewrites:
-        if srch == value:
-            value = repl
-        elif isinstance(srch, re.Pattern):
-            value = srch.sub(repl, value)
-    return value
 
 def get_mimetype(value: Any) -> str:
     return mimetypes.guess_type(value)[0] or 'application/octet-stream'

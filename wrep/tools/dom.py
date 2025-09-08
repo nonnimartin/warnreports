@@ -6,12 +6,6 @@ from typing import TYPE_CHECKING, Any
 from bs4 import BeautifulSoup as SoupBase
 from bs4.element import PageElement, ResultSet, Tag
 
-
-def bs(markup: Any, features='html.parser', **kw):
-    if isinstance(markup, Path):
-        markup = markup.read_bytes()
-    return Soup(markup, features, **kw)
-
 if TYPE_CHECKING:
     from typing import overload
     class Soup(SoupBase):
@@ -23,6 +17,23 @@ if TYPE_CHECKING:
             recursive:bool=True,
             string:str|Any=...,
             limit:int|None=...,
-            **kwargs) -> ResultSet[Soup|PageElement|Tag]: ...
+            **kwargs) -> ResultSet[SoupFindType]: ...
+        @overload
+        def find(
+            self,
+            name:str|Any=...,
+            attrs: dict[str, Any]=...,
+            recursive:bool=True,
+            string:str|Any=...,
+            **kwargs) -> SoupFindType|None: ...
+        @overload
+        def __getattr__(self, tag: str) -> SoupFindType: ...
 else:
     Soup = SoupBase
+
+type SoupFindType = Soup|PageElement|Tag
+
+def bs(markup: Any, features='html.parser', **kw):
+    if isinstance(markup, Path):
+        markup = markup.read_bytes()
+    return Soup(markup, features, **kw)

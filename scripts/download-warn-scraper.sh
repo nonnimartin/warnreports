@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-version=1.2.110
+version=1.2.115
 
 if [[ -z "$WARN_SCRAPER_DIR" ]]; then
     WARN_SCRAPER_DIR="$(dirname "$0")/../warn"
