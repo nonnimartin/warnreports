@@ -245,7 +245,7 @@ class Translator:
             try:
                 url = HttpUrl(url)
                 Path(path)
-            except (ValidationError, ValueError):
+            except ValueError:
                 continue
             artifacts[path] = url
         return artifacts
@@ -285,6 +285,8 @@ class Translator:
     def __init_subclass__(cls) -> None:
         cls.rewrites = Translator.rewrites | cls.rewrites
         cls.values_hash_exclude = sorted({
+            'artifacts_json',
+            'row_key',
             *cls.values_hash_exclude,
             *Extraction.stat_exclude_fields})
         if len(state := cls.__name__.upper()) == 2:
@@ -303,7 +305,6 @@ REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
 
 class AK(Translator):
     default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
-    values_hash_exclude = ['artifacts_json']
     fieldsmap = dict(
         company=['Company'],
         reported=['Notice Date'],
@@ -369,7 +370,6 @@ class AZ(Translator):
 
 class CA(Translator):
     default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
-    values_hash_exclude = ['artifacts_json']
     fieldsmap = dict(
         company=['company'],
         reported=['notice_date'],
@@ -381,7 +381,7 @@ class CA(Translator):
         industry=[],
         report_id=[],
         naics=[],
-        artifacts=['source_file'])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         company=[
             REWRITE_UNESCAPE_HTML,
@@ -397,9 +397,6 @@ class CA(Translator):
         ],
         location=[
             (_r(r'\s{2,}'), ', '),
-        ],
-        artifacts=[
-            (_r(r'^(.+)$'), r'https://edd.ca.gov/siteassets/files/jobs_and_training/warn/\1'),
         ],
     )
 
@@ -417,7 +414,6 @@ class CO(Translator):
         report_id=[],
         naics=['naics'],
         artifacts=['artifacts_json'])
-    values_hash_exclude = ['artifacts_json', 'row_key']
     rewrites = dict(
         reported=[
             REWRITE_COMPACT_DATERANGE,
@@ -455,7 +451,6 @@ class CT(Translator):
         report_id=[],
         naics=[],
         artifacts=['artifacts_json'])
-    values_hash_exclude = ['download', 'row_key', 'artifacts_json']
     rewrites = dict(
         company=[
             (_r(r'\*'), ''),
@@ -586,7 +581,7 @@ class FL(Translator):
             (_r(r'Harvest Sherwoord'), 'Harvest Sherwood'),
         ],
     )
-    values_hash_exclude = ['download', 'artifacts_json']
+    values_hash_exclude = ['download', 'row_key', 'artifacts_json']
     urlfmt = '{}/WarnList/{}?year={}'
 
     def finish(self, inst: Translation, info: TranslateInfo):

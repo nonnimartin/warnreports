@@ -7,8 +7,9 @@ import json
 from collections import defaultdict
 from contextlib import contextmanager
 from importlib import import_module
+from itertools import chain
 from pathlib import Path
-from typing import Any, ClassVar, Generator, Iterable
+from typing import Any, ClassVar, Generator, Iterable, Iterator, Self
 
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -17,7 +18,7 @@ from typing_extensions import Buffer
 
 from .. import Stage, settings, utils
 from ..models import ScraperOpts, StateCode
-from ..tools import dom
+from ..tools import dom, strs
 from ..tools.files import ArtifactStore, FileCache
 
 __all__ = [
@@ -129,6 +130,75 @@ class Scraper:
         if len(name := cls.__name__.upper()) == 2:
             cls.state = name
             scrapers[cls.state] = cls
+
+class AugmentArtifactsMixin:
+    """
+    Mixin class with default functionality for augmenting CSV data with artifacts.
+    Subclasses must implement `build_index()`
+    """
+    index_filename: ClassVar[str] = 'index.json'
+    rowkey_trans: ClassVar[dict[int, None]] = dict.fromkeys(map(ord, '-_'))
+
+    async def scrape(self: Scraper|Self) -> None:
+        self.runner.scrape()
+        # Download artifacts
+        index = self.build_index()
+        for key, url in chain.from_iterable(map(dict.items, index.values())):
+            await self.download(key, url, missing_only=True)
+            self.artifacts.add(key)
+
+    def statobjs(self: Scraper|Self) -> Iterator[Any]:
+        yield self.runner.file
+        yield self.cache/self.index_filename
+
+    async def clean(self: Scraper|Self) -> None:
+        self.cache.delete('*.json', '*.html', '*.csv', glob=True)
+
+    @contextmanager
+    def extract(self: Scraper|Self) -> Generator[Iterator[dict[str, str]]]:
+        "Yield augmented records from CSV rows"
+        index: dict[str, dict[str, str]] = self.cache.read_json(self.index_filename)
+        todo: set[str] = set(index)
+
+        def readrecords(it: Iterable[Iterable[str]]) -> Iterator[dict[str, str]]:
+            headers = tuple(next(it))
+            for values in it:
+                row = dict(zip(headers, values))
+                rowkey = self.rowkey(row.values())
+                row['row_key'] = rowkey
+                if rowkey in index:
+                    row['artifacts_json'] = json.dumps(index[rowkey])
+                    todo.discard(rowkey)
+                yield row
+
+        with self.runner.file.open() as file:
+            yield readrecords(csv.reader(file))
+            for key in todo:
+                self.logger.warning(f'Unassociated artifacts {key=}')
+
+    def rowkey(self, values: Iterable[str]) -> str:
+        "Values hash key from CSV row for artifact index"
+        raw = ''.join(''.join(values).split())
+        clean = strs.clean_filename(raw, stem=True, fail=True) 
+        return clean.translate(self.rowkey_trans)
+
+    def build_index(self) -> dict[str, dict[str, str]]:
+        """
+        Build and save mapping of {rowkey: {cachekey: URL}}.
+        """
+        raise NotImplementedError
+
+    def write_index_items(self: Scraper|Self, items: Iterable[tuple[str, str, str]]) -> dict[str, dict[str, str]]:
+        """
+        Converts an iterable of items (rowkey, cachekey, URL) into a sorted
+        mapping of {rowkey: {cachekey: URL}}. Writes JSON to the index file,
+        and returns the dict result.
+        """
+        index: dict[str, dict[str, str]] = defaultdict(dict)
+        for rowkey, cachekey, url in sorted(items):
+            index[rowkey][cachekey] = url
+        self.cache.write_json(self.index_filename, index, indent=2)
+        return dict(index)
 
 class Runner:
 

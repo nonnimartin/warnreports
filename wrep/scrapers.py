@@ -5,20 +5,20 @@ import dataclasses
 import json
 import re
 import uuid
-from collections import defaultdict, deque
+from collections import deque
 from contextlib import contextmanager
 from datetime import datetime
 from functools import cached_property as lazy
 from itertools import batched, chain, filterfalse
 from pathlib import Path
 from re import compile as _r
-from typing import Any, ClassVar, Generator, Iterable, Iterator, Sequence
+from typing import Any, ClassVar, Generator, Iterable, Iterator
 from urllib.parse import unquote_plus, urlparse
 
 from starlette.datastructures import URL
 
 from . import settings, utils
-from ._scrapers.base import Scraper, scrapers
+from ._scrapers.base import AugmentArtifactsMixin, Scraper, scrapers
 from .backends import webdrivers
 from .tools import files, strs, xlsx
 from .tools.dom import Soup, bs
@@ -115,8 +115,10 @@ class CA(Scraper):
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
         index: dict[str, str] = self.cache.read_json('index.json')
+
         def clean(data: dict[str, str]):
             return dict(zip(data, map(str, data.values())))
+
         for key, url in index.items():
             file = self.cache/key
             cached = self.extract_cache/f'{key}.json'
@@ -150,59 +152,15 @@ class CA(Scraper):
 from ._scrapers.co import CO as CO
 
 
-class CT(Scraper):
+class CT(AugmentArtifactsMixin, Scraper):
     base_url: ClassVar = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
-    artifacts_minyear: ClassVar = 2019
-    rowkey_trans: ClassVar[dict[int, None]] = dict.fromkeys(map(ord, '-_'))
-
-    async def scrape(self) -> None:
-        self.runner.scrape()
-        # Download artifacts
-        index = self.build_index()
-        for key, url in chain.from_iterable(map(dict.items, index.values())):
-            await self.download(key, url, missing_only=True)
-            self.artifacts.add(key)
-
-    async def clean(self) -> None:
-        self.cache.delete('*.json', '*.html', '*.csv', glob=True)
-
-    def statobjs(self) -> Iterator[Any]:
-        yield self.runner.file
-        yield self.cache/'index.json'
-
-    @contextmanager
-    def extract(self) -> Generator[Iterator[dict[str, str]]]:
-        "Yield augmented records from CSV rows"
-        index: dict[str, dict[str, str]] = self.cache.read_json('index.json')
-        todo: set[str] = set(index)
-
-        def readrecords(it: Iterable[Sequence[str]]) -> Iterator[dict[str, str]]:
-            headers = next(it)
-            for values in it:
-                row = dict(zip(headers, values))
-                rowkey = self.rowkey(values)
-                row['row_key'] = rowkey
-                if rowkey in index:
-                    row['artifacts_json'] = json.dumps(index[rowkey])
-                    todo.discard(rowkey)
-                yield row
-
-        with self.runner.file.open() as file:
-            yield readrecords(csv.reader(file))
-            for key in todo:
-                self.logger.warning(f'Unassociated artifacts {key=}')
-
-    def rowkey(self, values: Iterable[str]) -> str:
-        "Values hash key from CSV row for artifact index"
-        raw = ''.join(''.join(values).split())
-        clean = strs.clean_filename(raw, stem=True) 
-        return clean.translate(self.rowkey_trans)
 
     def build_index(self) -> dict[str, dict[str, str]]:
         """
         Extracts artifact data from downloaded html files and returns mapping
-        of row key to mapping of cache key to URL.
+        of {rowkey: {cachekey: URL}},
         """
+        minyear = 2019
         uri_rewrites = [
             (_r(r'^https?://webdev/progsupt/bussrvce/warnreports/'), ''),
         ]
@@ -246,7 +204,7 @@ class CT(Scraper):
         items: deque[tuple[str, str, str]] = deque()
         for file in sorted(self.cache.glob('*.html'), reverse=True):
             year = int(file.name[:4])
-            if year < self.artifacts_minyear:
+            if year < minyear:
                 continue
             for table in bs(file, 'html5lib').find_all('table'):
                 if (td := table.find('td')) and td.text.strip() == 'WARN Date':
@@ -255,11 +213,7 @@ class CT(Scraper):
             else:
                 raise ValueError(f'Cannot find table {file=}')
         # Mapping of {rowkey: {cachekey: URL}}
-        index: dict[str, dict[str, str]] = defaultdict(dict)
-        for rowkey, cachekey, url in sorted(items):
-            index[rowkey][cachekey] = url
-        self.cache.write_json('index.json', index, indent=2)
-        return dict(index)
+        return self.write_index_items(items)
 
 class DE(Scraper):
     base_url: ClassVar = 'https://joblink.delaware.gov'
@@ -328,61 +282,25 @@ class DE(Scraper):
                     record[key] = value
             yield record
 
-class FL(Scraper):
+class FL(AugmentArtifactsMixin, Scraper):
     base_url: ClassVar = 'https://reactwarn.floridajobs.org'
-    artifact_url_fmt: ClassVar = '/WarnList/DownloadAzureFile?file={}'
-    request_delay: ClassVar = 1.0
+    request_delay: ClassVar = 0.5
     user_agent: ClassVar = (
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36')
-    key_clean_subs: ClassVar = (
-        (_r(r'[^a-zA-Z\d_]'), '-'),
-        (_r(r'([-_])+'), r'\1'),
-        (_r(r'[A-Z]-MYDOCUMENTS'), ''))
 
-    async def scrape(self) -> None:
-        self.runner.scrape()
-        index = self.build_index()
-        for key, url in index.values():
-            await self.download(key, url, missing_only=True)
-            self.artifacts.add(key)
+    def build_index(self) -> dict[str, dict[str, str]]:
+        "Build the artifacts index {rowkey: {cachekey: url}}"
+        minyear = 2020
+        uri_rewrites = [
+            (_r(r'[^a-zA-Z\d_]'), '-'),
+            (_r(r'([-_])+'), r'\1'),
+            (_r(r'[A-Z]-MYDOCUMENTS'), ''),
+        ]
+        uri_fmt = '/WarnList/DownloadAzureFile?file={}'
 
-    def statobjs(self) -> Iterator[Any]:
-        yield self.runner.file
-        yield self.cache/'artifacts.json'
-
-    async def clean(self) -> None:
-        self.cache.delete('*.json', '*.csv', glob=True)
-
-    @contextmanager
-    def extract(self) -> Generator[Iterator[dict[str, str]]]:
-        index: dict[str, list[str]] = self.cache.read_json('artifacts.json')
-
-        def readrecords(it: Iterable[Sequence[str]]) -> Iterator[dict[str, str]]:
-            "Yield augmented records from CSV rows"
-            headers = next(it)
-            for values in it:
-                row = dict(zip(headers, values))
-                rowkey = self.rowkey(values)
-                if rowkey in index:
-                    key, url = index[rowkey]
-                    row.update(
-                        download=url,
-                        artifacts_json=json.dumps({key: url}))
-                yield row
-
-        with self.runner.file.open() as file:
-            yield readrecords(csv.reader(file))
-
-    def rowkey(self, values: Iterable[str]) -> str:
-        "Values hash key from CSV row for artifact index"
-        return ''.join(''.join(values).split())
-
-    def build_index(self) -> dict[str, tuple[str, str]]:
-        "Build the artifacts index {values_key: (cache_key, url)}"
-
-        def parse_table(year: int, table: Soup) -> Iterator[tuple[str, tuple[str, str]]]:
-            "Yields (values_key, (cache_key, url)) for an html table"
+        def parse_table(year: int, table: Soup) -> Iterator[tuple[str, str, str]]:
+            "Yields (values_key, cache_key, url) for an html table"
             tbody = table.find('tbody')
             for tr in tbody.find_all('tr'):
                 tds = tr.find_all('td')
@@ -391,32 +309,35 @@ class FL(Scraper):
                     if (el := last.find('input', type='hidden')):
                         if (info := getkeyurl(year, el['value'])):
                             rowkey = self.rowkey(td.text for td in tds)
-                            yield rowkey, info
+                            yield rowkey, *info
 
         def getkeyurl(year: int, uri: str) -> tuple[str, str]|None:
             "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
-            if year < 2020 or not uri.endswith('.pdf'):
+            if not uri.endswith('.pdf'):
                 return
             clean = unquote_plus(uri)
             if clean.startswith('\\'):
                 return
             clean = clean.removesuffix('.pdf')
-            clean = strs.rewrite_all(clean, self.key_clean_subs)
+            clean = strs.rewrite_all(clean, uri_rewrites)
             clean = clean.strip('_-')
             if not clean:
                 return
             name = f'{year}_{clean}.pdf'
             cache_key = f'records/{name}'
-            url = self.absurl(self.artifact_url_fmt.format(uri))
+            url = self.absurl(uri_fmt.format(uri))
             return cache_key, url
 
-        index: dict[str, tuple[str, str]] = {}
+        # Sequence of (rowkey, cachekey, URL)
+        items: deque[tuple[str, str, str]] = deque()
         for file in sorted(self.cache.glob('*_page_*.html'), reverse=True):
             year = int(file.name[:4])
+            if year < minyear:
+                continue
             table = bs(file, 'html5lib').find('table')
-            index.update(parse_table(year, table))
-        self.cache.write_json('artifacts.json', index, indent=2)
-        return index
+            items.extend(parse_table(year, table))
+        # Mapping of {rowkey: {cachekey: URL}}
+        return self.write_index_items(items)
 
 from ._scrapers.ga import GA as GA
 
@@ -934,7 +855,7 @@ class VA(Scraper):
         with self.cache.open('latest.csv') as file:
             yield csv.DictReader(file)
 
-
+# Create default Scraper classes
 scrapers.update({
     state: type(state, (Scraper,), {})
     for state in (
