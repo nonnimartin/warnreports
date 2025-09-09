@@ -1099,23 +1099,39 @@ class NM(Translator):
         artifacts=[])
 
 class NY(Translator):
-    default_url = 'https://dol.ny.gov/warn-notices'
+    default_url = 'https://dol.ny.gov/warn-dashboard'
     fieldsmap = dict(
-        company=['company_name', 'Company'],
-        reported=['notice_dated', 'Notice Date', 'Date of Notice'],
-        location=['City', 'Region', 'date_posted', 'Address', 'Counties', 'Addresses'],
+        company=['company_name', 'Company', 'Business Legal Name'],
+        reported=[
+            'date_posted',
+            'Date Posted',
+            'Date of WARN Notice',
+            'notice_dated',
+            'Notice Date',
+            'Date of Notice'],
+        location=[
+            'City',
+            'Region',
+            'date_posted',
+            'Address',
+            'Counties',
+            'Addresses',
+            'Impacted Site Address',
+            'Impacted Site County'],
         employees=[
             'Number Affected',
-            'Total Number of Affected Workers'],
+            'Total Number of Affected Workers',
+            'Number of Affected Workers'],
         starting=[
             'Closure Start Date',
             'Closing Date',
             'Layoff Date',
-            'Layoff Start Date'],
-        action=['Dislocation Type', 'Reason For Layoff'],
+            'Layoff Start Date',
+            'Date Layoff/Closure Starts'],
+        action=['Dislocation Type', 'Reason For Layoff', 'Layoff or Closure?'],
         url=['notice_url'],
         industry=['Industry Type', 'NAICS Description'],
-        report_id=['Event Number', 'Event Numbers', 'Event #'],
+        report_id=['Event Number', 'Event Numbers', 'Event #', 'row_key'],
         naics=[
             'NAISC', # sic
             'NAICS', # in case it's fixed
@@ -1130,7 +1146,8 @@ class NY(Translator):
         ],
         report_id=[
             (_r(r' and '), ','),
-            (_r(r'^.*[^\d,-].*$'), ''),
+            (_r(r'[,;]\s*'), ','),
+            (_r(r'^.* through .*$'), ''),
         ],
         starting=[
             # (_r(r'.* on or about (.*)\.?$'), r'\1'),
