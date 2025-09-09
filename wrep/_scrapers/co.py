@@ -74,9 +74,6 @@ class CO(Scraper):
                 await self.download(key, url, missing_only=True)
                 self.artifacts.add(key)
 
-    async def clean(self) -> None:
-        self.cache.delete('*.json', '*.csv', '*.xlsx', 'main/*.html', glob=True)
-
     def statobjs(self):
         yield self.cache/'normalized.csv'
         yield self.cache/'index.json'

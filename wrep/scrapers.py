@@ -35,9 +35,6 @@ class AK(Scraper):
             await self.download(key, url, missing_only=True)
             self.artifacts.add(key)
 
-    async def clean(self) -> None:
-        self.cache.delete('latest.html', 'index.json')
-
     def statobjs(self) -> Iterator[Any]:
         if (file := self.cache/'latest.html').exists():
             yield bs(file).find('table')
@@ -108,9 +105,6 @@ class CA(Scraper):
     def statobjs(self) -> Iterator[Any]:
         yield from sorted(self.cache.glob('*.pdf', '*.xlsx'))
         yield self.cache/'index.json'
-
-    async def clean(self) -> None:
-        self.cache.delete('latest.html', 'index.json')
 
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
@@ -257,14 +251,6 @@ class DE(Scraper):
         yield self.cache/'index.json'
         yield from sorted(self.cache.glob('records/*.html'), reverse=True)
 
-    async def clean(self) -> None:
-        self.cache.delete(
-            '*.json',
-            '*.html',
-            '*.csv',
-            'pages/*.html',
-            'records/*.html', glob=True)
-
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
         index: list[dict[str, str]] = self.cache.read_json('index.json')
@@ -341,7 +327,6 @@ class FL(AugmentArtifactsMixin, Scraper):
 
 from ._scrapers.ga import GA as GA
 
-
 class IL(Scraper):
     source_url: ClassVar = 'https://apps.illinoisworknet.com/iebs/api/public/export'
     source_params: ClassVar = [
@@ -381,9 +366,6 @@ class IL(Scraper):
                 row.pop('NAICS Codes', None)
                 yield json.dumps(row)
 
-    async def clean(self) -> None:
-        self.cache.delete('export.xlsx')
-
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         yield xlsx.extract_workbook(self.cache/'export.xlsx')
@@ -398,9 +380,6 @@ class IN(Scraper):
     def statobjs(self) -> Iterator[Any]:
         if (file := self.cache/'latest.html').exists():
             yield from bs(file).find_all('table')
-
-    async def clean(self) -> None:
-        self.cache.delete('latest.html')
 
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
@@ -458,9 +437,6 @@ class LA(Scraper):
     def statobjs(self) -> Iterator[Any]:
         yield from sorted(self.cache.glob('*.pdf'))
 
-    async def clean(self) -> None:
-        self.cache.delete('*.pdf', '*.html', '*.csv', '*.json', glob=True)
-
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         from warn.scrapers import la
@@ -517,9 +493,6 @@ class MD(Scraper):
             is_recent = year >= utils.now().year - 1
             await self.download(key, url, missing_only=not is_recent)
 
-    async def clean(self) -> None:
-        self.cache.delete('*.html', glob=True)
-
     def statobjs(self) -> Iterator[Any]:
         yield from self.get_tables()
 
@@ -552,9 +525,6 @@ class ME(Scraper):
         # hashing. Clearing the CSV seems to help.
         self.cache.delete('*.csv', glob=True)
         await super().scrape()
-
-    async def clean(self) -> None:
-        self.cache.delete('*.csv', glob=True)
 
     def statobjs(self) -> Iterator[Any]:
         yield from self.cache.glob('*.csv')
@@ -613,9 +583,6 @@ class MO(Scraper):
         for file in self.list_page_files():
             yield bs(file).find('table')
 
-    async def clean(self) -> None:
-        self.cache.delete('pages/*.html', glob=True)
-
     @utils.wrapcontext
     def extract(self) -> Iterable[dict[str, str]]:
         def readtr(tr: Soup) -> Iterator[str]:
@@ -646,9 +613,6 @@ class NJ(Scraper):
 
     def statobjs(self) -> Iterator[Any]:
         yield self.cache/'latest.xlsx'
-
-    async def clean(self) -> None:
-        self.cache.delete('latest.xlsx')
 
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
@@ -681,9 +645,6 @@ class OK(Scraper):
     def statobjs(self) -> Iterator[Any]:
         yield self.cache/'latest.csv'
         yield self.cache/'historical.csv'
-
-    async def clean(self) -> None:
-        self.cache.delete('*.csv', glob=True)
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
@@ -749,7 +710,6 @@ class OK(Scraper):
 from ._scrapers.pa import PA as PA
 from ._scrapers.sc import SC as SC
 
-
 class TX(Scraper):
     base_url: ClassVar = 'https://www.twc.texas.gov'
     latest_url: ClassVar = '/data-reports/warn-notice'
@@ -772,9 +732,6 @@ class TX(Scraper):
 
     def statobjs(self) -> Iterator[Any]:
         yield from self.list_record_files()
-
-    async def clean(self) -> None:
-        self.cache.delete('latest.html', '*.xlsx', glob=True)
 
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
@@ -804,9 +761,6 @@ class UT(Scraper):
     def statobjs(self) -> Iterator[Any]:
         if (file := self.cache/'latest.html').exists():
             yield from bs(file).find_all('table')
-
-    async def clean(self) -> None:
-        self.cache.delete('latest.html')
 
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
@@ -846,9 +800,6 @@ class VA(Scraper):
 
     def statobjs(self) -> Iterator[Any]:
         yield self.cache/'latest.csv'
-
-    async def clean(self) -> None:
-        self.cache.delete('*.csv', glob=True)
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:

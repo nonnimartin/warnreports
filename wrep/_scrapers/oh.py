@@ -77,9 +77,6 @@ class OH(Scraper):
                 self.artifacts.add(key)
         await self.download('oh_historical.csv', self.historical_url, missing_only=True)
 
-    async def clean(self):
-        self.cache.delete('*.html', '*.json', '*.csv', glob=True)
-
     def statobjs(self):
         yield from sorted(self.cache.glob('*.json', 'oh_historical.csv'))
 

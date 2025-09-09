@@ -56,7 +56,7 @@ class GA(Scraper):
 
     async def clean(self) -> None:
         await super().clean()
-        self.cache.delete('latest.html', '*.json', glob=True)
+        self.cache.delete('*.format3', glob=True)
 
     def statobjs(self) -> Iterator[Any]:
         yield from sorted(self.cache.glob('*.json'))

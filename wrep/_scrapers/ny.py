@@ -49,9 +49,6 @@ class NY(Scraper):
         it = chain(self.archive_filenames, self.tableau_filenames)
         yield from map(self.cache.topath, it)
 
-    async def clean(self) -> None:
-        self.cache.delete('*.html', '*.json', '*.xlsx', '*.csv', glob=True)
-
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         pdfheader_rewrites = [
