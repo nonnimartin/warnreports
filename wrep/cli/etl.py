@@ -11,24 +11,55 @@ from ..backends import etl
 from ..models import *
 from ..pipeline import Pipeline
 from ..translators import TranslationFactory
-from .base import AP, AppCommand, BaseCommand
+from .base import AP, AppCommand, BaseCommand, NonNegIntTa, PosIntTa
 from .mongo import ClientControlCommand
 
 logger = utils.get_logger('etl')
 
 class EtlBaseCommand(AppCommand):
+    output_formats: ClassVar[list[str]] = ['json', 'yaml']
+    default_format: ClassVar[str] = 'json'
 
     @classmethod
-    def add_arguments(cls, parser: AP):
-        parser.add_argument(
+    def add_arguments(cls, parser: AP) -> None:
+        arg = parser.add_argument
+        arg(
             '--etl-dbname', '-b',
             default=None,
             help=f'Alternate mongo etl db name')
+        arg(
+            '--output', '-o',
+            choices=cls.output_formats,
+            default=cls.default_format,
+            help=f'Output format, default {cls.default_format}')
+        if 'table' in cls.output_formats:
+            arg(
+                '--tablefmt',
+                default='simple',
+                help=f'Table format')
         super().add_arguments(parser)
 
-    def setup(self, opts):
+    def setup(self, opts) -> None:
         super().setup(opts)
+        self.output: str = opts.output
         self.context = {etl.client.dbname_key: opts.etl_dbname}
+
+    def printobj(self, obj: Any) -> None:
+        print(self.objtext(obj))
+
+    def objtext(self, obj: Any) -> str:
+        if isinstance(obj, str):
+            text = obj
+        elif self.output == 'yaml':
+            text = yaml.safe_dump(obj, sort_keys=False)
+        else:
+            text = json.dumps(obj, indent=2)
+        return text
+
+    def tablulate(self, body: Any, head: Any) -> str:
+        from tabulate import tabulate
+        tablefmt = getattr(self.opts, 'tablefmt', 'simple')
+        return tabulate(body, head, tablefmt=tablefmt, floatfmt='.2f')
 
 class OneCommand(BaseCommand):
 
@@ -37,27 +68,23 @@ class OneCommand(BaseCommand):
         backend_class: ClassVar[type[etl.MongoETBase]]
 
         @classmethod
-        def add_arguments(cls, parser: AP):
-            parser.add_argument('--save', '-s', action='store_true', help='Save the result')
-            parser.add_argument('--yaml', action='store_true', help='Output yaml')
-            parser.add_argument('id', type=UUID, help=f'The {cls.label} doc id')
+        def add_arguments(cls, parser: AP) -> None:
+            arg = parser.add_argument
+            arg(
+                '--save', '-s',
+                action='store_true',
+                help='Save the result')
+            arg(
+                'id',
+                type=UUID,
+                help=f'The {cls.label} doc id')
             super().add_arguments(parser)
 
-        def setup(self, opts):
+        def setup(self, opts) -> None:
             super().setup(opts)
             self.backend = self.backend_class(context=self.context)
 
-        def printobj(self, obj: Any) -> None:
-            print(self.objtext(obj))
-
-        def objtext(self, obj: Any) -> str:
-            if self.opts.yaml:
-                text = yaml.safe_dump(obj, sort_keys=False)
-            else:
-                text = json.dumps(obj, indent=2)
-            return text
-
-        async def get_inst(self):
+        async def get_inst(self) -> etl.ETBase:
             srch = self.backend.search(dict(id=self.opts.id), limit=1)
             try:
                 return await anext(srch.objs())
@@ -69,7 +96,7 @@ class OneCommand(BaseCommand):
         label = 'extraction'
         backend_class = etl.MongoExtraction
 
-        async def run(self):
+        async def run(self) -> None:
             extraction = await self.get_inst()
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)
@@ -110,7 +137,7 @@ class OneCommand(BaseCommand):
         label = 'translation'
         backend_class = etl.MongoTranslation
 
-        async def run(self):
+        async def run(self) -> None:
             translation: Translation = await self.get_inst()
             pipeline = Pipeline(translation.state, context=self.context)
             with orm.SessionLocal() as session:
@@ -142,9 +169,50 @@ class OneCommand(BaseCommand):
 class LogCommand(BaseCommand):
     'Pipeline log commands'
 
-    class Show(EtlBaseCommand):
-        'Show pipeline log'
+    class Base(EtlBaseCommand):
 
+        def setup(self, opts) -> None:
+            super().setup(opts)
+            self.backend = etl.MongoPipelineLog(context=self.context)
+
+    class List(Base):
+        'List pipeline logs'
+        output_formats: ClassVar[list[str]] = EtlBaseCommand.output_formats + ['table']
+        default_format: ClassVar[str] = 'table'
+        headers: ClassVar[list[str]] = ['id', 'start', 'states', 'stages', 'runs', 'errors', 'elapsed']
+
+        @classmethod
+        def add_arguments(cls, parser: AP) -> None:
+            arg = parser.add_argument
+            arg(
+                '--limit', '-l',
+                default=10,
+                type=PosIntTa.validate_strings,
+                help=f'Results limit, default 10')
+            arg(
+                '--skip', '-s',
+                default=0,
+                dest='offset',
+                type=NonNegIntTa.validate_strings,
+                help=f'Skip n results (offset)')
+            super().add_arguments(parser)
+
+        async def run(self) -> None:
+            kw = dict(limit=self.opts.limit, offset=self.opts.offset)
+            srch = self.backend.search({}, **kw)
+            results = [
+                dict(zip(self.headers, map(x.get_short().get, self.headers)))
+                async for x in srch.objs()]
+            if self.output == 'table':
+                head = dict(zip(self.headers, self.headers))
+                body = self.tablulate(results, head)
+            else:
+                body = dict(results=results)
+            self.printobj(body)
+
+    class Show(Base):
+        'Show pipeline log'
+        output_formats: ClassVar[list[str]] = EtlBaseCommand.output_formats + ['table']
         summary_methods: ClassVar[dict[str, str]] = {
             'short': 'get_short',
             'runs': 'get_runs',
@@ -157,7 +225,7 @@ class LogCommand(BaseCommand):
             'scrape-stats': ('state', 'elapsed')}
 
         @classmethod
-        def add_arguments(cls, parser):
+        def add_arguments(cls, parser: AP) -> None:
             arg = parser.add_argument
             arg(
                 '--summary', '-s',
@@ -165,13 +233,9 @@ class LogCommand(BaseCommand):
                 default=None,
                 help=(f'The summary type to show'))
             arg(
-                '--output', '-o',
-                choices=['json', 'yaml', 'table'],
-                help=f'Output format')
-            arg(
-                '--tablefmt',
-                default='simple',
-                help=f'Table format')
+                '--verbose', '-v',
+                action='store_true',
+                help=f'Verbose output')
             arg(
                 'id',
                 type=UUID,
@@ -180,30 +244,30 @@ class LogCommand(BaseCommand):
                 help='The pipeline log ID, default latest')
             super().add_arguments(parser)
 
-        def setup(self, opts):
+        def setup(self, opts) -> None:
             super().setup(opts)
-            self.summary: str|None = self.opts.summary
-            self.output: str = self.opts.output
+            self.verbose: bool = opts.verbose
+            self.summary: str|None = opts.summary
             if not self.summary and self.output == 'table':
                 self.parser.error(f'Table output only supported with summary')
-            self.backend = etl.MongoPipelineLog(context=self.context)
+            if self.verbose:
+                if self.summary:
+                    self.parser.error(f'Verbose output not supported with summary')
+                if self.output == 'table':
+                    self.parser.error(f'Verbose output not supported with table output')
 
-        async def run(self):
+        async def run(self) -> None:
             if self.opts.id:
                 log = await self.backend.fetch(self.opts.id)
             else:
                 log = await self.backend.fetch_latest()
             if self.summary:
                 body = getattr(log, self.summary_methods[self.summary])()
+                if self.output == 'table':
+                    body = self.output_table(body)
             else:
                 body = self.default_body(log)
-            if self.output == 'table':
-                text = self.output_table(body)
-            elif self.output == 'yaml':
-                text = yaml.safe_dump(body, sort_keys=False)
-            else:
-                text = json.dumps(body, indent=2)
-            print(text)
+            self.printobj(body)
 
         def output_table(self, body: dict) -> str:
             head = self.summary_fields[self.summary]
@@ -211,29 +275,28 @@ class LogCommand(BaseCommand):
                 head = dict(zip(head, head))
             if isinstance(body, Mapping):
                 body = list(body.items())
-            from tabulate import tabulate
-            return tabulate(body, head, tablefmt=self.opts.tablefmt, floatfmt='.2f')
+            return self.tablulate(body, head)
 
-        def default_body(self, log: PipelineLog) -> dict:
-            body = log.model_dump(mode='json')
-            body['runs'] = len(body['runs'])
-            body['states'] = len(body['states'])
+        def default_body(self, log: PipelineLog) -> dict[str, Any]:
+            body = log.model_dump(mode='json', exclude_none=True)
+            if not self.verbose:
+                body.update(runs=len(body['runs']), states=len(body['states']))
             return body
 
-    class Copy(EtlBaseCommand):
+    class Copy(Base):
         'Copy pipeline logs to another db'
 
         @classmethod
-        def add_arguments(cls, parser):
+        def add_arguments(cls, parser: AP) -> None:
             parser.add_argument('dest', help='The destination db name')
             super().add_arguments(parser)
 
-        def setup(self, opts):
+        def setup(self, opts) -> None:
             super().setup(opts)
-            self.src = etl.MongoPipelineLog(context=self.context)
+            self.src = self.backend
             self.dst = etl.MongoPipelineLog(context={next(iter(self.context)): opts.dest})
 
-        async def run(self):
+        async def run(self) -> None:
             src_db = await self.src.db()
             dst_db = await self.dst.db()
             if src_db.name == dst_db.name:
@@ -241,13 +304,13 @@ class LogCommand(BaseCommand):
             logger.info(f'Copying from {src_db.name} to {dst_db.name}')
             res = await self.dst.update(self.src.search({}).objs())
             counts = dict(zip(('count', 'created', 'updated'), res))
-            print(counts)
+            self.printobj(counts)
 
-    class Prune(EtlBaseCommand):
+    class Prune(Base):
         'Prune old pipeline logs'
 
         @classmethod
-        def add_arguments(cls, parser):
+        def add_arguments(cls, parser: AP) -> None:
             parser.add_argument(
                 '--maxage', '-m',
                 type=utils.deltaopt('days'),
@@ -259,18 +322,14 @@ class LogCommand(BaseCommand):
                 help='Dry run only')
             super().add_arguments(parser)
 
-        def setup(self, opts):
-            super().setup(opts)
-            self.backend = etl.MongoPipelineLog(context=self.context)
-
-        async def run(self):
+        async def run(self) -> None:
             res = await self.backend.prune(self.opts.maxage, dryrun=self.opts.dryrun)
             result = dict(deleted=res)
             if self.opts.dryrun:
                 result.update(dryrun=True)
-            print(result)
+            self.printobj(result)
 
-    commands = dict(show=Show, copy=Copy, prune=Prune)
+    commands = dict(list=List, show=Show, copy=Copy, prune=Prune)
 
 class Command(BaseCommand):
     'Misc ETL pipeline commands'

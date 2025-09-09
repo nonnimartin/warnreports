@@ -5,12 +5,17 @@ import asyncio
 from argparse import ArgumentParser, _SubParsersAction
 from typing import Any, ClassVar, Iterable
 
+from pydantic import NonNegativeInt, PositiveInt, TypeAdapter
+
 from .. import utils
 from ..models import StateCode
 
 type AP = ArgumentParser
 type SubParsers = _SubParsersAction[ArgumentParser]
 
+
+PosIntTa = TypeAdapter(PositiveInt)
+NonNegIntTa = TypeAdapter(NonNegativeInt)
 
 class HelpFormatter(argparse.HelpFormatter):
     """
