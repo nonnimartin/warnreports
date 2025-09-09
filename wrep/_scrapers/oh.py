@@ -4,7 +4,7 @@ import csv
 import json
 from collections import defaultdict
 from contextlib import contextmanager
-from itertools import chain
+from itertools import chain, islice
 from re import compile as _r
 from typing import Any, Iterator
 
@@ -153,8 +153,10 @@ class OH(Scraper):
         def readfile(key: str):
             url = sources[key]
             rows: list[list[str]] = self.cache.read_json(f'{key}.json')['data']
-            headers = rows[1][:9]
-            for values in filter(any, rows[2:]):
+            headers = list(rows[1])
+            while not headers[-1]:
+                headers.pop()
+            for values in filter(any, islice(rows, 2, None)):
                 base = dict(zip(headers, values))
                 if self.archived_sources.get(key) != url:
                     # Don't include the archived source
