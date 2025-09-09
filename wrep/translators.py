@@ -50,11 +50,11 @@ def varcall[T](func: Callable[..., T], *args) -> T:
 
 @dataclasses.dataclass
 class TranslationFactory:
-    session: orm.Session|None = None
+    session: orm.Session
     translators: ClassVar[dict[StateCode, type[Translator]]] = {}
 
-    def translate(self, obj: Any) -> Iterable[Translation]:
-        extraction = Extraction.model_validate(obj)
+    def translate(self, extraction: Extraction|Any) -> Iterable[Translation]:
+        extraction: Extraction = Extraction.model_validate(extraction)
         translator = self.translators[extraction.state]()
         # Remove nulls
         data = MapProxy({
@@ -125,27 +125,28 @@ class TranslationFactory:
         parts = [inst.report_id]
         for field in translator.report_id_extra:
             value = getattr(inst, field)
-            if isinstance(value, datetime):
+            if value is None:
+                pass
+            elif isinstance(value, datetime):
                 parts.append(value.strftime(f'%Y-%m-%d'))
             elif isinstance(value, int):
                 parts.append(str(value))
             elif isinstance(value, str):
                 parts.append(PAT_NONALPHANUM.sub('', value).upper())
+            else:
+                raise ValueError(f'Cannot extend report_id with {field=} {value=}')
         inst.report_id = '_'.join(parts)
 
     def fill_mod(self, translator: Translator, inst: Translation, info: TranslateInfo) -> None:
         if not (scrape_time := utils.parse_date(info.data.get('scrape_time'))):
             return
         stmt = orm.select(ReportMod).where(ReportMod.id == inst.id)
-        with orm.ensure_session(self.session) as session:
-            repmod = session.scalar(stmt)
-            if not repmod:
-                repmod = ReportMod(id=inst.id, ns=translator.ns)
-            if not repmod.first_scraped or scrape_time < repmod.first_scraped:
-                repmod.first_scraped = scrape_time
-                session.add(repmod)
-                if not self.session:
-                    session.commit()
+        repmod = self.session.scalar(stmt)
+        if not repmod:
+            repmod = ReportMod(id=inst.id, ns=translator.ns)
+        if not repmod.first_scraped or scrape_time < repmod.first_scraped:
+            repmod.first_scraped = scrape_time
+            self.session.add(repmod)
         inst.first_scraped = repmod.first_scraped
         if inst.reported and repmod.first_scraped < inst.reported:
             inst.reported = repmod.first_scraped.replace(
@@ -175,7 +176,7 @@ class Translator:
     default_url: ClassVar[str|None] = None
     values_hash_exclude: ClassVar[list[str]] = []
     report_id_extra: ClassVar[list[str]] = []
-    rewrites: ClassVar[dict[str, list[tuple[str|re.Pattern, str|Callable[[re.Match], str]]]]] = dict(
+    rewrites: ClassVar[dict[str, list[strs.SrchRepl]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
             (_r(r'\d{1,2}/\d{1,2}/\d{2,4}'), ''), # remove dates M/D/Y
@@ -581,7 +582,6 @@ class FL(Translator):
             (_r(r'Harvest Sherwoord'), 'Harvest Sherwood'),
         ],
     )
-    values_hash_exclude = ['download', 'row_key', 'artifacts_json']
     urlfmt = '{}/WarnList/{}?year={}'
 
     def finish(self, inst: Translation, info: TranslateInfo):
@@ -630,7 +630,6 @@ class GA(Translator):
     )
     # One observed case of duplicate GA WARN ID for unrelated reports.
     report_id_extra = ['company']
-    values_hash_exclude = ['artifacts_json']
 
     def finish(self, inst: Translation, info: TranslateInfo):
         """
@@ -869,7 +868,6 @@ class KY(Translator):
         report_id=[],
         naics=['NAICS Code'],
         artifacts=['artifacts_json'])
-    values_hash_exclude = ['artifacts_json']
     rewrites = dict(
         company=[
             (_r(r'\(EXTENSION OF CONDITIONAL WARN\)'), ''),

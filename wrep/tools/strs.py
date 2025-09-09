@@ -8,6 +8,7 @@ from uuid import UUID, uuid5
 from .. import settings
 
 __all__ = [
+    'absurl',
     'clean_filename',
     'rewrite_all',
     'struuid']
@@ -20,6 +21,12 @@ clean_filename_subs = [
     (_r(r'([-_])+'), r'\1'),
 ]
 clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
+
+
+def absurl(base_url: str|None, url: str) -> None:
+    if base_url and not url.startswith(('http://', 'https://')):
+        url = base_url.rstrip('/') + '/' + url.lstrip('/')
+    return url
 
 def clean_filename[T](
         value: str,

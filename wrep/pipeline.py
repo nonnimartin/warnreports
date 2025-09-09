@@ -5,12 +5,13 @@ import functools
 import operator
 import uuid
 from collections import defaultdict, deque
+from enum import StrEnum
 from functools import cache
 from itertools import chain
 from pathlib import Path
 from threading import Thread
 from types import MappingProxyType as MapProxy
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, overload
+from typing import TYPE_CHECKING, Any, AsyncIterable, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
@@ -19,9 +20,10 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
+from .scrapers import Scraper
 
 if TYPE_CHECKING:
-    from .scrapers import Scraper
+    from typing import overload
 
 logger = utils.get_logger('pipeline')
 
@@ -46,6 +48,7 @@ class Pipeline:
         self.context = context
         self.opts = PipelineOpts.model_validate(opts or {})
         self.session: orm.Session|None = None
+        self.logger = utils.get_logger(f'pipeline.{self.state}')
 
     if TYPE_CHECKING:
         @overload
@@ -64,9 +67,9 @@ class Pipeline:
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
-        logger.info(f'{self.state}:{stage}:start')
+        self.logger.info(f'{stage}:start')
         summary: dict = await getattr(self, stage)(clean=clean)
-        logger.info(f'{self.state}:{stage}:complete {summary}')
+        self.logger.info(f'{stage}:complete {summary}')
         return summary
 
     async def stat(self, stage: Stage) -> dict:
@@ -106,7 +109,7 @@ class Pipeline:
     async def clean(self, stage: Stage) -> None:
         stage = Stage(stage)
         state = self.state
-        logger.info(f'{state}:{stage}:clean')
+        self.logger.info(f'{stage}:clean')
         if stage is stage.Scrape:
             await self.scraper(state).clean()
         elif stage is stage.Extract:
@@ -138,13 +141,13 @@ class Pipeline:
                 backend.clean('states', dict(id=state))]
             for coro in coros:
                 await coro
-        logger.info(f'{state}:{stage}:clean:complete')
+        self.logger.info(f'{stage}:clean:complete')
 
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
         state = self.state
         prev = await self.stat(stage)
-        logger.info(f'{state}:{stage}:stat {statlog(prev)}')
+        self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         scraper = self.scraper(state)
@@ -164,7 +167,7 @@ class Pipeline:
         state = self.state
         backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{state}:{stage}:stat {statlog(prev)}')
+        self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         scraper = self.scraper(state)
@@ -184,10 +187,11 @@ class Pipeline:
         backend = self.backend(TranslationBackend)
         source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        logger.info(f'{state}:{stage}:stat {statlog(prev)}')
+        self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         from .translators import TranslationFactory
+        reader: AsyncIterable[Extraction]
         async with source.reader(dict(state=state)) as reader:
             with SessionLocal() as session:
                 factory = TranslationFactory(session)
@@ -292,7 +296,7 @@ class Pipeline:
             elif company_save is not save.Nochange:
                 save = save.Update
         if save is not save.Nochange:
-            logger.debug(f'{save=} {report.id}')
+            self.logger.debug(f'{save} {report.id} {report.reported.strftime(f'%Y-%m-%d')}')
         return report, save
 
     def save_company(self, name: str) -> tuple[Company, SaveType]:
@@ -411,7 +415,7 @@ def statlog(stat: dict):
     stat.pop('hash', None)
     return stat
 
-class SkipReason(utils.StrEnum):
+class SkipReason(StrEnum):
     fail = 'Previous stage failed'
     nochange = 'No change'
 

@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 import dotenv
 
 dotenv.load_dotenv()
@@ -15,15 +17,17 @@ if settings.SENTRY_ENABLED and settings.SENTRY_DSN:
         environment=settings.SENTRY_ENVIRONMENT,
         auto_session_tracking=False)
 
-class Stage(utils.StrEnum):
+class Stage(StrEnum):
     Scrape = 'scrape'
     Extract = 'extract'
     Translate = 'translate'
     Load = 'load'
     Index = 'index'
 
-class SaveType(utils.StrEnum):
+class SaveType(StrEnum):
     Create = 'create'
     Update = 'update'
     Nochange = 'nochange'
     Skip = 'skip'
+
+__all__ = ()

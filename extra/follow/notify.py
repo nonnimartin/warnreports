@@ -42,5 +42,18 @@ class Command(utils.BaseCommand):
     def run(self):
         notify_all()
 
+def send_email(recipient: str, subject: str, body: str) -> bool:
+    from wrep import settings
+    from wrep.backends.email import instances as email_backends
+    backend = email_backends[settings.EMAIL_BACKEND]
+    sender = settings.EMAIL_FROM_ADDRESS
+    logger.info(f'Sending email {recipient=} {backend=} {subject=}')
+    success = backend.send(sender, recipient, subject, body)
+    if success:
+        logger.info('Email sent successfully!')
+    else:
+        logger.info('Failed to send email.')
+    return success
+
 if __name__ == '__main__':
     Command.main()

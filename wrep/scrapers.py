@@ -598,7 +598,7 @@ class MO(Scraper):
                     self.cache.write(key, driver.page_source)
         else:
             for year, key in zip(years, keys):
-                url = utils.absurl(self.archive_url, f'/{key}')
+                url = strs.absurl(self.archive_url, key)
                 rep = await self.download(key, url, missing_only=not isrecent(year))
                 if year == now.year:
                     dt = utils.parse_date(rep.headers.get('Last-Modified'))

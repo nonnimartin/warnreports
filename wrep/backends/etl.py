@@ -82,7 +82,7 @@ class PipelineLogBackend(ContextMixin):
     async def update(self, source: EitherIterable[PipelineLog]) -> tuple[int, int, int]: ...
 
     @abstractmethod
-    async def prune(self, maxage: utils.Delta) -> int: ...
+    async def prune(self, maxage: utils.Delta, *, dryrun: bool = False) -> int: ...
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -197,11 +197,13 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
         await self.create_indexes()
         return await update_collection(await self.get_collection(), it)
 
-    async def prune(self, maxage: utils.Delta) -> int:
+    async def prune(self, maxage: utils.Delta, *, dryrun: bool = False) -> int:
         age = utils.deltaparse(maxage, default_unit='days')
         expiry = utils.utcnow() - age
         filt = {'start': {'$lt': expiry}}
         coll = await self.get_collection()
+        if dryrun:
+            return await coll.count_documents(filt)
         res = await coll.delete_many(filt)
         return res.deleted_count
 
@@ -323,8 +325,10 @@ async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc
         res = await coll.replace_one(filt, doc, True)
         if res.upserted_id:
             created += 1
+            # logger.debug(f'{coll.name} created {res.upserted_id}')
         elif res.modified_count:
             updated += 1
+            # logger.debug(f'{coll.name} modified {doc.get('_id', filt.get('_id', filt))}')
         count += 1
     return count, created, updated
 
