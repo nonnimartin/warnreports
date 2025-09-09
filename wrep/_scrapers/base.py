@@ -123,7 +123,7 @@ class Scraper:
         return rep
 
     def absurl(self, url: str) -> str:
-        return utils.absurl(self.base_url, url)
+        return strs.absurl(self.base_url, url)
 
     def __init_subclass__(cls) -> None:
         cls.retry = Scraper.retry | cls.retry

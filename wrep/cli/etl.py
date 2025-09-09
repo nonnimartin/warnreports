@@ -121,7 +121,7 @@ class OneCommand(BaseCommand):
                     row = (report, report, None, None)
                     report, = orm.Report.map_reduce([row])
                 res = dict(
-                    save=save,
+                    save=str(save),
                     report=report.model_dump(
                         mode='json',
                         exclude_unset=True),
@@ -253,6 +253,10 @@ class LogCommand(BaseCommand):
                 type=utils.deltaopt('days'),
                 default='30d',
                 help='Max age, default 30d')
+            parser.add_argument(
+                '--dryrun',
+                action='store_true',
+                help='Dry run only')
             super().add_arguments(parser)
 
         def setup(self, opts):
@@ -260,9 +264,11 @@ class LogCommand(BaseCommand):
             self.backend = etl.MongoPipelineLog(context=self.context)
 
         async def run(self):
-            res = await self.backend.prune(self.opts.maxage)
-            counts = dict(deleted=res)
-            print(counts)
+            res = await self.backend.prune(self.opts.maxage, dryrun=self.opts.dryrun)
+            result = dict(deleted=res)
+            if self.opts.dryrun:
+                result.update(dryrun=True)
+            print(result)
 
     commands = dict(show=Show, copy=Copy, prune=Prune)
 

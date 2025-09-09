@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import enum
 import logging
 import logging.config
 import mimetypes
@@ -11,6 +10,7 @@ import time
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
                         asynccontextmanager, contextmanager)
 from datetime import datetime, timedelta, timezone
+from datetime import tzinfo as TzInfo
 from functools import wraps
 from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Generator,
@@ -42,10 +42,10 @@ DELTA_PAT = re.compile(
     r'((?P<milliseconds>[\d.]+?)ms)?'
     r'((?P<microseconds>[\d.]+?)us)?$')
 
-def now(**kw) -> datetime:
-    dt = datetime.now(tz=kw.pop('tz', None))
-    if kw:
-        dt += timedelta(**kw)
+def now(*, tz: TzInfo|None = None, **deltakw) -> datetime:
+    dt = datetime.now(tz=tz)
+    if deltakw:
+        dt += timedelta(**deltakw)
     return dt
 
 def utcnow(**kw) -> datetime:
@@ -77,16 +77,11 @@ def deltaopt(default_unit: str):
         return deltaparse(value, default_unit=default_unit)
     return opt
 
-def morethan(n: float, it: Iterable, pred: Callable|None =None) -> bool:
+def morethan(n: float, it: Iterable, pred: Callable|None = None) -> bool:
     for i, _ in enumerate(filter(pred, it), start=1):
         if i > n:
             return True
     return False
-
-def absurl(base_url: str|None, url: str) -> None:
-    if base_url and not any(map(url.startswith, ('http://', 'https://'))):
-        url = base_url.rstrip('/') + '/' + url.lstrip('/')
-    return url
 
 def unique[T](it: Iterable[T]) -> Iterator[T]:
     done = set()
@@ -108,21 +103,23 @@ async def aenumerate[T](it: EitherIterable[T]) -> AsyncIterator[tuple[int, T]]:
         yield i, x
         i += 1
 
-def parse_date(value: str) -> datetime|None:
+def parse_date(value: str, *, fail: bool = False) -> datetime|None:
     value = value or ''
     try:
         dt = dateutil.parser.parse(value, fuzzy=True)
         dt.timestamp()
         return dt
     except ValueError:
-        pass
+        if fail:
+            raise
 
-def parse_int(value: str) -> int|None:
+def parse_int(value: str, *, fail: bool = False) -> int|None:
     value = value or ''
     try:
-        return int(value)
+        return int(float(value))
     except ValueError:
-        pass
+        if fail:
+            raise
 
 def monthend(dt: datetime) -> datetime:
     for days in reversed(range(28, 31)):
@@ -152,9 +149,9 @@ def init_logging() -> None:
     file = settings.BASEDIR/'logging.yml'
     config = yaml.safe_load(file.read_bytes())
     config['loggers']['wrep']['level'] = levelname
-    config['root']['level'] = sorted(
+    config['root']['level'] = max(
         ['INFO', levelname],
-        key=lambda x: getattr(logging, x)).pop()
+        key=lambda x: getattr(logging, x))
     logging.config.dictConfig(config)
 
 async def wait(ret):
@@ -183,16 +180,12 @@ async def achain_from_iterable[T](it: EitherIterable[EitherIterable[T]]) -> Asyn
             yield x
 
 def wrapcontext[T](wrapped: Callable[..., T]):
+    'Converts a regular function into a context manager function'
     @contextmanager
     @wraps(wrapped)
     def wrapper(*args, **kw) -> Generator[T]:
         yield wrapped(*args, **kw)
     return wrapper
-
-class StrEnum(str, enum.Enum):
-
-    def __str__(self):
-        return self.value
 
 @dataclasses.dataclass(frozen=True)
 class Wait:
@@ -230,16 +223,3 @@ class Wait:
         raise self.raises from err
 
     replace = dataclasses.replace
-
-def send_email(recipient: str, subject: str, body: str) -> bool:
-    from . import settings
-    from .backends.email import instances as email_backends
-    backend = email_backends[settings.EMAIL_BACKEND]
-    sender = settings.EMAIL_FROM_ADDRESS
-    logger.info(f'Sending email {recipient=} {backend=} {subject=}')
-    success = backend.send(sender, recipient, subject, body)
-    if success:
-        logger.info('Email sent successfully!')
-    else:
-        logger.info('Failed to send email.')
-    return success
