@@ -207,7 +207,7 @@ class KY(Scraper):
             async def download(self, url: str, key: str) -> None:
                 dest = self.scraper.cache/key
                 if dest.exists():
-                    self.logger.info(f'Skipping download {key} already downloaded')
+                    self.logger.debug(f'Skipping download {key} already downloaded')
                     return
                 wait = utils.Wait(timeout=5)
                 try:

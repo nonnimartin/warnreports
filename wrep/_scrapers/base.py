@@ -50,7 +50,15 @@ class Scraper:
         self.logger = utils.get_logger(f'scrapers.{self.state}')
 
     async def clean(self) -> None:
-        self.runner.file.unlink(missing_ok=True)
+        self.cache.delete(
+            '*.csv',
+            '*.xlsx',
+            '*.pdf',
+            '*.json',
+            '*.html',
+            '*/*.html',
+            glob=True)
+        self.cache.delete(f'../{self.state.lower()}_raw.csv')
 
     async def scrape(self) -> None:
         self.runner.scrape()

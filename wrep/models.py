@@ -320,6 +320,8 @@ class PipelineLog(DataModel):
     def get_short(self) -> dict[str, Any]:
         mapping = dict(
             id=str(self.id),
+            start=self.start and self.start.isoformat(timespec='seconds'),
+            end=self.end and self.end.isoformat(timespec='seconds'),
             stages=''.join(s[0].upper() for s in self.stages),
             states=len(self.states),
             runs=len(self.runs),

@@ -24,9 +24,6 @@ class PA(Scraper):
     async def scrape(self) -> None:
         await self.download('latest.html', self.latest_url)
 
-    async def clean(self) -> None:
-        self.cache.delete('latest.html')
-
     def statobjs(self):
         if (file := self.cache/'latest.html').exists():
             yield self.find_main_div(bs(file))

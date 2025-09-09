@@ -32,9 +32,6 @@ class SC(Scraper):
             is_recent = year >= now.year - 1
             await self.download(key, url, missing_only=not is_recent)
 
-    async def clean(self) -> None:
-        self.cache.delete('latest.html', 'index.json')
-
     def statobjs(self):
         yield self.cache/'index.json'
         yield from sorted(self.cache.glob('*.pdf'), reverse=True)
