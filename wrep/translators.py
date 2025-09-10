@@ -1559,6 +1559,7 @@ class WI(Translator):
         artifacts=[])
     rewrites = dict(
         company=[
+            (_r(r'<br.*'), ''),
             (_r(r'\s*\(CORRECTED\)$'), ''),
         ],
         action=[
