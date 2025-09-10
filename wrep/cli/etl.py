@@ -9,7 +9,6 @@ import yaml
 from .. import orm, utils
 from ..backends import etl
 from ..models import *
-from ..pipeline import Pipeline
 from ..translators import TranslationFactory
 from .base import AP, AppCommand, BaseCommand, NonNegIntTa, PosIntTa
 from .mongo import ClientControlCommand
@@ -139,6 +138,8 @@ class OneCommand(BaseCommand):
 
         async def run(self) -> None:
             translation: Translation = await self.get_inst()
+            # Lazy import for etl requirements separation
+            from ..pipeline import Pipeline
             pipeline = Pipeline(translation.state, context=self.context)
             with orm.SessionLocal() as session:
                 pipeline.session = session
