@@ -13,12 +13,12 @@ from itertools import batched, chain, filterfalse
 from pathlib import Path
 from re import compile as _r
 from typing import Any, ClassVar, Generator, Iterable, Iterator
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote_plus
 
 from starlette.datastructures import URL
 
 from . import settings, utils
-from ._scrapers.base import AugmentArtifactsMixin, Scraper, scrapers
+from ._scrapers.base import AugmentArtifactsScraper, Scraper, scrapers
 from .backends import webdrivers
 from .tools import files, strs, xlsx
 from .tools.dom import Soup, bs
@@ -136,7 +136,7 @@ class CA(Scraper):
         for link in page.find_all('a'):
             href = str(link.get('href', ''))
             if self.hrefpat.search(href):
-                key = Path(urlparse(href).path).name
+                key = Path(URL(href).path).name
                 url = self.absurl(href)
                 items.append((key, url))
         index = dict(sorted(items))
@@ -146,7 +146,7 @@ class CA(Scraper):
 from ._scrapers.co import CO as CO
 
 
-class CT(AugmentArtifactsMixin, Scraper):
+class CT(AugmentArtifactsScraper):
     base_url: ClassVar = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
 
     def build_index(self) -> dict[str, dict[str, str]]:
@@ -186,7 +186,7 @@ class CT(AugmentArtifactsMixin, Scraper):
                 return
             uri = strs.rewrite_all(uri, uri_rewrites)
             url = self.absurl(uri)
-            clean = Path(urlparse(url).path).name
+            clean = Path(URL(url).path).name
             clean = unquote_plus(clean)
             clean = strs.clean_filename(clean)
             if not clean:
@@ -268,7 +268,7 @@ class DE(Scraper):
                     record[key] = value
             yield record
 
-class FL(AugmentArtifactsMixin, Scraper):
+class FL(AugmentArtifactsScraper):
     base_url: ClassVar = 'https://reactwarn.floridajobs.org'
     request_delay: ClassVar = 0.5
     user_agent: ClassVar = (
