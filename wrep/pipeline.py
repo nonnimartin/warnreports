@@ -571,6 +571,7 @@ class PipelineRunner:
             async with asyncio.TaskGroup() as group:
                 for i in range(self.num_workers):
                     group.create_task(worker(), name=str(i + 1))
+            await self.savelog()
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -592,7 +593,6 @@ class PipelineRunner:
         run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
         self.runs[state].append(run)
         self.log.runs.append(run)
-        await self.savelog()
         try:
             pipeline = Pipeline(state, context=self.context, opts=self.pipeline_opts)
             if self.opts.stat_only:
@@ -614,7 +614,6 @@ class PipelineRunner:
         finally:
             run.end = utils.utcnow()
             run.elapsed = (run.end - run.start).total_seconds()
-            await self.savelog()
 
     async def savelog(self) -> bool:
         self.log.sync()
