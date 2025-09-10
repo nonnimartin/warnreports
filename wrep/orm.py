@@ -26,6 +26,7 @@ from sqlalchemy.sql.elements import BinaryExpression as BinaryExpression
 from . import settings, utils
 from .models import *
 from .ref import normls
+from .tools import files
 
 __all__ = [
     'Artifact',
@@ -378,7 +379,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
         root = root or settings.ARTIFACTS_DIR
         file = root/self.path
         stat = file.stat()
-        digfile = utils.digestfile(file)
+        digfile = files.digestfile(file)
         digest = None
         if digfile.exists():
             digstat = digfile.stat()
@@ -393,7 +394,7 @@ class Artifact(MapReduceBase[ArtifactDetail, ArtifactRowType]):
         data = dict(
             size=stat.st_size,
             modified=datetime.fromtimestamp(int(stat.st_mtime), tz=timezone.utc),
-            media_type=utils.get_mimetype(file),
+            media_type=files.mimetype(file),
             sha1=digest)
         change = False
         for field, value in data.items():

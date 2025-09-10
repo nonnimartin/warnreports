@@ -9,6 +9,7 @@ from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar,
 from uuid import UUID, uuid5
 
 from motor.motor_asyncio import AsyncIOMotorCollection
+from pydantic import NonNegativeInt
 
 from .. import Stage, settings, utils
 from ..models import *
@@ -253,12 +254,16 @@ class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
     def get_save_doc(self, inst, i) -> Doc:
         if not inst.id:
             inst.i = i
-            inst.id = uuid5(self.NS, f'{inst.state}:seq:{int(i)}')
+            inst.id = self.get_seq_id(inst.state, i)
         return super().get_save_doc(inst, i)
 
     def clean_stat_doc(self, doc: Doc) -> Doc:
         super().clean_stat_doc(doc['data'])
         return doc
+
+    @classmethod
+    def get_seq_id(cls, state: StateCode, i: NonNegativeInt) -> UUID:
+        return uuid5(cls.NS, f'{state.upper()}:seq:{int(i)}')
 
 class MongoTranslation(MongoETBase[Translation], TranslationBackend):
     collection: ClassVar = collections['translations']

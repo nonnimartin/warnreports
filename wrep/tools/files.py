@@ -2,20 +2,35 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import shutil
 from collections import defaultdict
 from contextlib import contextmanager
+from datetime import datetime, timezone
+from datetime import tzinfo as TzInfo
 from itertools import chain
 from pathlib import Path
 from typing import Any, Iterator, Self
 
-from .. import SaveType, utils
+from .. import SaveType
 
 __all__ = [
     'ArtifactStore',
     'cachectx',
+    'digestfile',
     'FileCache',
-    'jsoncache']
+    'jsoncache',
+    'mimetype',
+    'mtime']
+
+def digestfile(file: Path) -> Path:
+    return file.parent/f'.{file.name}.sha1'
+
+def mimetype(file: Path) -> str:
+    return mimetypes.guess_type(file)[0] or 'application/octet-stream'
+
+def mtime(file: Path, *, tz: TzInfo|None = timezone.utc) -> datetime:
+    return datetime.fromtimestamp(file.stat().st_mtime, tz=tz)
 
 class FileCache:
 
@@ -92,7 +107,7 @@ class ArtifactStore:
         key = key.strip('/')
         file = self.src/key
         dest = self.dir/key
-        digfile = utils.digestfile(dest)
+        digfile = digestfile(dest)
         sta = file.stat()
         if dest.exists():
             stb = dest.stat()

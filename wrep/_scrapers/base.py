@@ -18,15 +18,15 @@ from typing_extensions import Buffer
 
 from .. import Stage, settings, utils
 from ..models import ScraperOpts, StateCode
-from ..tools import dom, strs
-from ..tools.files import ArtifactStore, FileCache
+from ..tools import dom, files, strs
 
-__all__ = [
-    'Scraper',
-    'scrapers']
-scrapers: dict[str, type[Scraper]] = {}
+__all__ = ['Scraper', 'scrapers']
+
+scrapers: dict[StateCode, type[Scraper]] = {}
+'Scraper class registry'
 
 class Scraper:
+    'Scraper base class'
     state: ClassVar[StateCode]
     base_url: ClassVar[str|None] = None
     user_agent: ClassVar[str] = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
@@ -38,12 +38,11 @@ class Scraper:
         self.opts = ScraperOpts.model_validate(opts or {})
         self.runner = Runner(self.state)
         self.session = requests.session()
-        retry = Retry(**self.retry)
-        self.session.mount('https://', HTTPAdapter(max_retries=retry))
+        self.session.mount('https://', HTTPAdapter(max_retries=Retry(**self.retry)))
         self.session.headers['User-Agent'] = self.user_agent
-        self.cache = FileCache(settings.BUILD_DIR/Stage.Scrape/self.state.lower())
-        self.extract_cache = FileCache(settings.BUILD_DIR/Stage.Extract/self.state.lower())
-        self.artifacts = ArtifactStore(
+        self.cache = files.FileCache(settings.BUILD_DIR/Stage.Scrape/self.state.lower())
+        self.extract_cache = files.FileCache(settings.BUILD_DIR/Stage.Extract/self.state.lower())
+        self.artifacts = files.ArtifactStore(
             settings.ARTIFACTS_DIR/self.state.lower(),
             self.cache.dir)
         self.metrics = defaultdict(int)
@@ -57,8 +56,8 @@ class Scraper:
             '*.json',
             '*.html',
             '*/*.html',
+            f'../{self.state.lower()}_raw.csv',
             glob=True)
-        self.cache.delete(f'../{self.state.lower()}_raw.csv')
 
     async def scrape(self) -> None:
         self.runner.scrape()
@@ -83,7 +82,7 @@ class Scraper:
     async def extract_clean(self) -> None:
         self.extract_cache.nuke()
 
-    async def fetch(self, key: str, url: str, **kw) -> str:
+    async def fetch(self, key: str|Path, url: str, **kw) -> str:
         rep = await self.request('GET', url, **kw)
         try:
             text = rep.content.decode()
@@ -92,7 +91,7 @@ class Scraper:
         self.cache.write(key, text)
         return text
 
-    async def download(self, key: str, url: str, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
+    async def download(self, key: str|Path, url: str, *, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
         dest = self.cache/key
         if missing_only and dest.exists():
@@ -100,6 +99,9 @@ class Scraper:
         self.logger.debug(f'Downloading {url} to {dest}')
         dest.parent.mkdir(parents=True, exist_ok=True)
         with await self.request('GET', url, stream=True, **kw) as rep:
+            if not rep.ok:
+                self.logger.warning(f'Download failed status={rep.status_code} url={rep.url}')
+                return rep
             rep.encoding = encoding or rep.encoding or 'utf-8'
             with dest.open('wb') as f:
                 for chunk in rep.iter_content(chunk_size=8192):
@@ -139,15 +141,15 @@ class Scraper:
             cls.state = name
             scrapers[cls.state] = cls
 
-class AugmentArtifactsMixin:
+class AugmentArtifactsScraper(Scraper):
     """
-    Mixin class with default functionality for augmenting CSV data with artifacts.
+    Scraper class with default functionality for augmenting CSV data with artifacts.
     Subclasses must implement `build_index()`
     """
     index_filename: ClassVar[str] = 'index.json'
     rowkey_trans: ClassVar[dict[int, None]] = dict.fromkeys(map(ord, '-_'))
 
-    async def scrape(self: Scraper|Self) -> None:
+    async def scrape(self) -> None:
         self.runner.scrape()
         # Download artifacts
         index = self.build_index()
@@ -155,15 +157,12 @@ class AugmentArtifactsMixin:
             await self.download(key, url, missing_only=True)
             self.artifacts.add(key)
 
-    def statobjs(self: Scraper|Self) -> Iterator[Any]:
+    def statobjs(self) -> Iterator[Any]:
         yield self.runner.file
         yield self.cache/self.index_filename
 
-    async def clean(self: Scraper|Self) -> None:
-        self.cache.delete('*.json', '*.html', '*.csv', glob=True)
-
     @contextmanager
-    def extract(self: Scraper|Self) -> Generator[Iterator[dict[str, str]]]:
+    def extract(self) -> Generator[Iterator[dict[str, str]]]:
         "Yield augmented records from CSV rows"
         index: dict[str, dict[str, str]] = self.cache.read_json(self.index_filename)
         todo: set[str] = set(index)
@@ -196,7 +195,7 @@ class AugmentArtifactsMixin:
         """
         raise NotImplementedError
 
-    def write_index_items(self: Scraper|Self, items: Iterable[tuple[str, str, str]]) -> dict[str, dict[str, str]]:
+    def write_index_items(self, items: Iterable[tuple[str, str, str]]) -> dict[str, dict[str, str]]:
         """
         Converts an iterable of items (rowkey, cachekey, URL) into a sorted
         mapping of {rowkey: {cachekey: URL}}. Writes JSON to the index file,
@@ -210,7 +209,7 @@ class AugmentArtifactsMixin:
 
 class Runner:
 
-    def __init__(self, state: str) -> None:
+    def __init__(self, state: StateCode) -> None:
         self.state = state.upper()
         self.logger = utils.get_logger(f'scrapers.{self.state}')
         self.cache_dir = settings.BUILD_DIR/Stage.Scrape
@@ -235,8 +234,9 @@ def hashstat(it: Iterable[Path|str|Buffer|dom.PageElement]) -> dict[str, str|int
             continue
         if isinstance(obj, str):
             buf = obj.encode()
-        elif isinstance(obj, dom.PageElement):
-            buf = obj.text.encode()
+        elif callable(getattr(obj, 'get_text', None)):
+            # BeautifulSoup element, use text
+            buf = obj.get_text().encode()
         else:
             buf = obj
         if buf:

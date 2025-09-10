@@ -7,6 +7,7 @@ import uuid
 from collections import defaultdict, deque
 from enum import StrEnum
 from functools import cache
+from functools import cached_property as lazy
 from itertools import chain
 from pathlib import Path
 from threading import Thread
@@ -20,10 +21,12 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
-from .scrapers import Scraper
 
 if TYPE_CHECKING:
     from typing import overload
+
+    # Typing-only import for performance
+    from .scrapers import Scraper
 
 logger = utils.get_logger('pipeline')
 
@@ -41,7 +44,7 @@ class Pipeline:
         'url',
         'company_norm_id')
 
-    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, opts: Any = None) -> None:
+    def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
         if context is None:
             context = {}
         self.state = state.upper()
@@ -53,17 +56,15 @@ class Pipeline:
     if TYPE_CHECKING:
         @overload
         def backend[B: StageBackend](self, base: type[B]) -> B:...
-        @overload
-        def scraper(self, base: StateCode) -> Scraper:...
 
     @cache
     def backend[B: StageBackend](self, base: type[B]) -> B:
         return StageBackend.registry['mongo'][base.stage](context=self.context)
 
-    @cache
-    def scraper(self, state: StateCode) -> Scraper:
+    @lazy
+    def scraper(self) -> Scraper:
         from .scrapers import scrapers
-        return scrapers[state](opts=self.opts)
+        return scrapers[self.state](opts=self.opts)
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -76,7 +77,7 @@ class Pipeline:
         stage = Stage(stage)
         state = self.state
         if stage is stage.Scrape:
-            return await self.scraper(state).stat()
+            return await self.scraper.stat()
         if stage is stage.Extract:
             backend = self.backend(ExtractionBackend)
             return await backend.stat(dict(state=state))
@@ -111,11 +112,11 @@ class Pipeline:
         state = self.state
         self.logger.info(f'{stage}:clean')
         if stage is stage.Scrape:
-            await self.scraper(state).clean()
+            await self.scraper.clean()
         elif stage is stage.Extract:
             backend = self.backend(ExtractionBackend)
             await backend.clean(dict(state=state))
-            await self.scraper(state).extract_clean()
+            await self.scraper.extract_clean()
         elif stage is stage.Translate:
             backend = self.backend(TranslationBackend)
             await backend.clean(dict(state=state))
@@ -145,12 +146,11 @@ class Pipeline:
 
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
-        state = self.state
         prev = await self.stat(stage)
         self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
-        scraper = self.scraper(state)
+        scraper = self.scraper
         await scraper.scrape()
         metrics = dict(scraper.metrics)
         if scraper.artifacts.metrics:
@@ -170,7 +170,7 @@ class Pipeline:
         self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
-        scraper = self.scraper(state)
+        scraper = self.scraper
         async with utils.awith(scraper.extract()) as source:
             it = utils.as_aiter(source)
             it = (dict(state=state, data=x) async for x in it)
@@ -571,6 +571,7 @@ class PipelineRunner:
             async with asyncio.TaskGroup() as group:
                 for i in range(self.num_workers):
                     group.create_task(worker(), name=str(i + 1))
+            await self.savelog()
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None

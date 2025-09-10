@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from html import unescape as unhtml
 from re import compile as _r
 from typing import Callable, Iterable
 from uuid import UUID, uuid5
@@ -11,7 +12,8 @@ __all__ = [
     'absurl',
     'clean_filename',
     'rewrite_all',
-    'struuid']
+    'struuid',
+    'unhtml']
 
 type SrchRepl = tuple[str|re.Pattern, str|Callable[[re.Match], str]]
 STRNS = uuid5(settings.NAMESPACE, 'tools.strs')

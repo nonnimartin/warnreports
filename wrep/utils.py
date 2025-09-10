@@ -4,7 +4,6 @@ import asyncio
 import dataclasses
 import logging
 import logging.config
-import mimetypes
 import re
 import time
 from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
@@ -12,7 +11,6 @@ from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
 from datetime import datetime, timedelta, timezone
 from datetime import tzinfo as TzInfo
 from functools import wraps
-from pathlib import Path
 from typing import (Any, AsyncIterable, AsyncIterator, Callable, Generator,
                     Iterable, Iterator, Sequence)
 from uuid import UUID
@@ -127,21 +125,12 @@ def monthend(dt: datetime) -> datetime:
         if cand.month == dt.month:
             return cand
 
-def get_mimetype(value: Any) -> str:
-    return mimetypes.guess_type(value)[0] or 'application/octet-stream'
-
-def file_mtime(file: Path) -> datetime:
-    return datetime.fromtimestamp(file.stat().st_mtime, tz=timezone.utc)
-
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, UUID):
         return value.hex
     raise TypeError(f'Cannot JSON encode object of type {type(value)}')
-
-def digestfile(file: Path) -> Path:
-    return file.parent/f'.{file.name}.sha1'
 
 def init_logging() -> None:
     from . import settings

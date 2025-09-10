@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, ClassVar, Mapping
+from typing import Any, Callable, ClassVar, Mapping
 from uuid import UUID
 
 import yaml
@@ -9,8 +9,6 @@ import yaml
 from .. import orm, utils
 from ..backends import etl
 from ..models import *
-from ..pipeline import Pipeline
-from ..translators import TranslationFactory
 from .base import AP, AppCommand, BaseCommand, NonNegIntTa, PosIntTa
 from .mongo import ClientControlCommand
 
@@ -66,6 +64,8 @@ class OneCommand(BaseCommand):
     class Base(EtlBaseCommand):
         label: ClassVar[str] = '?'
         backend_class: ClassVar[type[etl.MongoETBase]]
+        idopt: ClassVar[Callable[[str], UUID]] = UUID
+        idopt_help: ClassVar[str|None] = None
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
@@ -76,8 +76,8 @@ class OneCommand(BaseCommand):
                 help='Save the result')
             arg(
                 'id',
-                type=UUID,
-                help=f'The {cls.label} doc id')
+                type=cls.idopt,
+                help=cls.idopt_help or f'The {cls.label} doc id')
             super().add_arguments(parser)
 
         def setup(self, opts) -> None:
@@ -94,9 +94,20 @@ class OneCommand(BaseCommand):
     class Trone(Base):
         'Run translations for a single extraction doc, and print the result'
         label = 'extraction'
-        backend_class = etl.MongoExtraction
+        backend_class: ClassVar[type[etl.MongoExtraction]] = etl.MongoExtraction
+        idopt_help = 'The extraction doc id, or state & sequence (e.g. WI.123)'
+
+        @classmethod
+        def idopt(cls, value: str) -> UUID:
+            if '.' in value:
+                state, i = value.rsplit('.', 1)
+                if len(state) != 2:
+                    raise ValueError(f'{state=}')
+                return cls.backend_class.get_seq_id(state, int(i))
+            return super().idopt(value)
 
         async def run(self) -> None:
+            from ..translators import TranslationFactory
             extraction = await self.get_inst()
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)
@@ -139,6 +150,8 @@ class OneCommand(BaseCommand):
 
         async def run(self) -> None:
             translation: Translation = await self.get_inst()
+            # Lazy import for etl requirements separation
+            from ..pipeline import Pipeline
             pipeline = Pipeline(translation.state, context=self.context)
             with orm.SessionLocal() as session:
                 pipeline.session = session

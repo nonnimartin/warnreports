@@ -60,22 +60,24 @@ class TranslationFactory:
         data = MapProxy({
             key: value for key, value in extraction.data.items()
             if value is not None})
-        inst = Translation(
-            state=extraction.state,
-            values_id=self.values_id(translator, data),
-            extraction=extraction)
-        # Sanitize
-        info = TranslateInfo(MapProxy({
-            key: self.sanitize(value) for key, value in data.items()}))
-        try:
-            varcall(translator.prepare, inst, info)
-            self.populate(translator, inst, info)
-            varcall(translator.finish, inst, info)
-            self.finalize(translator, inst, info)
-            yield Translation.model_validate(inst)
-        except:
-            logger.error(f'{inst}')
-            raise
+        for data in translator.individuate(data):
+            data = MapProxy(dict(data))
+            inst = Translation(
+                state=extraction.state,
+                values_id=self.values_id(translator, data),
+                extraction=extraction)
+            # Sanitize
+            info = TranslateInfo(MapProxy({
+                key: self.sanitize(value) for key, value in data.items()}))
+            try:
+                varcall(translator.prepare, inst, info)
+                self.populate(translator, inst, info)
+                varcall(translator.finish, inst, info)
+                self.finalize(translator, inst, info)
+                yield Translation.model_validate(inst)
+            except:
+                logger.error(f'{inst}')
+                raise
 
     def values_id(self, translator: Translator, data: Mapping[str, str|None]) -> uuid.UUID:
         base = dict(data)
@@ -183,6 +185,12 @@ class Translator:
             (_r(r'\d{1,2}/\d{2,4}'), ''), # remove dates M/Y
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
         ])
+
+    def individuate(self, data: Mapping[str, str]) -> Iterable[Mapping[str, str]]:
+        """
+        Break up extraction data into multiple variants for translation, if needed.
+        """
+        yield data
 
     def prepare(self, inst: Translation) -> None:
         pass
@@ -1551,6 +1559,7 @@ class WI(Translator):
         artifacts=[])
     rewrites = dict(
         company=[
+            (_r(r'<br.*'), ''),
             (_r(r'\s*\(CORRECTED\)$'), ''),
         ],
         action=[

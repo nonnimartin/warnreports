@@ -8,7 +8,7 @@ import uuid
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import ClassVar, Iterable, Iterator
+from typing import Any, ClassVar, Generator, Iterable, Iterator
 
 from .. import settings, utils
 from ..backends import webdrivers
@@ -32,12 +32,12 @@ class KY(Scraper):
         await super().clean()
         self.cache.delete('download/*', glob=True)
 
-    def statobjs(self):
+    def statobjs(self) -> Iterator[Any]:
         yield self.runner.file
         yield self.cache/'artifacts.json'
 
     @contextmanager
-    def extract(self):
+    def extract(self) -> Generator[Iterator[dict[str, str]]]:
         index = self.load_index()
         def extend(row: dict) -> dict:
             if (key := index.get(url := row['Notice URL'])):
