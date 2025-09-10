@@ -1547,20 +1547,23 @@ class WI(Translator):
     default_url = 'https://dwd.wisconsin.gov/dislocatedworker/warn/'
     fieldsmap = dict(
         company=['Company'],
-        reported=['Notice Received'],
-        location=['City'],
-        employees=['Affected Workers'],
-        starting=['Layoff Begin Date'],
-        action=['Original Notice Type / Update Type'],
-        url=[],
-        industry=['NAICS Description'],
-        report_id=[],
+        reported=['NoticeRcvd'],
+        location=['City', 'County'],
+        employees=['AffectedWorkers'],
+        starting=['LayoffBeginDate'],
+        action=['NoticeType'],
+        url=['url'],
+        industry=['NAICSDescription'],
+        report_id=['row_key'],
         naics=[],
-        artifacts=[])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         company=[
             (_r(r'<br.*'), ''),
             (_r(r'\s*\(CORRECTED\)$'), ''),
+        ],
+        starting=[
+            (_r(r'[^\d/-]'), ''),
         ],
         action=[
             ('WR', 'Workforce Reduction'),

@@ -808,6 +808,8 @@ class VA(Scraper):
         with self.cache.open('latest.csv') as file:
             yield csv.DictReader(file)
 
+from ._scrapers.wi import WI as WI
+
 # Create default Scraper classes
 scrapers.update({
     state: type(state, (Scraper,), {})
