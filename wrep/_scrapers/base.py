@@ -159,9 +159,6 @@ class AugmentArtifactsMixin:
         yield self.runner.file
         yield self.cache/self.index_filename
 
-    async def clean(self: Scraper|Self) -> None:
-        self.cache.delete('*.json', '*.html', '*.csv', glob=True)
-
     @contextmanager
     def extract(self: Scraper|Self) -> Generator[Iterator[dict[str, str]]]:
         "Yield augmented records from CSV rows"
@@ -235,8 +232,8 @@ def hashstat(it: Iterable[Path|str|Buffer|dom.PageElement]) -> dict[str, str|int
             continue
         if isinstance(obj, str):
             buf = obj.encode()
-        elif isinstance(obj, dom.PageElement):
-            buf = obj.text.encode()
+        elif callable(getattr(obj, 'get_text', None)):
+            buf = obj.get_text().encode()
         else:
             buf = obj
         if buf:

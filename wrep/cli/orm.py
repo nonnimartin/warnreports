@@ -12,6 +12,7 @@ from .. import settings, utils
 from ..models import DataModel
 from ..orm import *
 from ..orm import Base, MapReduceBase, dump_update, load_naics, select
+from ..tools import files
 from .base import AppCommand, BaseCommand, FuncCommand, resolve_statesopt
 
 logger = utils.get_logger('orm')
@@ -192,7 +193,7 @@ class ArtifactsCommand(BaseCommand):
                             logger.info(f'Orphan {path=} {id=}')
                             if self.change:
                                 file.unlink()
-                                utils.digestfile(file).unlink(missing_ok=True)
+                                files.digestfile(file).unlink(missing_ok=True)
                         else:
                             logger.debug(f'Found {path=} {id=}')
 

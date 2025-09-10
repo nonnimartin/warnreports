@@ -327,6 +327,7 @@ class FL(AugmentArtifactsMixin, Scraper):
 
 from ._scrapers.ga import GA as GA
 
+
 class IL(Scraper):
     source_url: ClassVar = 'https://apps.illinoisworknet.com/iebs/api/public/export'
     source_params: ClassVar = [
@@ -617,7 +618,7 @@ class NJ(Scraper):
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
         file = self.cache/'latest.xlsx'
-        scrape_time = utils.file_mtime(file).isoformat()
+        scrape_time = files.mtime(file).isoformat()
         wb = xlsx.load_workbook(file)
         for ws in wb.worksheets:
             extra = dict(scrape_time=scrape_time, worksheet_name=ws.title)
@@ -710,6 +711,7 @@ class OK(Scraper):
 from ._scrapers.pa import PA as PA
 from ._scrapers.sc import SC as SC
 
+
 class TX(Scraper):
     base_url: ClassVar = 'https://www.twc.texas.gov'
     latest_url: ClassVar = '/data-reports/warn-notice'
@@ -765,7 +767,7 @@ class UT(Scraper):
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
         file = self.cache/'latest.html'
-        extra = dict(scrape_time=utils.file_mtime(file).isoformat())
+        extra = dict(scrape_time=files.mtime(file).isoformat())
         for table in bs(file).find_all('table'):
             it = (
                 [td.text.strip() for td in tr.find_all(('td', 'th'))]

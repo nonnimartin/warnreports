@@ -25,7 +25,7 @@ from .ref import normls
 if TYPE_CHECKING:
     from typing import overload
 
-    # Typing-only import for bs4 etl requirement
+    # Typing-only import for performance
     from .scrapers import Scraper
 
 logger = utils.get_logger('pipeline')
@@ -44,7 +44,7 @@ class Pipeline:
         'url',
         'company_norm_id')
 
-    def __init__(self, state: StateCode, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
+    def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
         if context is None:
             context = {}
         self.state = state.upper()
@@ -592,6 +592,7 @@ class PipelineRunner:
         run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
         self.runs[state].append(run)
         self.log.runs.append(run)
+        await self.savelog()
         try:
             pipeline = Pipeline(state, context=self.context, opts=self.pipeline_opts)
             if self.opts.stat_only:
@@ -613,6 +614,7 @@ class PipelineRunner:
         finally:
             run.end = utils.utcnow()
             run.elapsed = (run.end - run.start).total_seconds()
+            await self.savelog()
 
     async def savelog(self) -> bool:
         self.log.sync()

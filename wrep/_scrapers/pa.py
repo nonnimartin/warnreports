@@ -6,6 +6,7 @@ from re import compile as _r
 from typing import ClassVar, Iterator
 
 from .. import utils
+from ..tools import files
 from ..tools.dom import Soup, bs
 from .base import Scraper
 
@@ -31,7 +32,7 @@ class PA(Scraper):
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
         file = self.cache/'latest.html'
-        scrape_time = utils.file_mtime(file)
+        scrape_time = files.mtime(file)
         maindiv = self.find_main_div(bs(file))
         extra = dict(url=self.absurl(self.latest_url), scrape_time=scrape_time.isoformat())
         for yeardiv in self.find_year_divs(maindiv):

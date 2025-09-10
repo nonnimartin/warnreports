@@ -9,7 +9,6 @@ import yaml
 from .. import orm, utils
 from ..backends import etl
 from ..models import *
-from ..translators import TranslationFactory
 from .base import AP, AppCommand, BaseCommand, NonNegIntTa, PosIntTa
 from .mongo import ClientControlCommand
 
@@ -96,6 +95,7 @@ class OneCommand(BaseCommand):
         backend_class = etl.MongoExtraction
 
         async def run(self) -> None:
+            from ..translators import TranslationFactory
             extraction = await self.get_inst()
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)

@@ -3,8 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from bs4 import BeautifulSoup as SoupBase
-from bs4.element import PageElement, ResultSet, Tag
+# bs4 is an etl-only requirement, so allow for missing module and fail at runtime.
+try:
+    from bs4 import BeautifulSoup as SoupBase
+    from bs4.element import PageElement, ResultSet, Tag
+except ModuleNotFoundError as err:
+    if TYPE_CHECKING:
+        raise
+    class SoupBase:
+        import_error = err
+        def __new__(cls, *args, **kw):
+            raise cls.import_error
+    PageElement = ResultSet = Tag = SoupBase
 
 if TYPE_CHECKING:
     from typing import overload
