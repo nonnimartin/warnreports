@@ -710,6 +710,7 @@ class OK(Scraper):
 
 from ._scrapers.pa import PA as PA
 from ._scrapers.sc import SC as SC
+from ._scrapers.tn import TN as TN
 
 
 class TX(Scraper):
