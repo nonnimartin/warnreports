@@ -4,11 +4,11 @@ import hashlib
 import json
 from abc import abstractmethod
 from contextlib import asynccontextmanager
-from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar,
-                    Mapping, override)
+from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar, Literal,
+                    Mapping, Self, override)
 from uuid import UUID, uuid5
 
-from motor.motor_asyncio import AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pydantic import NonNegativeInt
 
 from .. import Stage, settings, utils
@@ -25,8 +25,11 @@ __all__ = [
     'TranslationBackend']
 
 type Doc = dict[str, Any]
+type UpdateCounts = tuple[NonNegativeInt, NonNegativeInt, NonNegativeInt]
+
 logger = utils.get_logger('backends.etl')
-client = MongoClient(
+
+default_client = MongoClient(
     url=settings.ETL_MONGODB_URL,
     control_dbname=settings.ETL_MONGODB_CONTROL_DBNAME,
     dbname_key='etl.dbname',
@@ -35,22 +38,22 @@ client = MongoClient(
 
 collections: dict[str, MongoCollection] = dict(
     extractions=MongoCollection(
-        client=client,
         name='extractions',
+        client=default_client,
         data_model=Extraction,
         indexes=[
             {'state': 1},
             {'i': 1}]),
     translations=MongoCollection(
-        client=client,
         name='translations',
+        client=default_client,
         data_model=Translation,
         indexes=[
             {'values_id': 1},
             {'state': 1}]),
     pipelinelogs=MongoCollection(
-        client=client,
         name='pipelinelogs',
+        client=default_client,
         data_model=PipelineLog,
         indexes=[
             {'stages': 1},
@@ -60,8 +63,9 @@ collections: dict[str, MongoCollection] = dict(
             {'elapsed': -1}]))
 
 class ContextMixin:
+    context: Doc
 
-    def __init__(self, context: Doc|None = None) -> None:
+    def __init__(self, *, context: Doc|None) -> None:
         if context is None:
             context = {}
         self.context = context
@@ -80,10 +84,10 @@ class PipelineLogBackend(ContextMixin):
     async def fetch_latest(self) -> PipelineLog: ...
 
     @abstractmethod
-    async def update(self, source: EitherIterable[PipelineLog]) -> tuple[int, int, int]: ...
+    async def update(self, source: EitherIterable[PipelineLog]) -> UpdateCounts: ...
 
     @abstractmethod
-    async def prune(self, maxage: utils.Delta, *, dryrun: bool = False) -> int: ...
+    async def prune(self, maxage: utils.Delta, *, dryrun: bool = False) -> NonNegativeInt: ...
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -104,64 +108,76 @@ class ETBase[DM: (Extraction, Translation)](StageBackend):
 
     @abstractmethod
     @asynccontextmanager
-    async def reader(self, filt: Any, /, *, limit: Limit|None = None, offset: Offset = 0) -> AsyncGenerator[AsyncIterable[DM]]: ...
+    async def reader(self, filter: FilterModel[DM]|Any, /, *, limit: Limit|None = None, offset: Offset = 0) -> AsyncGenerator[AsyncIterable[DM]]: ...
 
     @abstractmethod
-    async def stat(self, filt: Any) -> dict: ...
+    async def stat(self, filter: FilterModel[DM]|Any) -> dict: ...
 
     @abstractmethod
-    async def clean(self, filt: Any) -> int: ...
+    async def clean(self, filter: FilterModel[DM]|Any) -> NonNegativeInt: ...
 
     @abstractmethod
-    async def update(self, source: EitherIterable[DM|Doc]) -> tuple[int, int, int]: ...
+    async def update(self, source: EitherIterable[DM|Doc]) -> UpdateCounts: ...
 
 class ExtractionBackend(ETBase[Extraction]):
-    stage = Stage.Extract
+    stage: ClassVar = Stage.Extract
 
 class TranslationBackend(ETBase[Translation]):
-    stage = Stage.Translate
+    stage: ClassVar = Stage.Translate
 
 class SearchIndexBackend(StageBackend):
-    stage = Stage.Index
+    stage: ClassVar = Stage.Index
     collections: ClassVar[Mapping[str, search.AbstractMappedCollection]]
 
     @abstractmethod
-    async def stat(self, name: str, filt: Any) -> dict: ...
+    async def stat(self, name: str, filter: FilterModel[DataModel]|Any) -> dict: ...
 
     @abstractmethod
-    async def clean(self, name: str, filt: Any) -> int: ...
+    async def clean(self, name: str, filter: FilterModel[DataModel]|Any) -> NonNegativeInt: ...
 
     @abstractmethod
-    async def update(self, name: str, source: EitherIterable[DataModel]) -> tuple[int, int, int]: ...
+    async def update(self, name: str, source: EitherIterable[DataModel]) -> UpdateCounts: ...
 
 class MongoContextMixin(ContextMixin):
-    engine = 'mongo'
-    client: ClassVar[MongoClient]
+    engine: ClassVar[Literal['mongo']] = 'mongo'
+    client: MongoClient
 
-    async def db(self):
+    def __init__(self, *, context: Doc|None, client: MongoClient) -> None:
+        super().__init__(context=context)
+        self.client = client
+
+    async def db(self) -> AsyncIOMotorDatabase:
         return await self.client.get_context_database(self.context)
+
+    def reloop(self) -> Self:
+        'Create a copy with a new AsyncIOMotorClient object for a separate thread/event loop'
+        return type(self)(context=self.context, client=self.client.reloop())
 
 class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
     collection: ClassVar[MongoCollection]
-    _indexes_created = False
 
-    def search(self, filter: Any, limit: Limit|None = None, offset: Offset = 0) -> Search[DM]:
-        filter = self.filter_class.model_validate(filter)
-        return Search(filter, limit=limit, offset=offset, context=self.context)
+    def __init__(self, *, context: Doc|None = None, client: MongoClient|None = None) -> None:
+        client = client or self.collection.client
+        self._indexes_created = False
+        super().__init__(context=context, client=client)
+
+    def search(self, filter: MongoFilterModel[DM]|Any, limit: Limit|None = None, offset: Offset = 0) -> Search[DM]:
+        return Search(
+            filter=self.filter_class.model_validate(filter),
+            limit=limit,
+            offset=offset,
+            context=self.context,
+            client=self.client)
 
     @property
     def model(self) -> type[DM]:
         return self.collection.data_model
 
     @property
-    def client(self) -> MongoClient:
-        return self.collection.client
-
-    @property
     def filter_class(self) -> type[MongoFilterModel[DM]]:
         return self.collection.filter_class
 
-    async def get_collection(self):
+    async def get_collection(self) -> AsyncIOMotorCollection:
         return (await self.db()).get_collection(self.collection.name)
 
     async def create_indexes(self) -> None:
@@ -170,35 +186,40 @@ class MongoContextCollectionMixin[DM: DataModel](MongoContextMixin):
             await coll.create_indexes(self.collection.indexes)
             self._indexes_created = True
 
+    def reloop(self) -> Self:
+        inst = super().reloop()
+        inst._indexes_created = self._indexes_created
+        return inst
+
 class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineLog]):
     collection: ClassVar = collections['pipelinelogs']
 
-    async def save(self, log):
+    async def save(self, log: PipelineLog) -> None:
         doc = log.model_dump(by_alias=True)
         await self.create_indexes()
         coll = await self.get_collection()
         await coll.replace_one({'_id': doc['_id']}, doc, True)
 
-    async def fetch(self, id):
+    async def fetch(self, id: UUID) -> PipelineLog:
         res = self.search(dict(id=[id]), limit=1)
         try:
             return await anext(res.objs())
         except StopAsyncIteration:
             raise ValueError(f'Not found {id=}')
 
-    async def fetch_latest(self):
+    async def fetch_latest(self) -> PipelineLog:
         res = self.search(dict(order='-start'), limit=1)
         try:
             return await anext(res.objs())
         except StopAsyncIteration:
             raise ValueError(f'No entries found')
 
-    async def update(self, source):
+    async def update(self, source: EitherIterable[PipelineLog]) -> UpdateCounts:
         it = (x.model_dump(by_alias=True) async for x in utils.as_aiter(source))
         await self.create_indexes()
         return await update_collection(await self.get_collection(), it)
 
-    async def prune(self, maxage: utils.Delta, *, dryrun: bool = False) -> int:
+    async def prune(self, maxage: utils.Delta, *, dryrun: bool = False) -> NonNegativeInt:
         age = utils.deltaparse(maxage, default_unit='days')
         expiry = utils.utcnow() - age
         filt = {'start': {'$lt': expiry}}
@@ -212,22 +233,22 @@ class MongoETBase[DM: (Extraction, Translation)](ETBase[DM], MongoContextCollect
     'Common base class for MongoExraction & MongoTranslation'
 
     @asynccontextmanager
-    async def reader(self, filt: Any) -> AsyncGenerator[AsyncIterable[DM]]:
-        yield self.search(filt).objs()
+    async def reader(self, filter: MongoFilterModel[DM]|Any, /) -> AsyncGenerator[AsyncIterable[DM]]:
+        yield self.search(filter).objs()
 
-    async def stat(self, filt: Any) -> dict:
-        it = self.search(filt).objs()
+    async def stat(self, filter: MongoFilterModel[DM]|Any) -> Doc:
+        it = self.search(filter).objs()
         it = (x.model_dump(by_alias=True) async for x in it)
         it = utils.amap(self.clean_stat_doc, it)
         return await docs_stat(it)
 
-    async def clean(self, filt: Any) -> int:
-        q = self.search(filt, limit=0).q
+    async def clean(self, filter: MongoFilterModel[DM]|Any) -> NonNegativeInt:
+        q = self.search(filter, limit=0).q
         coll = await self.get_collection()
         res = await coll.delete_many(q)
         return res.deleted_count
 
-    async def update(self, source):
+    async def update(self, source: EitherIterable[DM|Any]) -> UpdateCounts:
         await self.create_indexes()
         coll = await self.get_collection()
         it = utils.amap(self.model.model_validate, source)
@@ -235,7 +256,7 @@ class MongoETBase[DM: (Extraction, Translation)](ETBase[DM], MongoContextCollect
         it = utils.astarmap(self.get_save_doc, it)
         return await update_collection(coll, it, self.get_replace_filter)
 
-    def get_save_doc(self, inst: DM, i: int) -> Doc:
+    def get_save_doc(self, inst: DM, i: NonNegativeInt) -> Doc:
         return inst.model_dump(by_alias=True, exclude_unset=True, exclude_none=True)
 
     def get_replace_filter(self, doc: Doc) -> Doc:
@@ -251,7 +272,7 @@ class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
     collection: ClassVar = collections['extractions']
 
     @override
-    def get_save_doc(self, inst, i) -> Doc:
+    def get_save_doc(self, inst: Extraction, i: NonNegativeInt) -> Doc:
         if not inst.id:
             inst.i = i
             inst.id = self.get_seq_id(inst.state, i)
@@ -289,23 +310,25 @@ from .. import search
 
 class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
     collections: ClassVar[Mapping[str, AbstractMongoCollection]] = search.mapped_collections
-    client = search.client
 
-    async def clean(self, name, filt: Any) -> int:
+    def __init__(self, *, context: Doc|None = None, client: MongoClient|None = None) -> None:
+        super().__init__(context=context, client=client or search.default_client)
+
+    async def clean(self, name, filter: MongoFilterModel[DataModel]|Any) -> NonNegativeInt:
         collection = self.collections[name]
-        filter = collection.filter_class.model_validate(filt)
-        q = Search(filter, limit=0, context=self.context).q
+        filter = collection.filter_class.model_validate(filter)
+        q = Search(filter=filter, limit=0, context=self.context, client=self.client).q
         coll = (await self.db()).get_collection(collection.name)
         res = await coll.delete_many(q)
         return res.deleted_count
 
-    async def stat(self, name, filt: Any):
+    async def stat(self, name, filter: MongoFilterModel[DataModel]|Any) -> Doc:
         collection = self.collections[name]
-        filter = collection.filter_class.model_validate(filt)
-        srch = Search(filter, context=self.context)
+        filter = collection.filter_class.model_validate(filter)
+        srch = Search(filter=filter, context=self.context, client=self.client)
         return await docs_stat(await srch.docs())
 
-    async def update(self, name, source):
+    async def update(self, name, source: EitherIterable[DataModel]) -> UpdateCounts:
         collection = self.collections[name]
         coll = (await self.db()).get_collection(collection.name)
         await coll.create_indexes(collection.indexes)
@@ -314,7 +337,7 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
 
-async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc], get_filter: Callable[[Doc], Doc]|None = None) -> tuple[int, int, int]:
+async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc], get_filter: Callable[[Doc], Doc]|None = None) -> UpdateCounts:
     count, created, updated = 0, 0, 0
     async for doc in utils.as_aiter(it):
         if get_filter:
@@ -349,4 +372,3 @@ async def docs_stat(it: EitherIterable[Doc]) -> Doc:
         count=count,
         size=size,
         hash=h.hexdigest() if count else None)
-

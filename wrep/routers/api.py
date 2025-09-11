@@ -95,7 +95,7 @@ async def state_get(id: StateCode) -> StateDetail:
 
 @router.get('/_db', include_in_schema=False)
 async def dbstats() -> dict:
-    db = await search.client.get_database()
+    db = await search.default_client.get_database()
     dbid = uuid5(settings.NAMESPACE, f'dbid:{db.name}')
     tasks = {name: defn.stats(db=db) for name, defn in search.mapped_collections.items()}
     return dict(
@@ -105,7 +105,7 @@ async def dbstats() -> dict:
 @router.head('/_ok', include_in_schema=False)
 @router.get('/_ok', include_in_schema=False)
 async def checkok() -> Response:
-    db = await search.client.get_database()
+    db = await search.default_client.get_database()
     dbid = uuid5(settings.NAMESPACE, f'dbid:{db.name}')
     return Response(None, status.HTTP_204_NO_CONTENT, dict(dbid=str(dbid)))
 

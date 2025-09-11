@@ -5,7 +5,7 @@ import re
 import uuid
 from datetime import timedelta
 from functools import cached_property
-from typing import Any, AsyncIterator, ClassVar, Iterable, Literal
+from typing import Any, AsyncIterator, ClassVar, Iterable, Literal, Self
 
 from motor.motor_asyncio import (AsyncIOMotorClient, AsyncIOMotorCollection,
                                  AsyncIOMotorDatabase)
@@ -126,6 +126,12 @@ class MongoClient:
         self.dbname_cache['expiry'] = now + ttl
         return doc
 
+    def reloop(self) -> Self:
+        'Create a copy with a new AsyncIOMotorClient object for a separate thread/event loop'
+        inst = dataclasses.replace(self)
+        inst.dbname_cache = self.dbname_cache
+        return inst
+
 class MissingControlDoc(Exception):
     pass
 
@@ -142,29 +148,32 @@ class AbstractMongoCollection(AbstractCollection):
     def filter_class(self) -> type[MongoFilterModel]:
         return filters[self.data_model]
 
-    async def stats(self, db: str|AsyncIOMotorDatabase|None = None) -> dict[str, str|int]:
+    async def stats(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> dict[str, str|int]:
         'Get collection stats'
-        db = await self.client.get_database(db)
+        client = client or self.client
+        db = await client.get_database(db)
         stat = await db.command('collstats', self.name)
         return dict(name=self.name, count=stat['count'], size=stat['size'])
 
-    async def init(self, db: str|AsyncIOMotorDatabase|None = None) -> None:
+    async def init(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> None:
         'Init collection'
-        db = await self.client.get_database(db)
+        client = client or self.client
+        db = await client.get_database(db)
         logger.info(f'Initializing {self.name}')
         await db.get_collection(self.name).create_indexes(self.indexes)
 
-    async def clean(self, db: str|AsyncIOMotorDatabase|None = None) -> None:
+    async def clean(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> None:
         'Clean collection'
-        db = await self.client.get_database(db)
+        client = client or self.client
+        db = await client.get_database(db)
         stat = await self.stats(db=db)
         logger.info(f'Cleaning {self.name} {stat=}')
         await db.get_collection(self.name).drop()
 
 @dataclasses.dataclass
 class MongoCollection(AbstractMongoCollection):
-    client: MongoClient
     name: str
+    client: MongoClient
     data_model: type[DataModel]
     indexes: list[IndexModel] = dataclasses.field(default_factory=list)
 
@@ -190,8 +199,9 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
         result = {}
         prepped = []
         data = self.model_dump(exclude_none=True, exclude=['order'])
+        model_fields = type(self).model_fields
         for name, value in data.items():
-            field = self.model_fields[name]
+            field = model_fields[name]
             if (meta := field.metadata):
                 for anno in meta:
                     if isinstance(anno, Fi):
@@ -226,6 +236,7 @@ class Search[DM: DataModel]:
     limit: Limit|None = None
     offset: Offset = 0
     context: dict[str, Any]|None = None
+    client: MongoClient = None
 
     @property
     def model(self) -> type[DM]:
@@ -234,10 +245,6 @@ class Search[DM: DataModel]:
     @property
     def collection(self) -> AbstractMongoCollection:
         return self.filter.collection
-
-    @property
-    def client(self) -> MongoClient:
-        return self.collection.client
 
     @cached_property
     def q(self) -> dict[str, Any]:
@@ -250,6 +257,8 @@ class Search[DM: DataModel]:
         return self.filter.get_orders()
 
     def __post_init__(self) -> None:
+        if self.client is None:
+            self.client = self.collection.client
         if self.context is None:
             self.context = {}
 

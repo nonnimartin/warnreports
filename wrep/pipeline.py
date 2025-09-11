@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import operator
+import time
 import uuid
 from collections import defaultdict, deque
 from enum import StrEnum
@@ -11,12 +12,14 @@ from functools import cached_property as lazy
 from itertools import chain
 from pathlib import Path
 from threading import Thread
+from types import CoroutineType
 from types import MappingProxyType as MapProxy
 from typing import TYPE_CHECKING, Any, AsyncIterable, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
 from . import SaveType, Stage, orm, scrapers, utils
+from .backends import etl, mongo
 from .backends.etl import *
 from .models import *
 from .orm import *
@@ -24,8 +27,6 @@ from .ref import normls
 
 if TYPE_CHECKING:
     from typing import overload
-
-logger = utils.get_logger('pipeline')
 
 class Pipeline:
     required_fields: ClassVar[tuple[str, ...]] = (
@@ -208,6 +209,7 @@ class Pipeline:
         state = self.state
         counts = dict.fromkeys(map(str, SaveType), 0)
         self.artifact_cache = {}
+        count = 0
         source = self.backend(TranslationBackend)
         async with source.reader(dict(state=state)) as reader:
             with SessionLocal() as session:
@@ -216,6 +218,9 @@ class Pipeline:
                     await self.clean(Stage.Load)
                 async for translation in reader:
                     counts[self.save(translation)[1]] += 1
+                    count += 1
+                    if not count % 100:
+                        await asyncio.sleep(0)
                 stat = session.get(StateStat, state)
                 stat = stat or StateStat(id=state)
                 stat.self_update(session)
@@ -422,12 +427,14 @@ class PipelineRunner:
         Stage.Translate: 1,
         Stage.Load: 2,
         Stage.Index: 3})
+    logger: ClassVar[utils.logging.Logger] = utils.get_logger('pipeline.runner')
 
     def __init__(
         self,
         stages: Iterable[Stage],
         states: Iterable[StateCode],
         context: dict[str, Any]|None = None,
+        client: mongo.MongoClient|None = None,
         **kw
     ) -> None:
         if context is None:
@@ -439,35 +446,38 @@ class PipelineRunner:
             pipeline_opts=PipelineOpts(**kw))
         self.log.context = context
         self.runs: dict[StateCode, list[PipelineRunDetail]] = defaultdict(list)
-        self.backend = PipelineLogBackend.registry['mongo'](context=context)
+        self.backend = etl.MongoPipelineLog(context=context, client=client)
         self.states_active = dict.fromkeys(self.states)
+        self.lastsaved = 0.0
+        self.saveinterval = 1.0
+        self.sleepdelay = 0.005
 
     @property
-    def num_workers(self):
+    def num_workers(self) -> int:
         return min(self.opts.max_workers, len(self.states_active))
 
     @property
-    def num_threads(self):
+    def num_threads(self) -> int:
         return min(self.opts.max_threads, len(self.states_active))
 
     @property
-    def opts(self):
+    def opts(self) -> PipelineBatchOpts:
         return self.log.batch_opts
 
     @property
-    def states(self):
+    def states(self) -> list[StateCode]:
         return self.log.states
 
     @property
-    def stages(self):
+    def stages(self) -> list[Stage]:
         return self.log.stages
 
     @property
-    def context(self):
+    def context(self) -> dict[str, Any]:
         return self.log.context
 
     @property
-    def pipeline_opts(self):
+    def pipeline_opts(self) -> PipelineOpts:
         return self.log.pipeline_opts
 
     async def run(self) -> None:
@@ -478,13 +488,13 @@ class PipelineRunner:
             grouping[self.GROUPING[stage]].append(stage)
         it = iter(grouping)
         self.log.start = utils.utcnow()
-        if await self.savelog():
-            logger.info(f'start id={self.log.id}')
+        if await self.savelog(now=True):
+            self.logger.info(f'start id={self.log.id}')
         try:
-            await self.run_concurrently(True, *next(it))
-            await self.run_concurrently(False, *next(it))
-            await self.run_consecutively(*next(it))
-            await self.run_concurrently(False, *next(it))
+            await self.pollsave(self.run_concurrently(True, *next(it)))
+            await self.pollsave(self.run_concurrently(False, *next(it)))
+            await self.pollsave(self.run_consecutively(*next(it)))
+            await self.pollsave(self.run_concurrently(False, *next(it)))
         except* Exception as grp:
             if not self.log.errors:
                 exc = grp.exceptions[-1]
@@ -495,13 +505,12 @@ class PipelineRunner:
             raise
         finally:
             self.log.end = utils.utcnow()
-            if await self.savelog():
-                logger.info(f'end id={self.log.id}')
+            if await self.savelog(now=True):
+                self.logger.info(f'end id={self.log.id}')
 
     async def run_consecutively(self, *stages: Stage) -> None:
         for state in tuple(self.states_active):
             await self.run_stages(state, *stages)
-            await self.savelog()
 
     async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
         style = 'threads' if threads else 'workers'
@@ -513,14 +522,13 @@ class PipelineRunner:
             num > 1
         ):
             return await self.run_consecutively(*stages)
-        logger.info(f'concurrent {style}={num} stages=[{', '.join(map(str, stages))}]')
+        self.logger.info(f'concurrent {style}={num} stages=[{', '.join(map(str, stages))}]')
         if threads:
-            await self._run_thread_concurrently(*stages)
+            await self.run_thread_concurrently(*stages)
         else:
-            await self._run_loop_concurrently(*stages)
-        await self.savelog()
+            await self.run_loop_concurrently(*stages)
 
-    async def _run_thread_concurrently(self, *stages: Stage) -> None:
+    async def run_thread_concurrently(self, *stages: Stage) -> None:
         queue = deque(self.states_active)
         excs: list[Exception] = []
         def target() -> None:
@@ -537,20 +545,19 @@ class PipelineRunner:
                     asyncio.run(self.run_stages(state, *stages))
                 except* Exception as grp:
                     excs.extend(grp.exceptions)
-                    logger.error(f'Exiting thread due to error')
-        threads = [
-            Thread(name=str(i + 1), target=target)
-            for i in range(self.num_threads)]
+                    self.logger.error(f'Exiting thread due to error')
+        names = map(str, range(1, self.num_threads + 1))
+        threads = [Thread(name=n, target=target) for n in names]
         for thread in threads:
             thread.start()
-        for thread in threads:
-            thread.join()
+        while (active := sum(thread.is_alive() for thread in threads)):
+            await asyncio.sleep(self.sleepdelay * min(10, active))
         if excs:
             if len(excs) == 1:
                 raise excs[0] from None
             raise ExceptionGroup(f'Encountered multiple exceptions', excs)
 
-    async def _run_loop_concurrently(self, *stages: Stage) -> None:
+    async def run_loop_concurrently(self, *stages: Stage) -> None:
         queue = deque(self.states_active)
         async def worker() -> None:
             while True:
@@ -567,7 +574,6 @@ class PipelineRunner:
             async with asyncio.TaskGroup() as group:
                 for i in range(self.num_workers):
                     group.create_task(worker(), name=str(i + 1))
-            await self.savelog()
         except* Exception as errgrp:
             if len(errgrp.exceptions) == 1:
                 raise errgrp.exceptions[0] from None
@@ -577,13 +583,13 @@ class PipelineRunner:
         for stage in stages:
             await self.run_stage(state, stage)
             if (reason := self.skipreason(state)):
-                logger.info(f'{state}:skip {reason}: {stage}')
+                self.logger.info(f'{state}:skip {reason}: {stage}')
                 self.states_active.pop(state, None)
                 break
 
     async def run_stage(self, state: StateCode, stage: Stage) -> None:
         if (reason := self.skipreason(state)):
-            logger.info(f'{state}:{stage}:skip {reason}')
+            self.logger.info(f'{state}:{stage}:skip {reason}')
             self.states_active.pop(state, None)
             return
         run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
@@ -593,7 +599,7 @@ class PipelineRunner:
             pipeline = Pipeline(state, context=self.context, opts=self.pipeline_opts)
             if self.opts.stat_only:
                 stat = await pipeline.stat(stage)
-                logger.info(f'{state}:{stage}:stat {stat}')
+                self.logger.info(f'{state}:{stage}:stat {stat}')
             elif self.opts.clean_only:
                 await pipeline.clean(stage)
             else:
@@ -603,15 +609,25 @@ class PipelineRunner:
             run.failed = True
             self.log.errors.append(run.error)
             if self.opts.fail:
-                logger.error(f'{run.error}')
+                self.logger.error(f'{run.error}')
                 raise
-            logger.exception(f'{state}:{stage}:fail error={err!r}')
+            self.logger.exception(f'{state}:{stage}:fail error={err!r}')
             capture_exception()
         finally:
             run.end = utils.utcnow()
             run.elapsed = (run.end - run.start).total_seconds()
 
-    async def savelog(self) -> bool:
+    async def pollsave[T](self, coro: CoroutineType[Any, Any, T]) -> T:
+        task = asyncio.create_task(coro)
+        while not task.done():
+            if not await self.savelog():
+                await asyncio.sleep(self.sleepdelay)
+        return await task
+
+    async def savelog(self, *, now: bool = False) -> bool:
+        if not now and time.monotonic() - self.lastsaved < self.saveinterval:
+            return False
+        self.lastsaved = time.monotonic()
         self.log.sync()
         if self.opts.stat_only:
             return False
