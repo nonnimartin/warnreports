@@ -1393,7 +1393,7 @@ class TN(Translator):
     default_url = 'https://www.tn.gov/workforce/general-resources/major-publications0/major-publications-redirect/reports.html'
     fieldsmap = dict(
         company=['Company'],
-        reported=['Notice Date', 'Received Date', 'Notice Date'],
+        reported=['Notice Date', 'Received Date'],
         location=['City', 'County'],
         employees=['No. Of Employees'],
         starting=['Effective Date'],
@@ -1402,26 +1402,32 @@ class TN(Translator):
         industry=[],
         report_id=['Notice ID'],
         naics=[],
-        artifacts=[])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         reported=[
             ('2018/4/ 27', '2018/4/27'),
         ],
         report_id=[
-            (_r(r'^#'), ''),
+            (_r(r'[^\d]'), ''),
         ],
         company=[
             (',', ''),
             ('.', ''),
+            # Malformed HTML leaking through
+            (_r(r'^.*=".*">'), ''),
+            (_r(r'Bradley"s'), "Bradley's"),
         ],
         starting=[
             ('October 2021', '2021-10-01'),
             ('Late September 2019', '2019-09-20'),
             (_r(r'February 2020'), '2020-02-01'),
             (_r(r'Apri '), 'April'),
+            (_r(r'^Beginning\s*'), ''),
+            (_r(r' (\d{1,2}) and ending .*, (\d{4})$'), r' \1, \2'),
+            (_r(r' (\d{1,2})-\d{1,2}, (\d{4})$'), r' \1, \2'),
         ]
     )
-    report_id_extra = ['reported', 'starting', 'employees', 'location']
+    report_id_extra = ['reported', 'employees', 'location']
 
 class TX(Translator):
     default_url = 'https://www.twc.texas.gov/data-reports/warn-notice'
@@ -1547,20 +1553,23 @@ class WI(Translator):
     default_url = 'https://dwd.wisconsin.gov/dislocatedworker/warn/'
     fieldsmap = dict(
         company=['Company'],
-        reported=['Notice Received'],
-        location=['City'],
-        employees=['Affected Workers'],
-        starting=['Layoff Begin Date'],
-        action=['Original Notice Type / Update Type'],
-        url=[],
-        industry=['NAICS Description'],
-        report_id=[],
+        reported=['NoticeRcvd'],
+        location=['City', 'County'],
+        employees=['AffectedWorkers'],
+        starting=['LayoffBeginDate'],
+        action=['NoticeType'],
+        url=['url'],
+        industry=['NAICSDescription'],
+        report_id=['row_key'],
         naics=[],
-        artifacts=[])
+        artifacts=['artifacts_json'])
     rewrites = dict(
         company=[
             (_r(r'<br.*'), ''),
             (_r(r'\s*\(CORRECTED\)$'), ''),
+        ],
+        starting=[
+            (_r(r'[^\d/-]'), ''),
         ],
         action=[
             ('WR', 'Workforce Reduction'),

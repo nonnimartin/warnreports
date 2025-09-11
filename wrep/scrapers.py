@@ -710,6 +710,7 @@ class OK(Scraper):
 
 from ._scrapers.pa import PA as PA
 from ._scrapers.sc import SC as SC
+from ._scrapers.tn import TN as TN
 
 
 class TX(Scraper):
@@ -807,6 +808,8 @@ class VA(Scraper):
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         with self.cache.open('latest.csv') as file:
             yield csv.DictReader(file)
+
+from ._scrapers.wi import WI as WI
 
 # Create default Scraper classes
 scrapers.update({
