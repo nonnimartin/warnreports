@@ -4,15 +4,15 @@ from collections import abc
 from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Iterable
 
-from . import utils, settings
-from .models import StateCode, ValidStateCode
+from .. import utils, settings
+from ..models import StateCode, ValidStateCode
 
 if TYPE_CHECKING:
-    from ._scrapers.base import Scraper as ScraperType
+    from .base import Scraper as ScraperType
 else:
     type ScraperType = type
 
-DEFAULT_PATH = [f'{__package__}._scrapers']
+DEFAULT_PATH = [__package__]
 
 class ScraperRegistry(abc.MutableMapping[StateCode, type[ScraperType]]):
     __slots__ = ['path', *abc.MutableMapping.__abstractmethods__]
@@ -37,7 +37,7 @@ class ScraperRegistry(abc.MutableMapping[StateCode, type[ScraperType]]):
             except ValueError:
                 raise KeyError(key)
             try:
-                from ._scrapers.base import Scraper
+                from .base import Scraper
                 if not issubclass(value, Scraper):
                     raise ValueError(value)
             except TypeError:
@@ -61,7 +61,7 @@ class ScraperRegistry(abc.MutableMapping[StateCode, type[ScraperType]]):
         state = ValidStateCode(state)
         it = ((path, f'{path}.{state.lower()}') for path in self.path)
         from importlib import import_module
-        from ._scrapers.base import Scraper
+        from .base import Scraper
         for cand in chain.from_iterable(it):
             try:
                 mod = import_module(cand)
