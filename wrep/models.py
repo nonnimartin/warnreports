@@ -3,15 +3,15 @@ from __future__ import annotations
 import dataclasses
 import re
 from datetime import datetime, timezone
-from typing import Annotated, Any, ClassVar, Iterator, Literal, Self
+from typing import Annotated, Any, Callable, ClassVar, Iterator, Literal, Self
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
-from pydantic import BaseModel
-from pydantic import (BeforeValidator, ConfigDict, Field, HttpUrl,
+from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, HttpUrl,
                       NonNegativeFloat, NonNegativeInt, PlainSerializer,
-                      StringConstraints, field_serializer, model_validator)
+                      StringConstraints, TypeAdapter, field_serializer,
+                      model_validator)
 from pydantic_core import ValidationError as ValidationError
 
 from . import Stage, settings, utils
@@ -44,7 +44,7 @@ CompanyName = Annotated[
     Field(description='The company name')]
 StateCode = Annotated[
     str,
-    StringConstraints(min_length=2, max_length=2, to_upper=True),
+    StringConstraints(min_length=2, max_length=2, to_upper=True, pattern=re.compile(r'^[A-Z]{2}$', re.I)),
     Field(description='The 2-letter state postal code')]
 NaicsId = Annotated[
     int,
@@ -56,6 +56,8 @@ NaicsRootId = Annotated[
     Gt(10),
     Lt(100),
     Field(description='The root NAICS code')]
+
+ValidStateCode: Callable[[Any], StateCode] = TypeAdapter(StateCode).validate_python
 
 def tzreplace(dt: datetime|None, tzinfo: ZoneInfo) -> datetime|None:
     return dt and dt.replace(hour=0, tzinfo=tzinfo)

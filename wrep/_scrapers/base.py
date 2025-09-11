@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from importlib import import_module
 from itertools import chain
 from pathlib import Path
-from typing import Any, ClassVar, Generator, Iterable, Iterator, Self
+from typing import Any, ClassVar, Generator, Iterable, Iterator
 
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -17,13 +17,10 @@ from requests.exceptions import HTTPError
 from typing_extensions import Buffer
 
 from .. import Stage, settings, utils
-from ..models import ScraperOpts, StateCode
+from ..models import ScraperOpts, StateCode, ValidStateCode
 from ..tools import dom, files, strs
 
-__all__ = ['Scraper', 'scrapers']
-
-scrapers: dict[StateCode, type[Scraper]] = {}
-'Scraper class registry'
+__all__ = ['Scraper']
 
 class Scraper:
     'Scraper base class'
@@ -32,7 +29,7 @@ class Scraper:
     user_agent: ClassVar[str] = 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0'
     request_delay: ClassVar[float] = 0.0
     ssl_verify: ClassVar[bool] = True
-    retry: ClassVar[dict] = dict(total=3, backoff_factor=2)
+    retry: ClassVar[dict] = dict(total=10, backoff_factor=0.5, backoff_max=20.0)
 
     def __init__(self, *, opts: ScraperOpts|dict|None = None):
         self.opts = ScraperOpts.model_validate(opts or {})
@@ -137,9 +134,10 @@ class Scraper:
 
     def __init_subclass__(cls) -> None:
         cls.retry = Scraper.retry | cls.retry
-        if len(name := cls.__name__.upper()) == 2:
-            cls.state = name
-            scrapers[cls.state] = cls
+        try:
+            cls.state = ValidStateCode(cls.__name__)
+        except ValueError:
+            pass
 
 class AugmentArtifactsScraper(Scraper):
     """

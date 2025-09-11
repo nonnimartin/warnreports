@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterable, Iterable, Mapping
 
 from sentry_sdk import capture_exception
 
-from . import SaveType, Stage, orm, utils
+from . import SaveType, Stage, orm, scrapers, utils
 from .backends.etl import *
 from .models import *
 from .orm import *
@@ -24,9 +24,6 @@ from .ref import normls
 
 if TYPE_CHECKING:
     from typing import overload
-
-    # Typing-only import for performance
-    from .scrapers import Scraper
 
 logger = utils.get_logger('pipeline')
 
@@ -62,9 +59,8 @@ class Pipeline:
         return StageBackend.registry['mongo'][base.stage](context=self.context)
 
     @lazy
-    def scraper(self) -> Scraper:
-        from .scrapers import scrapers
-        return scrapers[self.state](opts=self.opts)
+    def scraper(self) -> scrapers.ScraperType:
+        return scrapers.registry[self.state](opts=self.opts)
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
