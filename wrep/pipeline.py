@@ -28,24 +28,19 @@ from .ref import normls
 if TYPE_CHECKING:
     from typing import overload
 
+type OrmFiltersDict = dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]
+
 class Pipeline:
-    required_fields: ClassVar[tuple[str, ...]] = (
-        'company',
-        'reported')
-    write_fields: ClassVar[tuple[str, ...]] = (
-        'company',
-        'location',
-        'reported',
-        'starting',
-        'employees',
-        'action',
-        'url',
-        'company_norm_id')
+    required_fields: ClassVar[list[str]] = ['company', 'reported']
+    'Required fields to save a translation'
+    write_fields: ClassVar[list[str]] = (
+        required_fields + ['location', 'starting', 'employees', 'action', 'url'])
+    'Writeable database fields when saving a translation'
 
     def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
         if context is None:
             context = {}
-        self.state = state.upper()
+        self.state = ValidStateCode(state)
         self.context = context
         self.opts = PipelineOpts.model_validate(opts or {})
         self.session: orm.Session|None = None
@@ -97,10 +92,9 @@ class Pipeline:
             return stat
         if stage is stage.Index:
             backend = self.backend(SearchIndexBackend)
-            coros = dict(
-                reports=backend.stat('reports', dict(state=state)),
-                artifacts=backend.stat('artifacts', dict(state=state)),
-                companies=backend.stat('companies', dict(state=state)))
+            coros = {
+                name: backend.stat(name, dict(state=state))
+                for name in ('reports', 'artifacts', 'companies')}
             return {k: await v for k, v in coros.items()}
         raise ValueError(stage)
         
@@ -219,7 +213,7 @@ class Pipeline:
                 async for translation in reader:
                     counts[self.save(translation)[1]] += 1
                     count += 1
-                    if not count % 100:
+                    if not count % self.opts.load_per_tick:
                         await asyncio.sleep(0)
                 stat = session.get(StateStat, state)
                 stat = stat or StateStat(id=state)
@@ -231,7 +225,6 @@ class Pipeline:
                     session.commit()
             self.session = None
         del self.artifact_cache
-        count = sum(counts.values())
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
         return dict(nochange=nochange, count=count, counts=counts)
 
@@ -279,7 +272,7 @@ class Pipeline:
         company, company_save = self.save_company(record['company'])
         record.update(company_norm_id=company.name_norm_id)
         dirty = save is save.Create
-        for field in self.write_fields:
+        for field in chain(self.write_fields, ('company_norm_id',)):
             value = record.get(field)
             if dirty or getattr(report, field) != value:
                 setattr(report, field, value)
@@ -373,14 +366,14 @@ class Pipeline:
             save = save.Update
         return save
 
-    def get_orm_clean_filters(self, state: StateCode) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
+    def get_orm_clean_filters(self, state: StateCode) -> OrmFiltersDict:
         return {
             Report: [Report.state == state],
             Company: [self.get_companies_delete_pred(state=state)],
             Artifact: [self.get_artifacts_pred(state=state)],
             StateStat: [StateStat.id == state]}
 
-    def get_orm_select_filters(self, state: StateCode) -> dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]:
+    def get_orm_select_filters(self, state: StateCode) -> OrmFiltersDict:
         return self.get_orm_clean_filters(state=state) | {
             Company: [self.get_companies_update_pred(state=state)],
             Naics: []}
