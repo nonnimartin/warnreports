@@ -55,12 +55,16 @@ class Scraper:
             '*/*.html',
             f'../{self.state.lower()}_raw.csv',
             glob=True)
+        await asyncio.sleep(0)
 
     async def scrape(self) -> None:
         self.runner.scrape()
+        await asyncio.sleep(0)
 
     async def stat(self) -> dict[str, Any]:
-        return hashstat(self.statobjs())
+        stat = hashstat(self.statobjs())
+        await asyncio.sleep(0)
+        return stat
 
     def statobjs(self) -> Iterable[Any]:
         yield self.runner.file
@@ -78,6 +82,7 @@ class Scraper:
 
     async def extract_clean(self) -> None:
         self.extract_cache.nuke()
+        await asyncio.sleep(0)
 
     async def fetch(self, key: str|Path, url: str, **kw) -> str:
         rep = await self.request('GET', url, **kw)
@@ -92,6 +97,7 @@ class Scraper:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
         dest = self.cache/key
         if missing_only and dest.exists():
+            await asyncio.sleep(0)
             return
         self.logger.debug(f'Downloading {url} to {dest}')
         dest.parent.mkdir(parents=True, exist_ok=True)

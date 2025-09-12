@@ -11,8 +11,8 @@ from contextlib import (AbstractAsyncContextManager, AbstractContextManager,
 from datetime import datetime, timedelta, timezone
 from datetime import tzinfo as TzInfo
 from functools import wraps
-from typing import (Any, AsyncIterable, AsyncIterator, Callable, Generator,
-                    Iterable, Iterator, Sequence)
+from typing import (Any, AsyncIterable, AsyncIterator, Callable, ClassVar,
+                    Generator, Iterable, Iterator, Mapping, Sequence)
 from uuid import UUID
 
 import dateutil.parser
@@ -176,39 +176,50 @@ def wrapcontext[T](wrapped: Callable[..., T]):
         yield wrapped(*args, **kw)
     return wrapper
 
-@dataclasses.dataclass(frozen=True)
-class Wait:
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class Wait[T]:
     'Async retry/wait parameters'
-    timeout: float
+    timeout: float = 0.0
     'The total time limit'
     poll: float = 0.5
     'Time to wait in between poll'
-    ignored: tuple[type[Exception], ...] = ()
+    ignored: type[Exception]|tuple[type[Exception], ...] = ()
     'Exception types to ignore'
     args: Sequence[Any] = ()
     'Args to pass to the callback'
-    kwargs: dict = dataclasses.field(default_factory=dict)
+    kwargs: Mapping = dataclasses.field(default_factory=dict)
     'Kwargs to pass to the callback'
     raises: type[Exception] = dataclasses.field(default_factory=lambda: TimeoutError)
-    'The exception class to raise on timeout'
+    'The exception class to raise on timeout, default TimeoutError'
     oper: Callable[[Any], Any] = dataclasses.field(default_factory=lambda: bool)
-    'The operator to apply to the result of the callback'
+    'The operator to apply to the result of the callback to test for truthiness, default bool'
+    callback: Callable[..., T] = dataclasses.field(default_factory=lambda: type(None))
+    'The callback function'
+    logger: ClassVar = get_logger('utils.wait')
 
-    async def until[T](self, callback: Callable[..., T]) -> T:
-        'Wait until the callback returns a truthy value (depending on `oper`)'
-        end = time.monotonic() + self.timeout
+    async def until[T](self, callback: Callable[..., T], /, **kw) -> T:
+        return await self(callback=callback, **kw)
+
+    async def __call__(self, **kw) -> T:
+        'Wait until the callback returns a truthy value'
+        inst = self.replace(**kw) if kw else self
+        end = time.monotonic() + inst.timeout
         err = None
-        ignored = tuple(self.ignored or ())
+        if isinstance(inst.ignored, type):
+            ignored = (inst.ignored,)
+        else:
+            ignored = tuple(inst.ignored or ())
         while True:
             try:
-                value = await wait(callback(*self.args, **self.kwargs))
-                if self.oper(value):
+                value = await wait(inst.callback(*inst.args, **inst.kwargs))
+                if inst.oper(value):
                     return value
             except ignored as exc:
                 err = exc
             if time.monotonic() > end:
                 break
-            await asyncio.sleep(self.poll)
-        raise self.raises from err
+            self.logger.debug(f'Retrying in {inst.poll}s {inst.callback.__name__}')
+            await asyncio.sleep(inst.poll)
+        raise inst.raises from err
 
     replace = dataclasses.replace
