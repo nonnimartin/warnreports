@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
 from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, HttpUrl,
-                      NonNegativeFloat, NonNegativeInt, PlainSerializer,
+                      NonNegativeFloat, NonNegativeInt, PlainSerializer, PositiveInt,
                       StringConstraints, TypeAdapter, field_serializer,
                       model_validator)
 from pydantic_core import ValidationError as ValidationError
@@ -33,7 +33,8 @@ __all__ = [
     'ReportData',
     'StateCode',
     'StateDetail',
-    'ValidationError']
+    'ValidationError',
+    'ValidStateCode']
 
 UrlType = Annotated[
     HttpUrl,
@@ -257,7 +258,11 @@ class ScraperOpts(DataModel):
 
 class PipelineOpts(ScraperOpts):
     lazy: bool = True
+    'Use result set iterators for database queries'
     rollback: bool = False
+    'Rollback database transactions (dry run)'
+    load_per_tick: PositiveInt = 100
+    'How frequently to asyncio.sleep(0) during load stage'
 
 type UniqueList[T] = Annotated[
     list[T],

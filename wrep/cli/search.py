@@ -42,7 +42,7 @@ class Command(BaseCommand):
         async def run(self):
             if self.opts.dbname:
                 logger.info(f'Using search dbname={self.opts.dbname}')
-            db = await search.client.get_database(self.opts.dbname)
+            db = await search.default_client.get_database(self.opts.dbname)
             results: dict[str, Any] = {}
             for name in self.names:
                 defn = search.mapped_collections[name]
@@ -62,4 +62,4 @@ class Command(BaseCommand):
         init=Collection('init'),
         build=Collection('build'),
         clean=Collection('clean'),
-        control=ClientControlCommand(search.client))
+        control=ClientControlCommand(search.default_client))

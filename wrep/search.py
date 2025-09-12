@@ -13,7 +13,8 @@ from .models import *
 __all__ = ['mapped_collections']
 
 logger = utils.get_logger('search')
-client = MongoClient(
+
+default_client = MongoClient(
     url=settings.SEARCH_MONGODB_URL,
     control_dbname=settings.SEARCH_MONGODB_CONTROL_DBNAME,
     dbname_key='search.dbname',
@@ -25,8 +26,8 @@ class AbstractMappedCollection(AbstractCollection):
 
 @dataclasses.dataclass
 class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
-    client: MongoClient
     name: str
+    client: MongoClient
     orm_model: type[orm.MapReduceBase]
     indexes: list[IndexModel] = dataclasses.field(default_factory=list)
 
@@ -37,9 +38,10 @@ class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
     def __post_init__(self) -> None:
         self.indexes = list(map(IndexModel, self.indexes))
 
-    async def build(self, db: str|AsyncIOMotorDatabase|None = None, lazy: bool = True) -> None:
+    async def build(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None, lazy: bool = True) -> None:
         'Build collection'
-        db = await self.client.get_database(db)
+        client = client or self.client
+        db = await client.get_database(db)
         await self.clean(db=db)
         await self.init(db=db)
         with orm.SessionLocal() as session:
@@ -54,8 +56,8 @@ class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
 
 mapped_collections: dict[str, MappedCollection] = dict(
     reports=MappedCollection(
-        client=client,
         name='reports',
+        client=default_client,
         orm_model=orm.Report,
         indexes=[
             {'company': 'text'},
@@ -68,8 +70,8 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'naics.id': 1},
             {'state': 1}]),
     companies=MappedCollection(
-        client=client,
         name='companies',
+        client=default_client,
         orm_model=orm.Company,
         indexes=[
             {'aliases': 'text'},
@@ -88,8 +90,8 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'aliases_count': -1},
             {'employees_sum': -1}]),
     naics=MappedCollection(
-        client=client,
         name='naics',
+        client=default_client,
         orm_model=orm.Naics,
         indexes=[
             {'id': 1},
@@ -109,8 +111,8 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'states_count': -1},
             {'employees_sum': -1}]),
     artifacts=MappedCollection(
-        client=client,
         name='artifacts',
+        client=default_client,
         orm_model=orm.Artifact,
         indexes=[
             {'name': 1},
@@ -118,8 +120,8 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'state': 1},
             {'sha1': 1}]),
     states=MappedCollection(
-        client=client,
         name='states',
+        client=default_client,
         orm_model=orm.StateStat,
         indexes=[
             {'id': 1},

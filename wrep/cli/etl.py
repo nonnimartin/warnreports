@@ -40,7 +40,7 @@ class EtlBaseCommand(AppCommand):
     def setup(self, opts) -> None:
         super().setup(opts)
         self.output: str = opts.output
-        self.context = {etl.client.dbname_key: opts.etl_dbname}
+        self.context = {etl.default_client.dbname_key: opts.etl_dbname}
 
     def printobj(self, obj: Any) -> None:
         print(self.objtext(obj))
@@ -349,4 +349,4 @@ class Command(BaseCommand):
     commands = dict(
         log=LogCommand,
         **OneCommand.commands,
-        control=ClientControlCommand(etl.client))
+        control=ClientControlCommand(etl.default_client))

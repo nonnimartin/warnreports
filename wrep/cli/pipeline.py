@@ -139,8 +139,8 @@ class Command(AppCommand):
         runner_opts = dict(vars(opts))
         self.idfile: Path|None = runner_opts.pop('idfile')
         runner_opts['context'] = {
-            etl.client.dbname_key: runner_opts.pop('etl_dbname'),
-            search.client.dbname_key: runner_opts.pop('search_dbname')}
+            etl.default_client.dbname_key: runner_opts.pop('etl_dbname'),
+            search.default_client.dbname_key: runner_opts.pop('search_dbname')}
         self.runner = PipelineRunner(**runner_opts)
 
     async def run(self):
