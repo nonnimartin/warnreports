@@ -9,10 +9,12 @@ from io import TextIOWrapper
 from itertools import chain
 from pathlib import Path
 from re import compile as _r
-from typing import Any, Generator, Iterator
-from urllib.parse import urlparse
+from typing import Any, ClassVar, Generator, Iterator
 
-from .. import utils
+from starlette.datastructures import URL
+
+from .. import settings, utils
+from ..backends import webdrivers
 from ..tools import files, pdfs, strs, xlsx
 from ..tools.dom import Soup, bs
 from .base import Scraper
@@ -20,20 +22,45 @@ from .base import Scraper
 __all__ = ['NY']
 
 class NY(Scraper):
-    base_url = 'https://dol.ny.gov'
-    archive_url = 'https://archive.warnreports.org/s/NY'
-    archive_filenames = [
+    base_url: ClassVar = 'https://dol.ny.gov'
+    user_agent: ClassVar = (
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+        '(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36')
+    archive_url: ClassVar = 'https://archive.warnreports.org/s/NY'
+    archive_filenames: ClassVar = [
         'ny_historical.xlsx',
         '2021.html',
         '2022.html',
         '2023.html',
         '2024.html',
         '2025.html']
-    tableau_mindate = date(2025, 3, 28)
-    tableau_filenames = ['tableau-2025.csv']
+    tableau_mindate: ClassVar = date(2025, 3, 28)
+    tableau_filename: ClassVar = 'tableau-all.csv'
+    driver_timeout: ClassVar = 5.0
+    'Driver wait timeout seconds'
+    driver_url: ClassVar = str(
+        URL('https://public.tableau.com')
+        .replace(path='/views/WorkerAdjustmentRetrainingNotificationWARN/WARN')
+        .include_query_params(**{
+            ':display_static_image': 'y',
+            ':bootstrapWhenNotified': 'true',
+            ':embed': 'y',
+            ':language': 'en-US',
+            ':showVizHome': 'n',
+            ':apiID': 'host0'})
+        .replace(fragment='navType=0&navSrc=Parse'))
 
     async def scrape(self) -> None:
-        for key in self.tableau_filenames:
+        if settings.SELENIUM_ENABLED:
+            args = [f'--user-agent={self.user_agent}']
+            prefs = {
+                'download.default_directory': self.cache.path,
+                'download.prompt_for_download': False,
+                'download.directory_upgrade': True}
+            async with webdrivers.selenium(args=args, prefs=prefs) as driver:
+                await self.driver_scrape(driver)
+        else:
+            key = self.tableau_filename
             url = strs.absurl(self.archive_url, key)
             await self.download(key, url)
         for key in self.archive_filenames:
@@ -45,9 +72,66 @@ class NY(Scraper):
                 await self.download(key, url, missing_only=True)
                 self.artifacts.add(key)
 
+    async def driver_scrape(self, driver: webdrivers.Chrome) -> None:
+        from selenium.common.exceptions import WebDriverException
+        driver.set_window_size(1920, 3840)
+        driver.get(self.driver_url)
+        wait = utils.Wait(
+            timeout=self.driver_timeout,
+            ignored=WebDriverException,
+            callback=driver.find_element)
+
+        async def waitandclick(selector: str):
+            self.logger.debug(f'Waiting for {selector}')
+            element = await wait(
+                args=['css selector', selector],
+                oper=lambda x: x.is_displayed())
+            self.logger.debug(f'Clicking {selector} {element=}')
+            element.click()
+            self.logger.debug(f'Clicked {selector} {element=}')
+            return element
+
+        pastnyears = utils.now().year - self.tableau_mindate.year
+        if pastnyears:
+            # Select Year dropdown
+            await waitandclick('.tabComboBoxButtonHolder')
+            # Year checkboxes
+            selector = (
+                '#tableau_base_widget_LegacyCategoricalQuickFilter_0_menu '
+                'input.FICheckRadio')
+            checks = await wait.until(
+                driver.find_elements,
+                args=['css selector', selector])
+            # The current year will be selected, so select n previous years
+            checks = checks[-1-pastnyears:-1]
+            self.logger.debug(f'{len(checks)} {checks=}')
+            for check in checks:
+                check.click()
+            # Apply
+            await waitandclick('.CFApplyButtonContainer > button.apply > .label')
+            # Close the dropdown
+            await wait.until(
+                waitandclick,
+                args=['.tab-glass.clear-glass.tab-widget'])
+
+        download = self.cache/'A_Excel_Table.csv'
+        self.cache.delete(download)
+        clickables = [
+            '#download',
+            'div[data-tb-test-id="download-flyout-download-crosstab-MenuItem"]',
+            'label[data-tb-test-id="crosstab-options-dialog-radio-csv-Label"]',
+            'button[data-tb-test-id="export-crosstab-export-Button"]']
+        for selector in clickables:
+            await waitandclick(selector)
+        self.logger.debug(f'Waiting for download')
+        await wait.until(download.exists)
+        dest = self.cache/self.tableau_filename
+        self.logger.debug(f'Renaming {download.name} to {dest.name}')
+        download.rename(dest)
+
     def statobjs(self) -> Iterator[Any]:
-        it = chain(self.archive_filenames, self.tableau_filenames)
-        yield from map(self.cache.topath, it)
+        yield self.cache/self.tableau_filename
+        yield from map(self.cache.topath, self.archive_filenames)
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
@@ -153,7 +237,7 @@ class NY(Scraper):
                 header = strs.rewrite_all(header, pdfheader_rewrites)
                 yield header, value
 
-        it = chain(self.archive_filenames, self.tableau_filenames)
+        it = chain(self.archive_filenames, [self.tableau_filename])
         it = map(self.cache.topath, it)
         try:
             yield chain.from_iterable(map(readfile, it))
@@ -172,7 +256,7 @@ class NY(Scraper):
             "Return a cache key and download URL from the href value"
             url = self.absurl(href.strip())
             url = strs.rewrite_all(url, url_rewrites)
-            filename = Path(urlparse(url).path).name
+            filename = Path(URL(url).path).name
             key = f'records/{filename}'
             if not filename.endswith('.pdf'):
                 key = f'{key}.pdf'
