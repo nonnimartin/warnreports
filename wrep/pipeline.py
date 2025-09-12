@@ -33,8 +33,8 @@ type OrmFiltersDict = dict[type[orm.MapReduceBase], list[orm.BinaryExpression]]
 class Pipeline:
     required_fields: ClassVar[list[str]] = ['company', 'reported']
     'Required fields to save a translation'
-    write_fields: ClassVar[list[str]] = (
-        required_fields + ['location', 'starting', 'employees', 'action', 'url'])
+    write_fields: ClassVar[list[str]] = required_fields + [
+        'location', 'starting', 'employees', 'action', 'url']
     'Writeable database fields when saving a translation'
 
     def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
