@@ -312,6 +312,20 @@ REWRITE_DOUBLE_SLASH = (_r('//'), '/')
 
 REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
 
+def jobcenter_fieldsmap() -> dict[str, list[str]]:
+    return dict(
+        company=['employer'],
+        reported=['notice_date'],
+        location=['address', 'city'],
+        employees=['number_of_employees_affected'],
+        starting=['notice_date'],
+        action=['warn_type'],
+        url=['detail_page_url'],
+        industry=[],
+        report_id=['record_number'],
+        naics=[],
+        artifacts=[])
+
 class AK(Translator):
     default_url = 'https://jobs.alaska.gov/RR/WARN_notices.htm'
     fieldsmap = dict(
@@ -348,7 +362,7 @@ class AL(Translator):
         action=['Closing or Layoff'],
         url=[],
         industry=[],
-        report_id=['record_number'],
+        report_id=[],
         naics=[],
         artifacts=[])
     rewrites = dict(
@@ -359,23 +373,7 @@ class AL(Translator):
 
 class AZ(Translator):
     default_url = 'https://www.azjobconnection.gov/search/warn_lookups/new'
-    fieldsmap = dict(
-        company=['employer'],
-        reported=['notice_date'],
-        location=['city'],
-        employees=['number_of_employees_affected'],
-        starting=['notice_date'],
-        action=['warn_type'],
-        url=['detail_page_url'],
-        industry=[],
-        report_id=['detail_page_url'],
-        naics=[],
-        artifacts=[])
-    rewrites = dict(
-        report_id=[
-            (_r(r'^https://.+/(\d+)$'), r'\1'),
-        ]
-    )
+    fieldsmap = jobcenter_fieldsmap()
 
 class CA(Translator):
     default_url = 'https://edd.ca.gov/en/Jobs_and_Training/Layoff_Services_WARN'
@@ -841,18 +839,7 @@ class IN(Translator):
 
 class KS(Translator):
     default_url = 'https://www.kansasworks.com/search/warn_lookups/new'
-    fieldsmap = dict(
-        company=['employer'],
-        reported=['notice_date'],
-        location=['city'],
-        employees=['number_of_employees_affected'],
-        starting=['LO/CL Date'],
-        action=['warn_type'],
-        url=['detail_page_url'],
-        industry=[],
-        report_id=[],
-        naics=[],
-        artifacts=[])
+    fieldsmap = jobcenter_fieldsmap()
     rewrites = dict(
         company=[
             (_r(r'[,\']$'), ''),
@@ -974,18 +961,7 @@ class MD(Translator):
 
 class ME(Translator):
     default_url = 'https://joblink.maine.gov/search/warn_lookups/new'
-    fieldsmap = dict(
-        company=['employer'],
-        reported=['notice_date'],
-        location=['address', 'city'],
-        employees=['number_of_employees_affected'],
-        starting=[],
-        action=['warn_type'],
-        url=['detail_page_url'],
-        industry=[],
-        report_id=[],
-        naics=[],
-        artifacts=[])
+    fieldsmap = jobcenter_fieldsmap()
     rewrites = dict(
         location=[
             (_r(r';'), ','),
@@ -1521,18 +1497,7 @@ class VA(Translator):
 
 class VT(Translator):
     default_url = 'https://www.vermontjoblink.com/search/warn_lookups/new'
-    fieldsmap = dict(
-        company=['employer'],
-        reported=['notice_date'],
-        location=['city'],
-        employees=['number_of_employees_affected'],
-        starting=['Impact Date'],
-        action=['warn_type'],
-        url=['detail_page_url'],
-        industry=[],
-        report_id=[],
-        naics=[],
-        artifacts=[])
+    fieldsmap = jobcenter_fieldsmap()
 
 class WA(Translator):
     default_url = 'https://esd.wa.gov/about-employees/WARN'
