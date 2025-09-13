@@ -167,8 +167,9 @@ class Scraper:
             return rep
 
         async def arequest(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
-            if self.scraper.request_delay and self.metrics['request_count']:
-                await asyncio.sleep(self.scraper.request_delay)
+            delay = kw.pop('delay', self.metrics['request_count'] and self.scraper.request_delay)
+            if delay:
+                await asyncio.sleep(delay)
             rep = self.request(method, url, check=check, **kw)
             if not kw.get('stream', self.stream):
                 await asyncio.sleep(0.0)

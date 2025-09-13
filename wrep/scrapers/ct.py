@@ -88,4 +88,4 @@ class PatchUtils:
         self.write_rows_to_csv = self.delegate.write_rows_to_csv
 
     def __getattr__(self, name: str):
-        return getattr(self.delegate, name)
+        return self.__dict__.setdefault(name, getattr(self.delegate, name))
