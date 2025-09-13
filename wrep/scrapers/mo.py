@@ -14,11 +14,6 @@ class MO(Scraper):
     start_year: ClassVar = 2019
     base_url: ClassVar = 'https://jobs.mo.gov/warn'
     archive_url: ClassVar = 'https://archive.warnreports.org/s/MO'
-    headers_species: ClassVar = {
-        10: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'Notes', 'url'],
-        9: ['Received', 'Title', 'Industry', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
-        8: ['Received', 'Title', 'Location(s)', 'County', 'Region', 'Type', 'Layoff date(s)', '# affected', 'url'],
-    }
 
     async def scrape(self) -> None:
         now = utils.utcnow()
@@ -33,20 +28,24 @@ class MO(Scraper):
             def find_content():
                 return driver.find_element('css selector', 'div.view-warn-notices')
 
-            wait = utils.Wait(timeout=10)
-            async with webdrivers.selenium() as driver:
+            wait = utils.Wait(timeout=10, callback=find_content)
+            args = [f'--user-agent={self.user_agent}']
+            async with webdrivers.selenium(args=args, logger=self.logger) as driver:
                 for year, key in zip(years, keys):
                     if not isrecent(year) and self.cache.exists(key):
                         continue
                     url = self.absurl(f'/{year}')
                     driver.get(url)
                     try:
-                        await wait.until(find_content)
+                        await wait()
                     except TimeoutError:
                         self.logger.warning(f'Failed to find content for {url=}')
                         return
                     self.logger.info(f'Scraped {key}')
                     self.cache.write(key, driver.page_source)
+                count, size = webdrivers.getmetrics(driver)
+                self.metrics['request_count'] += count
+                self.metrics['request_bytes'] += size
         else:
             for year, key in zip(years, keys):
                 url = strs.absurl(self.archive_url, key)
@@ -66,16 +65,52 @@ class MO(Scraper):
 
     @utils.wrapcontext
     def extract(self) -> Iterable[dict[str, str]]:
+        headers_species = {
+            10: [
+                'Received',
+                'Title',
+                'Industry',
+                'Location(s)',
+                'County',
+                'Region',
+                'Type',
+                'Layoff date(s)',
+                '# affected',
+                'Notes',
+                'url'],
+            9: [
+                'Received',
+                'Title',
+                'Industry',
+                'Location(s)',
+                'County',
+                'Region',
+                'Type',
+                'Layoff date(s)',
+                '# affected',
+                'url'],
+            8: [
+                'Received',
+                'Title',
+                'Location(s)',
+                'County',
+                'Region',
+                'Type',
+                'Layoff date(s)',
+                '# affected',
+                'url']}
+
         def readtr(tr: dom.Soup) -> Iterator[str]:
             for td in tr.find_all('td'):
-                yield td.text.strip()
+                yield td.get_text(strip=True)
+
         for file in self.list_page_files():
             table = dom.bs(file).find('table')
             year = int(file.name.removesuffix('.html'))
             url = self.absurl(str(year))
             it = iter(table.find_all('tr'))
             width = len(next(it).find_all(['td', 'th']))
-            headers = self.headers_species[width]
+            headers = headers_species[width]
             for tr in it:
                 values = [*readtr(tr), url]
                 if utils.morethan(2, values):

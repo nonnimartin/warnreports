@@ -15,8 +15,7 @@ from starlette.datastructures import URL
 
 from .. import settings, utils
 from ..backends import webdrivers
-from ..tools import files, pdfs, strs, xlsx
-from ..tools.dom import Soup, bs
+from ..tools import dom, files, pdfs, strs, xlsx
 from .base import Scraper
 
 __all__ = ['NY']
@@ -53,12 +52,12 @@ class NY(Scraper):
     async def scrape(self) -> None:
         if settings.SELENIUM_ENABLED:
             args = [f'--user-agent={self.user_agent}']
-            prefs = {
-                'download.default_directory': self.cache.path,
-                'download.prompt_for_download': False,
-                'download.directory_upgrade': True}
-            async with webdrivers.selenium(args=args, prefs=prefs) as driver:
+            prefs = {'download.default_directory': self.cache.path}
+            async with webdrivers.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
                 await self.driver_scrape(driver)
+                count, size = webdrivers.getmetrics(driver)
+                self.metrics['request_count'] += count
+                self.metrics['request_bytes'] += size
         else:
             key = self.tableau_filename
             url = strs.absurl(self.archive_url, key)
@@ -201,7 +200,7 @@ class NY(Scraper):
         def readhtml(file: Path) -> Iterator[dict[str, str]]:
             "Extract records from legacy HTML page"
             headers = html_headers
-            table = self.find_table(bs(file))
+            table = self.find_table(dom.bs(file))
             it = iter(table.find_all('tr'))
             next(it)
             for tr in it:
@@ -271,7 +270,7 @@ class NY(Scraper):
             cached = self.cache/f'{key}.hrefs.json'
             with files.jsoncache(file, cached) as hrefs:
                 if hrefs is None:
-                    links = self.find_table(bs(file)).select(selector)
+                    links = self.find_table(dom.bs(file)).select(selector)
                     hrefs: list[str] = [a['href'] for a in links]
                     with cached.open('w') as fp:
                         json.dump(hrefs, fp, indent=2)
@@ -282,6 +281,6 @@ class NY(Scraper):
         self.cache.write_json('index.json', index, indent=2)
         return dict(index)
 
-    def find_table(self, page: Soup) -> Soup:
+    def find_table(self, page: dom.Soup) -> dom.Soup:
          "Find main table in a legacy HTML page"
          return page.find('div', {'class': 'landing-paragraphs'}).find('table')

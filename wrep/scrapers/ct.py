@@ -16,6 +16,9 @@ __all__ = ['CT']
 class CT(AugmentArtifactsScraper):
     base_url: ClassVar = 'https://www.ctdol.state.ct.us/progsupt/bussrvce/warnreports'
 
+    def get_patches(self):
+        return super().get_patches()|dict(utils=PatchUtils(self))
+
     def build_index(self) -> dict[str, dict[str, str]]:
         """
         Extracts artifact data from downloaded html files and returns mapping
@@ -75,3 +78,14 @@ class CT(AugmentArtifactsScraper):
                 raise ValueError(f'Cannot find table {file=}')
         # Mapping of {rowkey: {cachekey: URL}}
         return self.write_index_items(items)
+
+class PatchUtils:
+
+    def __init__(self, scraper: CT) -> None:
+        self.get_url = scraper.session.get
+        from warn import utils as wutils
+        self.delegate = wutils
+        self.write_rows_to_csv = self.delegate.write_rows_to_csv
+
+    def __getattr__(self, name: str):
+        return getattr(self.delegate, name)

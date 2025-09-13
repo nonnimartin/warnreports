@@ -283,7 +283,7 @@ class PipelineLog(DataModel):
     pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
     start: datetime|None = None
     end: datetime|None = None
-    elapsed: NonNegativeFloat = 0
+    elapsed: NonNegativeFloat = 0.0
     errors: list[PipelineRunError] = Field(default_factory=list)
     runs: list[PipelineRunDetail] = Field(default_factory=list)
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -316,9 +316,15 @@ class PipelineLog(DataModel):
     def get_scrape_stats(self) -> list[dict[str, Any]]:
         body = []
         for run in self.stageruns(Stage.Scrape):
-            elapsed = run.elapsed if run.end else None
-            body.append(dict(state=run.state, elapsed=elapsed))
-        body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
+            metrics = run.result.get('metrics', {})
+            metrics = {
+                key: metrics.get(key, 0)
+                for key in ('request_count', 'request_bytes')}
+            body.append(dict(
+                state=run.state,
+                elapsed=run.elapsed,
+                **metrics))
+        body.sort(key=lambda x: x['elapsed'], reverse=True)
         return body
 
     def get_runs(self) -> list[dict[str, Any]]:
@@ -332,9 +338,12 @@ class PipelineLog(DataModel):
             for run in self.runs]
 
     def get_running(self) -> list[dict[str, Any]]:
-        return [
+        runs = [
             run for run in self.get_runs()
             if run['failed'] in (True, None)]
+        for run in runs:
+            run.pop('nochange', None)
+        return runs
 
     def get_short(self) -> dict[str, Any]:
         mapping = dict(

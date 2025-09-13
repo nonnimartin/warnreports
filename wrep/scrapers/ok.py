@@ -24,8 +24,12 @@ class OK(Scraper):
     async def scrape(self) -> None:
         await self.download('historical.csv', self.historical_url, missing_only=True)
         if settings.SELENIUM_ENABLED:
-            async with webdrivers.selenium() as driver:
+            args = [f'--user-agent={self.user_agent}']
+            async with webdrivers.selenium(args=args, logger=self.logger) as driver:
                 await DriverHelper(self, driver).run()
+                count, size = webdrivers.getmetrics(driver)
+                self.metrics['request_count'] += count
+                self.metrics['request_bytes'] += size
 
     def statobjs(self) -> Iterator[Any]:
         yield self.cache/'latest.csv'
