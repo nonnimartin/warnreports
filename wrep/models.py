@@ -327,9 +327,14 @@ class PipelineLog(DataModel):
                 stage=run.stage[0].upper(),
                 state=run.state,
                 elapsed=run.elapsed,
-                failed=run.failed,
+                failed=run.failed if run.end else None,
                 nochange=run.result and run.result.get('nochange'))
             for run in self.runs]
+
+    def get_running(self) -> list[dict[str, Any]]:
+        return [
+            run for run in self.get_runs()
+            if run['failed'] in (True, None)]
 
     def get_short(self) -> dict[str, Any]:
         mapping = dict(

@@ -229,11 +229,13 @@ class LogCommand(BaseCommand):
         summary_methods: ClassVar[dict[str, str]] = {
             'short': 'get_short',
             'runs': 'get_runs',
+            'running': 'get_running',
             'load-changes': 'get_load_changes',
             'scrape-stats': 'get_scrape_stats'}
         summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
             'short': dict(key=0, value=1),
             'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
+            'running': ('stage', 'state', 'elapsed', 'failed'),
             'load-changes': ('state', 'created', 'updated'),
             'scrape-stats': ('state', 'elapsed')}
 
