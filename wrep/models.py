@@ -316,14 +316,12 @@ class PipelineLog(DataModel):
     def get_scrape_stats(self) -> list[dict[str, Any]]:
         body = []
         for run in self.stageruns(Stage.Scrape):
-            metrics = run.result.get('metrics', {})
-            metrics = {
-                key: metrics.get(key, 0)
-                for key in ('request_count', 'request_bytes')}
+            metrics = run.result and run.result.get('metrics')
             body.append(dict(
                 state=run.state,
                 elapsed=run.elapsed,
-                **metrics))
+                request_count=metrics and metrics.get('request_count'),
+                request_bytes=metrics and metrics.get('request_bytes')))
         body.sort(key=lambda x: x['elapsed'], reverse=True)
         return body
 
