@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import functools
 import hashlib
 import json
 import time
@@ -11,17 +10,19 @@ from contextlib import contextmanager
 from importlib import import_module
 from itertools import chain
 from pathlib import Path
+from types import ModuleType
 from typing import Any, ClassVar, Generator, Iterable, Iterator
 
+from starlette.datastructures import URL
 import requests
+import requests.models
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
-from typing_extensions import Buffer
 
 from .. import Stage, settings, utils
 from ..models import ScraperOpts, StateCode, ValidStateCode
 from ..ref.tz import zoneinfos
-from ..tools import dom, files, strs
+from ..tools import files, strs
 
 __all__ = ['Scraper']
 
@@ -36,9 +37,6 @@ class Scraper:
 
     def __init__(self, *, opts: ScraperOpts|dict|None = None) -> None:
         self.opts = ScraperOpts.model_validate(opts or {})
-        self.session = requests.session()
-        self.session.mount('https://', HTTPAdapter(max_retries=Retry(**self.retry)))
-        self.session.headers['User-Agent'] = self.user_agent
         self.cache = files.FileCache(settings.BUILD_DIR/Stage.Scrape/self.state.lower())
         self.extract_cache = files.FileCache(settings.BUILD_DIR/Stage.Extract/self.state.lower())
         self.artifacts = files.ArtifactStore(
@@ -47,6 +45,7 @@ class Scraper:
         self.metrics = defaultdict(int)
         self.logger = utils.get_logger(f'scrapers.{self.state}')
         self.tz = zoneinfos[self.state]
+        self.session = self.Session(self)
         self.runner = Runner(self)
 
     async def clean(self) -> None:
@@ -61,8 +60,7 @@ class Scraper:
         await asyncio.sleep(0)
 
     async def scrape(self) -> None:
-        self.runner.scrape()
-        await asyncio.sleep(0)
+        await self.runner.scrape()
 
     async def stat(self) -> dict[str, Any]:
         stat = hashstat(self.statobjs())
@@ -87,8 +85,9 @@ class Scraper:
         self.extract_cache.nuke()
         await asyncio.sleep(0)
 
-    async def fetch(self, key: str|Path, url: str, **kw) -> str:
-        rep = await self.request('GET', url, **kw)
+    async def fetch(self, key: str|Path|None, url: str|URL, **kw) -> str:
+        key = key or strs.clean_filename(Path(URL(str(url)).path).name, fail=True)
+        rep = await self.session.arequest('GET', url, **kw)
         try:
             text = rep.content.decode()
         except UnicodeDecodeError:
@@ -96,15 +95,16 @@ class Scraper:
         self.cache.write(key, text)
         return text
 
-    async def download(self, key: str|Path, url: str, *, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
+    async def download(self, key: str|Path|None, url: str|URL, *, encoding: str|None = None, missing_only: bool = False, **kw) -> requests.Response|None:
         # Adapted from: https://github.com/biglocalnews/warn-scraper/blob/main/warn/cache.py
+        key = key or strs.clean_filename(Path(URL(str(url)).path).name, fail=True)
         dest = self.cache/key
         if missing_only and dest.exists():
             await asyncio.sleep(0)
             return
         self.logger.debug(f'Downloading {url} to {dest}')
         dest.parent.mkdir(parents=True, exist_ok=True)
-        with await self.request('GET', url, stream=True, **kw) as rep:
+        with await self.session.arequest('GET', url, stream=True, **kw) as rep:
             if not rep.ok:
                 self.logger.warning(f'Download failed status={rep.status_code} url={rep.url}')
                 return rep
@@ -112,34 +112,15 @@ class Scraper:
             with dest.open('wb') as f:
                 for chunk in rep.iter_content(chunk_size=8192):
                     f.write(chunk)
-                    self.metrics['request_bytes'] += len(chunk)
         await asyncio.sleep(0)
         return rep
 
-    async def request(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
-        if self.request_delay and self.metrics['request_count']:
-            await asyncio.sleep(self.request_delay)
-        url = self.absurl(url)
-        kw.setdefault('verify', self.ssl_verify)
-        self.metrics['request_count'] += 1
-        try:
-            rep = self.session.request(method, url, **kw)
-            if check:
-                rep.raise_for_status()
-        except Exception as err:
-            if isinstance(err, HTTPError) and err.response is not None:
-                status = err.response.status_code
-            else:
-                status = None
-            self.logger.error(f'Failed to get {url=} {status=}')
-            raise
-        if not kw.get('stream'):
-            self.metrics['request_bytes'] += len(rep.content)
-            await asyncio.sleep(0)
-        return rep
-
-    def absurl(self, url: str) -> str:
+    def absurl(self, url: str|URL) -> str:
         return strs.absurl(self.base_url, url)
+
+    def get_patches(self) -> dict[str, Any]:
+        'Get patches to warn scraper module'
+        return {}
 
     def __init_subclass__(cls) -> None:
         cls.retry = Scraper.retry | cls.retry
@@ -147,6 +128,65 @@ class Scraper:
             cls.state = ValidStateCode(cls.__name__)
         except ValueError:
             pass
+
+    class Session(requests.Session):
+
+        def __init__(self, scraper: Scraper) -> None:
+            super().__init__()
+            self.scraper = scraper
+            self.logger = scraper.logger
+            self.metrics = scraper.metrics
+            self.mount('https://', HTTPAdapter(max_retries=Retry(**scraper.retry)))
+            self.headers['User-Agent'] = scraper.user_agent
+            self.verify = scraper.ssl_verify
+
+        def send(self, request: requests.models.PreparedRequest, **kwargs) -> requests.Response:
+            self.logger.debug(f'{request.method} {request.url}')
+            self.metrics['request_count'] += 1
+            rep = super().send(request, **kwargs)
+            if kwargs.get('stream', self.stream):
+                rep.__class__ = self.StreamingResponse
+                rep.metrics = self.metrics
+            else:
+                self.metrics['request_bytes'] += len(rep.content)
+            return rep
+
+        def request(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
+            url = self.scraper.absurl(url)
+            try:
+                rep = super().request(method, url, **kw)
+                if check:
+                    rep.raise_for_status()
+            except Exception as err:
+                if isinstance(err, HTTPError) and err.response is not None:
+                    status = err.response.status_code
+                else:
+                    status = None
+                self.logger.error(f'Failed to get {url=} {status=}')
+                raise
+            return rep
+
+        async def arequest(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
+            if self.scraper.request_delay and self.metrics['request_count']:
+                await asyncio.sleep(self.scraper.request_delay)
+            rep = self.request(method, url, check=check, **kw)
+            if not kw.get('stream', self.stream):
+                await asyncio.sleep(0.0)
+            return rep
+
+        class StreamingResponse(requests.Response):
+            metrics: dict
+
+            def iter_content(self, chunk_size = 1, decode_unicode = False):
+                for chunk in super().iter_content(chunk_size, decode_unicode):
+                    self.metrics['request_bytes'] += len(chunk)
+                    yield chunk
+
+        # Allow for patching reequests
+        def Session(self):
+            return self
+
+        session = Session
 
 class AugmentArtifactsScraper(Scraper):
     """
@@ -157,7 +197,7 @@ class AugmentArtifactsScraper(Scraper):
     rowkey_trans: ClassVar[dict[int, None]] = dict.fromkeys(map(ord, '-_'))
 
     async def scrape(self) -> None:
-        self.runner.scrape()
+        await super().scrape()
         # Download artifacts
         index = self.build_index()
         for key, url in chain.from_iterable(map(dict.items, index.values())):
@@ -223,26 +263,43 @@ class Runner:
     def file(self) -> Path:
         return self.scraper.cache/f'{self.scraper.state.lower()}.csv'
 
-    @functools.cached_property
-    def module(self):
-        return import_module(f'warn.scrapers.{self.scraper.state.lower()}')
-
-    def scrape(self) -> None:
-        mod = self.module
+    async def scrape(self) -> None:
         scraper = self.scraper
+        with self.patch() as mod:
+            mod.scrape(scraper.cache.dir, scraper.cache.dir.parent)
+        await asyncio.sleep(0)
+
+    @contextmanager
+    def patch(self) -> Generator[ModuleType]:
+        scraper = self.scraper
+        mod = import_module(f'warn.scrapers.{scraper.state.lower()}')
         patches = dict(print=scraper.logger.info)
         restore = dict(print=print)
+        if getattr(mod, 'requests', None) is requests:
+            patches.update(requests=scraper.session)
+            restore.update(requests=requests)
+        for name, value in scraper.get_patches().items():
+            if hasattr(mod, name):
+                patches[name] = value
+                restore[name] = getattr(mod, name)
+            else:
+                scraper.logger.warning(
+                    f'warn scraper has no attribute {name}, skipping runner patch')
+        for name, value in patches.items():
+            scraper.logger.debug(f'Patching {name}')
+            setattr(mod, name, value)
         try:
-            for name, value in patches.items():
-                scraper.logger.debug(f'Patching {name}')
-                setattr(mod, name, value)
-            mod.scrape(scraper.cache.dir, scraper.cache.dir.parent)
+            yield mod
         finally:
             for name, value in restore.items():
                 scraper.logger.debug(f'Restoring {name}')
                 setattr(mod, name, value)
 
+
 class JobCenterSiteProxy:
+    """
+    Fix weaknesses in warn.platforms.job_center.site.Site
+    """
     headers: ClassVar = [
         'employer',
         'notice_date',
@@ -256,22 +313,19 @@ class JobCenterSiteProxy:
         'detail_page_url']
 
     def __init__(self, scraper: Scraper, url: str, stop_year: int) -> None:
+        self._clsinit()
         self.scraper = scraper
         self.request_delay = max(0.5, scraper.request_delay)
         self.stop_year = stop_year
-        from warn.platforms.job_center.site import Site as BaseSite
-        self.delegate = BaseSite(scraper.state, url, scraper.cache.dir, scraper.ssl_verify)
-
-    @property
-    def _start(self) -> str:
-        return self.delegate._start
-
-    @property
-    def _end(self) -> str:
-        return self.delegate._end
+        self.delegate = self.BaseSite(
+            scraper.state,
+            scraper.absurl(url),
+            scraper.cache.dir,
+            scraper.ssl_verify)
+        for name in set(self.delegate.__dict__).difference(self.__dict__):
+            setattr(self, name, getattr(self.delegate, name))
 
     async def run(self) -> None:
-        from warn.platforms.job_center import utils as jcutils
         scraper = self.scraper
         no_cache_years, yearly_dates = self._get_datestring_ranges()
         ssl_verify = scraper.ssl_verify
@@ -283,15 +337,15 @@ class JobCenterSiteProxy:
             writer = csv.writer(fp)
             writer.writerow(self.headers)
         for item in no_cache_years:
-            jcutils._scrape_years(
+            self._jcutils._scrape_years(
                 self, raw_csv, self.headers, [item], use_cache=False, verify=ssl_verify)
             await asyncio.sleep(0)
         for item in yearly_dates:
-            jcutils._scrape_years(
+            self._jcutils._scrape_years(
                 self, raw_csv, self.headers, [item], use_cache=True, verify=ssl_verify)
             await asyncio.sleep(0)
         scraper.cache.delete(scraper.runner.file)
-        jcutils._dedupe(raw_csv, scraper.runner.file)
+        self._jcutils._dedupe(raw_csv, scraper.runner.file)
 
     def _get_page(self, url: str, params=None, use_cache=True) -> str:
         'Override to check status, use scraper session, add delay, cache record files'
@@ -303,11 +357,8 @@ class JobCenterSiteProxy:
         if scraper.metrics['request_count']:
             time.sleep(self.request_delay)
         scraper.logger.debug(f'Request {url=}')
-        scraper.metrics['request_count'] += 1
         rep = scraper.session.get(url, params=params, verify=scraper.ssl_verify)
-        rep.raise_for_status()
         text = rep.text
-        scraper.metrics['request_bytes'] += len(text)
         scraper.cache.write(cachekey, text)
         return text
 
@@ -322,19 +373,27 @@ class JobCenterSiteProxy:
         yearly_dates.reverse()
         return no_cache_years, yearly_dates
 
-    def __getattr__(self, name: str):
-        value = getattr(self.delegate, name)
-        setattr(self, name, value)
-        return value
+    @classmethod
+    def _clsinit(cls):
+        if 'BaseSite' in cls.__dict__:
+            return
+        from warn.platforms.job_center.site import Site as BaseSite
+        from warn.platforms.job_center import utils as jcutils
+        cls.BaseSite = BaseSite
+        cls._jcutils = jcutils
+        for name in set(BaseSite.__dict__).difference(cls.__dict__):
+            setattr(cls, name, getattr(BaseSite, name))
 
-def hashstat(it: Iterable[Path|str|Buffer|dom.PageElement]) -> dict[str, str|int|None]:
+def hashstat(it: Iterable[Any]) -> dict[str, str|int|None]:
     h = hashlib.sha1()
+    geth = None
     size = 0
     for obj in it:
         if isinstance(obj, Path):
+            geth = geth or (lambda: h)
             try:
                 with obj.open('rb') as file:
-                    hashlib.file_digest(file, lambda: h)
+                    hashlib.file_digest(file, geth)
                 size += obj.stat().st_size
             except FileNotFoundError:
                 pass

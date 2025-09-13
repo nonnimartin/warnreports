@@ -31,6 +31,10 @@ loggers:
     level: INFO
     handlers: [access]
     propagate: no
+  warn:
+    level: INFO
+    handlers: [default]
+    propagate: no
   wrep:
     level: INFO
     handlers: [default]

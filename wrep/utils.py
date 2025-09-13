@@ -138,6 +138,7 @@ def init_logging() -> None:
     file = settings.BASEDIR/'logging.yml'
     config = yaml.safe_load(file.read_bytes())
     config['loggers']['wrep']['level'] = levelname
+    config['loggers']['warn']['level'] = levelname
     config['root']['level'] = max(
         ['INFO', levelname],
         key=lambda x: getattr(logging, x))

@@ -6,6 +6,8 @@ from re import compile as _r
 from typing import Callable, Iterable
 from uuid import UUID, uuid5
 
+from starlette.datastructures import URL
+
 from .. import settings
 
 __all__ = [
@@ -25,10 +27,13 @@ clean_filename_subs = [
 clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
 
 
-def absurl(base_url: str|None, url: str) -> None:
-    if base_url and not url.startswith(('http://', 'https://')):
-        url = base_url.rstrip('/') + '/' + url.lstrip('/')
-    return url
+def absurl(base_url: str|URL|None, url: str|URL) -> str:
+    url = URL(str(url))
+    if base_url and not url.scheme:
+        base_url = URL(str(base_url))
+        path = base_url.path.rstrip('/') + '/' + url.path.lstrip('/')
+        url = url.replace(path=path, scheme=base_url.scheme, netloc=base_url.components.netloc)
+    return str(url)
 
 def clean_filename[T](
         value: str,

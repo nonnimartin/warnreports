@@ -20,7 +20,7 @@ __all__ = ['KY']
 class KY(Scraper):
 
     async def scrape(self) -> None:
-        self.runner.scrape()
+        await self.runner.scrape()
         index = self.load_index()
         if settings.SELENIUM_ENABLED:
             await ArtifactDownloader(self, index).run()

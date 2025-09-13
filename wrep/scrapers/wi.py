@@ -26,7 +26,7 @@ class WI(Scraper):
     legacy_range: ClassVar = range(2016, 2020)
 
     async def scrape(self) -> None:
-        rep = await self.request('GET', self.latest_url)
+        rep = await self.session.arequest('GET', self.latest_url)
         self.cache.write_json('latest.json', rep.json(), indent=2)
         for year in self.legacy_range:
             key = f'{year}.legacy.html'

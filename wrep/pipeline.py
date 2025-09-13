@@ -79,7 +79,7 @@ class Pipeline:
         if stage is stage.Load:
             stat: dict[str, int] = {}
             backend = self.backend(SearchIndexBackend)
-            filters = self.get_orm_select_filters(state=state)
+            filters = self.orm_select_filters()
             with ensure_session(self.session) as session:
                 for name, defn in backend.collections.items():
                     if name in ('naics', 'states'):
@@ -112,7 +112,7 @@ class Pipeline:
             backend = self.backend(TranslationBackend)
             await backend.clean(dict(state=state))
         elif stage is stage.Load:
-            filters = self.get_orm_clean_filters(state=state)
+            filters = self.orm_clean_filters()
             stmts = (
                 orm.delete(model).where(*filters)
                 for model, filters in filters.items())
@@ -230,11 +230,10 @@ class Pipeline:
 
     async def index(self, clean: bool = False) -> dict:
         stage = Stage.Index
-        state = self.state
         if clean:
             await self.clean(stage)
         backend = self.backend(SearchIndexBackend)
-        filters = self.get_orm_select_filters(state=state)
+        filters = self.orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
         with SessionLocal() as session:
             for name, defn in backend.collections.items():
@@ -366,32 +365,32 @@ class Pipeline:
             save = save.Update
         return save
 
-    def get_orm_clean_filters(self, state: StateCode) -> OrmFiltersDict:
+    def orm_clean_filters(self) -> OrmFiltersDict:
         return {
-            Report: [Report.state == state],
-            Company: [self.get_companies_delete_pred(state=state)],
-            Artifact: [self.get_artifacts_pred(state=state)],
-            StateStat: [StateStat.id == state]}
+            Report: [Report.state == self.state],
+            Company: [self.orm_companies_delete_pred()],
+            Artifact: [self.orm_artifacts_pred()],
+            StateStat: [StateStat.id == self.state]}
 
-    def get_orm_select_filters(self, state: StateCode) -> OrmFiltersDict:
-        return self.get_orm_clean_filters(state=state) | {
-            Company: [self.get_companies_update_pred(state=state)],
+    def orm_select_filters(self) -> OrmFiltersDict:
+        return self.orm_clean_filters() | {
+            Company: [self.orm_companies_update_pred()],
             Naics: []}
 
-    def get_artifacts_pred(self, state: StateCode) -> orm.BinaryExpression:
-        return Artifact.path.startswith(f'{state.lower()}/')
+    def orm_artifacts_pred(self) -> orm.BinaryExpression:
+        return Artifact.path.startswith(f'{self.state.lower()}/')
 
-    def get_companies_delete_pred(self, state: StateCode) -> orm.BinaryExpression:
+    def orm_companies_delete_pred(self) -> orm.BinaryExpression:
         return Company.id.not_in(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
-            .where(Report.state != state))
+            .where(Report.state != self.state))
 
-    def get_companies_update_pred(self, state: StateCode) -> orm.BinaryExpression:
+    def orm_companies_update_pred(self) -> orm.BinaryExpression:
         return Company.id.in_(
             orm.select(Company.id)
             .join(Report, Report.company == Company.name)
-            .where(Report.state == state))
+            .where(Report.state == self.state))
 
     @staticmethod
     def truncate_fields(record: dict[str, Any]) -> dict[str, int]:
