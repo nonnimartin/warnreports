@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from abc import abstractmethod
 from contextlib import asynccontextmanager
-from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar, Literal,
-                    Mapping, Self, override)
+from typing import (Any, AsyncGenerator, AsyncIterable, Callable, ClassVar,
+                    Literal, Mapping, Self, override)
 from uuid import UUID, uuid5
 
 from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
@@ -13,7 +14,8 @@ from pydantic import NonNegativeInt
 
 from .. import Stage, settings, utils
 from ..models import *
-from ..utils import EitherIterable
+from ..tools import asyn
+from ..tools.asyn import EitherIterable
 from .mongo import (AbstractMongoCollection, MongoClient, MongoCollection,
                     MongoFilterModel, Search)
 
@@ -27,31 +29,32 @@ __all__ = [
 type Doc = dict[str, Any]
 type UpdateCounts = tuple[NonNegativeInt, NonNegativeInt, NonNegativeInt]
 
-logger = utils.get_logger('backends.etl')
+logger = logging.getLogger(__name__)
 
 default_client = MongoClient(
     url=settings.ETL_MONGODB_URL,
     control_dbname=settings.ETL_MONGODB_CONTROL_DBNAME,
-    dbname_key='etl.dbname',
+    dbname_key=settings.ETL_MONGODB_DBNAME_KEY,
     dbname_ttl=settings.ETL_MONGODB_DBNAME_TTL,
     dbname_default=settings.ETL_MONGODB_DBNAME)
 
-collections: dict[str, MongoCollection] = dict(
-    extractions=MongoCollection(
+collections: dict[str, MongoCollection] = {
+    collection.name: collection for collection in [
+    MongoCollection(
         name='extractions',
         client=default_client,
         data_model=Extraction,
         indexes=[
             {'state': 1},
             {'i': 1}]),
-    translations=MongoCollection(
+    MongoCollection(
         name='translations',
         client=default_client,
         data_model=Translation,
         indexes=[
             {'values_id': 1},
             {'state': 1}]),
-    pipelinelogs=MongoCollection(
+    MongoCollection(
         name='pipelinelogs',
         client=default_client,
         data_model=PipelineLog,
@@ -60,7 +63,7 @@ collections: dict[str, MongoCollection] = dict(
             {'states': 1},
             {'start': -1},
             {'end': -1},
-            {'elapsed': -1}]))
+            {'elapsed': -1}])]}
 
 class ContextMixin:
     context: Doc
@@ -215,7 +218,7 @@ class MongoPipelineLog(PipelineLogBackend, MongoContextCollectionMixin[PipelineL
             raise ValueError(f'No entries found')
 
     async def update(self, source: EitherIterable[PipelineLog]) -> UpdateCounts:
-        it = (x.model_dump(by_alias=True) async for x in utils.as_aiter(source))
+        it = (x.model_dump(by_alias=True) async for x in asyn.as_aiter(source))
         await self.create_indexes()
         return await update_collection(await self.get_collection(), it)
 
@@ -239,7 +242,7 @@ class MongoETBase[DM: (Extraction, Translation)](ETBase[DM], MongoContextCollect
     async def stat(self, filter: MongoFilterModel[DM]|Any) -> Doc:
         it = self.search(filter).objs()
         it = (x.model_dump(by_alias=True) async for x in it)
-        it = utils.amap(self.clean_stat_doc, it)
+        it = asyn.amap(self.clean_stat_doc, it)
         return await docs_stat(it)
 
     async def clean(self, filter: MongoFilterModel[DM]|Any) -> NonNegativeInt:
@@ -251,9 +254,9 @@ class MongoETBase[DM: (Extraction, Translation)](ETBase[DM], MongoContextCollect
     async def update(self, source: EitherIterable[DM|Any]) -> UpdateCounts:
         await self.create_indexes()
         coll = await self.get_collection()
-        it = utils.amap(self.model.model_validate, source)
-        it = utils.amap(reversed, utils.aenumerate(it))
-        it = utils.astarmap(self.get_save_doc, it)
+        it = asyn.amap(self.model.model_validate, source)
+        it = asyn.amap(reversed, asyn.aenumerate(it))
+        it = asyn.astarmap(self.get_save_doc, it)
         return await update_collection(coll, it, self.get_replace_filter)
 
     def get_save_doc(self, inst: DM, i: NonNegativeInt) -> Doc:
@@ -332,14 +335,14 @@ class MongoSearchIndex(SearchIndexBackend, MongoContextMixin):
         collection = self.collections[name]
         coll = (await self.db()).get_collection(collection.name)
         await coll.create_indexes(collection.indexes)
-        it = utils.as_aiter(source)
+        it = asyn.as_aiter(source)
         it = (x.model_dump(by_alias=True) async for x in it)
         key = 'id' if name in ('states', 'naics') else '_id'
         return await update_collection(coll, it, lambda doc: {key: doc[key]})
 
 async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc], get_filter: Callable[[Doc], Doc]|None = None) -> UpdateCounts:
     count, created, updated = 0, 0, 0
-    async for doc in utils.as_aiter(it):
+    async for doc in asyn.as_aiter(it):
         if get_filter:
             filt = get_filter(doc)
         else:
@@ -363,7 +366,7 @@ async def update_collection(coll: AsyncIOMotorCollection, it: EitherIterable[Doc
 async def docs_stat(it: EitherIterable[Doc]) -> Doc:
     h = hashlib.sha1()
     size, count = 0, 0
-    async for doc in utils.as_aiter(it):
+    async for doc in asyn.as_aiter(it):
         buf = json.dumps(doc, default=str).encode()
         h.update(buf)
         size += len(buf)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import logging
 import os
 from contextlib import asynccontextmanager
 from email.utils import formatdate
@@ -14,8 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import settings, utils
 from ..routers.common import FeedSearchParams, site_absurl
 
-logger = utils.get_logger('frontend')
-
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 def default_handler(route: str, path: str|None):

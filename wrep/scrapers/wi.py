@@ -47,12 +47,12 @@ class WI(Scraper):
 
         def cleanstr(value: str) -> str:
             clean = strs.unhtml(' '.join(value.split()))
-            clean = strs.rewrite_all(clean, value_rewrites)
+            clean = strs.rewrite(clean, value_rewrites)
             return clean
 
         def getkey(row: dict[str, str]) -> str:
             it = (row[key] for key in rowkey_fields)
-            it = (strs.rewrite_all(value, rowkey_rewrites) for value in it)
+            it = (strs.rewrite(value, rowkey_rewrites) for value in it)
             return '-'.join(it)
 
         rows: list[dict[str, str]] = self.cache.read_json('index.json')
@@ -102,7 +102,7 @@ class WI(Scraper):
                     row.update(PK=tr['id'], PDF=Path(tr.a['href']).stem)
                     for header, rewrites in html_rewrites.items():
                         if header in row:
-                            row[header] = strs.rewrite_all(row[header], rewrites)
+                            row[header] = strs.rewrite(row[header], rewrites)
                     yield row
 
         def readjson(file: Path) -> Iterator[dict[str, str]]:

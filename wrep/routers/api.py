@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 from uuid import UUID, uuid5
 
@@ -8,12 +9,12 @@ from fastapi import (APIRouter, Depends, HTTPException, Query, Request,
 from pydantic import Field
 from starlette.datastructures import URL
 
-from .. import search, settings, utils
+from .. import search, settings
 from ..backends.mongo import Search, filters
 from ..models import *
 from .common import *
 
-logger = utils.get_logger('api')
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/v0')
 
 def search_opts(

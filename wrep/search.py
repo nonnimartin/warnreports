@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.operations import IndexModel
 
-from . import orm, settings, utils
+from . import orm, settings
 from .backends.mongo import (AbstractCollection, AbstractMongoCollection,
                              MongoClient, MongoFilterModel)
 from .models import *
 
 __all__ = ['mapped_collections']
 
-logger = utils.get_logger('search')
+logger = logging.getLogger(__name__)
 
 default_client = MongoClient(
     url=settings.SEARCH_MONGODB_URL,
     control_dbname=settings.SEARCH_MONGODB_CONTROL_DBNAME,
-    dbname_key='search.dbname',
+    dbname_key=settings.SEARCH_MONGODB_DBNAME_KEY,
     dbname_ttl=settings.SEARCH_MONGODB_DBNAME_TTL,
     dbname_default=settings.SEARCH_MONGODB_DBNAME)
 
@@ -54,8 +55,9 @@ class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
         stat = await self.stats(db=db)
         logger.info(f'Built {self.name} {stat=}')
 
-mapped_collections: dict[str, MappedCollection] = dict(
-    reports=MappedCollection(
+mapped_collections: dict[str, MappedCollection] = {
+    collection.name: collection for collection in [
+    MappedCollection(
         name='reports',
         client=default_client,
         orm_model=orm.Report,
@@ -69,7 +71,7 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'naics.code': 1},
             {'naics.id': 1},
             {'state': 1}]),
-    companies=MappedCollection(
+    MappedCollection(
         name='companies',
         client=default_client,
         orm_model=orm.Company,
@@ -89,7 +91,7 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'aliases_count': 1},
             {'aliases_count': -1},
             {'employees_sum': -1}]),
-    naics=MappedCollection(
+    MappedCollection(
         name='naics',
         client=default_client,
         orm_model=orm.Naics,
@@ -110,7 +112,7 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'states_count': 1},
             {'states_count': -1},
             {'employees_sum': -1}]),
-    artifacts=MappedCollection(
+    MappedCollection(
         name='artifacts',
         client=default_client,
         orm_model=orm.Artifact,
@@ -119,14 +121,14 @@ mapped_collections: dict[str, MappedCollection] = dict(
             {'path': 1},
             {'state': 1},
             {'sha1': 1}]),
-    states=MappedCollection(
+    MappedCollection(
         name='states',
         client=default_client,
         orm_model=orm.StateStat,
         indexes=[
             {'id': 1},
             {'last_reported': -1},
-            {'reports_count': -1}]))
+            {'reports_count': -1}])]}
 
 class MongoReportsFilter(ReportsFilter, MongoFilterModel[ReportData]):
     collection: ClassVar = mapped_collections['reports']

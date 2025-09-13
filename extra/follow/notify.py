@@ -5,7 +5,7 @@ from wrep.models import *
 
 from .models import *
 
-logger = utils.get_logger('notify')
+logger = ...#utils.get_logger('notify')
 template = 'email/notify.jinja'
 
 def notify(follow: Follow):

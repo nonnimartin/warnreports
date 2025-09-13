@@ -6,34 +6,32 @@ import json
 import re
 from contextlib import contextmanager
 from itertools import chain
-from typing import Any, Iterable, Iterator
+from typing import Any, ClassVar, Iterable, Iterator
 from urllib.parse import parse_qs, urlparse
 
 import requests.exceptions
 
-from .. import utils
-from ..tools import strs
-from ..tools.dom import bs
+from ..tools import strs, dom, asyn
 from .base import Scraper
 
 __all__ = ['GA']
 
 class GA(Scraper):
-    base_url = 'https://www.tcsg.edu'
-    latest_url = '/warn-public-view/'
-    request_delay = 1
-    api_url = f'/wp-admin/admin-ajax.php'
-    user_agent = (
+    base_url: ClassVar = 'https://www.tcsg.edu'
+    latest_url: ClassVar = '/warn-public-view/'
+    request_delay: ClassVar = 1.0
+    api_url: ClassVar = f'/wp-admin/admin-ajax.php'
+    user_agent: ClassVar = (
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36')
-    extra_headers = ['entry_url', 'submitted_date', 'artifacts_json']
+    extra_headers: ClassVar = ['entry_url', 'submitted_date', 'artifacts_json']
 
     async def scrape(self) -> None:
         await self.download('latest.html', self.latest_url)
         payload = dict(self.payload, nonce=self.extract_nonce())
         async def getbody():
             return (await self.session.arequest('POST', self.api_url, data=payload)).json()
-        wait = utils.Wait(timeout=20, poll=2, ignored=(requests.exceptions.JSONDecodeError,))
+        wait = asyn.Wait(timeout=20, poll=2, ignored=requests.exceptions.JSONDecodeError)
         try:
             body = await wait.until(getbody)
         except TimeoutError as err:
@@ -66,7 +64,7 @@ class GA(Scraper):
         body: dict = self.cache.read_json('latest.json')
         index: dict[str, tuple[str, str]] = {}
         for listing in body['data']:
-            a = bs(listing[0], 'html5lib').find('a')
+            a = dom.bs(listing[0], 'html5lib').find('a')
             notice_id = a.text
             url = self.absurl(a['href'])
             datestr = listing[2]
@@ -85,7 +83,7 @@ class GA(Scraper):
             all(map(self.cache.exists, keys)))
 
     def extract_artifact_infos(self, notice_id: str) -> Iterator[tuple[str, str]]:
-        doc = bs(self.cache/f'{notice_id}.format3')
+        doc = dom.bs(self.cache/f'{notice_id}.format3')
         for a in doc.find_all('a', {'data-type': 'pdf'}):
             filename = self.artifact_filename(a['href'])
             if filename:
@@ -93,7 +91,7 @@ class GA(Scraper):
                 yield cachekey, self.absurl(a['href'])
 
     def extract_nonce(self) -> str|None:
-        doc = bs(self.cache/'latest.html', 'html5lib')
+        doc = dom.bs(self.cache/'latest.html', 'html5lib')
         script = doc.find(
             'script',
             text=lambda text: text and 'window.gvDTglobals.push' in text)
@@ -106,7 +104,7 @@ class GA(Scraper):
         if vals and vals[0].endswith('.pdf'):
             return strs.clean_filename(vals[0])
 
-    payload = dict(
+    payload: ClassVar = dict(
         columns=[
             dict(data=i, name=name, searchable=True, orderable=True, search={})
             for i, name in enumerate(['gv_96', 'gv_4', 'gv_date_created', 'gv_97'])],

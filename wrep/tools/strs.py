@@ -13,7 +13,7 @@ from .. import settings
 __all__ = [
     'absurl',
     'clean_filename',
-    'rewrite_all',
+    'rewrite',
     'struuid',
     'unhtml']
 
@@ -30,9 +30,12 @@ clean_extension_subs = [(rw[0], '') for rw in clean_filename_subs]
 def absurl(base_url: str|URL|None, url: str|URL) -> str:
     url = URL(str(url))
     if base_url and not url.scheme:
-        base_url = URL(str(base_url))
-        path = base_url.path.rstrip('/') + '/' + url.path.lstrip('/')
-        url = url.replace(path=path, scheme=base_url.scheme, netloc=base_url.components.netloc)
+        comps = URL(str(base_url)).components
+        path = comps.path.rstrip('/') + '/' + url.path.lstrip('/')
+        url = url.replace(
+            path=path,
+            scheme=comps.scheme,
+            netloc=comps.netloc)
     return str(url)
 
 def clean_filename[T](
@@ -43,20 +46,22 @@ def clean_filename[T](
         # Raise on empty result
         fail: bool = False) -> str|T:
     parts = value.rsplit('.', not stem)
-    clean = rewrite_all(parts[0], clean_filename_subs)
+    clean = rewrite(parts[0], clean_filename_subs)
     clean = clean.strip('_-')
     if clean:
         if len(parts) == 2:
-            ext = rewrite_all(parts[1], clean_extension_subs)
+            ext = rewrite(parts[1], clean_extension_subs)
             clean = f'{clean}.{ext}'
         return clean
     if fail and not default:
         raise ValueError(f'Empty clean filename {value=}')
     return default
 
-def rewrite_all(value: str, rewrites: Iterable[SrchRepl]) -> str:
+def rewrite(value: str, rewrites: Iterable[SrchRepl], *, reonly: bool = False) -> str:
     for srch, repl in rewrites:
-        if srch == value:
+        if reonly:
+            value = re.sub(srch, repl, value)
+        elif srch == value:
             value = repl
         elif isinstance(srch, re.Pattern):
             value = srch.sub(repl, value)

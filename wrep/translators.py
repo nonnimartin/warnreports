@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import json
+import logging
 import re
 import uuid
 from datetime import datetime
@@ -38,7 +39,7 @@ ASCII_TRANS = {
     0x201d: '"',
 }
 
-logger = utils.get_logger('translators')
+logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class TranslateInfo:
@@ -108,7 +109,7 @@ class TranslationFactory:
     def value(self, translator: Translator, field: str, value: str, info: TranslateInfo) -> Any:
         'Translate a field value'
         if field in translator.rewrites:
-            value = strs.rewrite_all(value, translator.rewrites[field])
+            value = strs.rewrite(value, translator.rewrites[field])
         method = f'value_{field}'
         if (func := getattr(translator, method, None)):
             value = varcall(func, value, info)
@@ -279,7 +280,7 @@ class Translator:
             return
         # For cases like TN:
         #   June 12, 2023 - August 11, 2023
-        v2 = strs.rewrite_all(value, MONTHNAME_REWRITES)
+        v2 = strs.rewrite(value, MONTHNAME_REWRITES)
         if v2 != value:
             # Only try this strategy if we matched a month name
             if len(parts := value.split(' - ')) > 1:
@@ -725,7 +726,7 @@ class IA(Translator):
         if all(addrvals):
             location = ', '.join([addrvals[0], ' '.join(addrvals[1:])])
             location = ' '.join(location.split())
-            location = strs.rewrite_all(location, self.rewrites['location'])
+            location = strs.rewrite(location, self.rewrites['location'])
             if location:
                 inst.location = location
 

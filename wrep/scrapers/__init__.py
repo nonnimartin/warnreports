@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections import abc
 from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Iterable
 
-from .. import utils, settings
+from .. import settings
 from ..models import StateCode, ValidStateCode
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ DEFAULT_PATH = [__package__]
 
 class ScraperRegistry(abc.MutableMapping[StateCode, type[ScraperType]]):
     __slots__ = ['path', *abc.MutableMapping.__abstractmethods__]
-    logger: ClassVar = utils.get_logger('scrapers.registry')
+    logger: ClassVar = logging.getLogger(f'{__name__}.registry')
     path: list[str]
     'Package/module search path'
 
@@ -61,6 +62,7 @@ class ScraperRegistry(abc.MutableMapping[StateCode, type[ScraperType]]):
         state = ValidStateCode(state)
         it = ((path, f'{path}.{state.lower()}') for path in self.path)
         from importlib import import_module
+
         from .base import Scraper
         for cand in chain.from_iterable(it):
             try:

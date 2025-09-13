@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from functools import wraps
@@ -11,8 +12,6 @@ from openpyxl.cell import Cell
 from openpyxl.worksheet.worksheet import Worksheet
 from starlette.datastructures import URL
 
-from .. import utils
-
 __all__ = [
     'cellstr',
     'cellurl',
@@ -20,7 +19,7 @@ __all__ = [
     'extract_worksheet',
     'load_workbook']
 
-logger = utils.get_logger('xlsx')
+logger = logging.getLogger(__name__)
 
 @wraps(openpyxl.load_workbook)
 def load_workbook(file: Path, read_only=True, **kw):

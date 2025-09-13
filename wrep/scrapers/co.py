@@ -1,30 +1,33 @@
 from __future__ import annotations
 
-import asyncio
 import csv
 import json
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from pathlib import Path
 from re import compile as _r
-from typing import ClassVar, Generator, Iterable, Iterator
+from typing import Any, ClassVar, Generator, Iterable, Iterator
 from urllib.parse import parse_qs
 
 from starlette.datastructures import URL
 
 from .. import utils
-from ..tools import files, strs, xlsx
-from ..tools.dom import bs
+from ..tools import dom, files, strs, xlsx
 from .base import Scraper
 
 __all__ = ['CO']
 
 class CO(Scraper):
-    sheets_urlmap: ClassVar[dict[str, str]] = {
-        'https://drive.google.com/open?id=1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4':
-            'https://docs.google.com/spreadsheets/d/1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4'}
     rowkey_maxlen: ClassVar[int] = 1024
     artifacts_minyear: ClassVar[int] = 2020
+    url_rewrites: ClassVar[list[strs.SrchRepl]] = [
+        (
+            _r(r'.*id=(1M-jYA2cSbehhp1pbpcAa900PtjAgktCHbU556cSjzc4)$'),
+            r'https://docs.google.com/spreadsheets/d/\1'),
+        (_r(r'edit.*'), ''),
+        (_r(r'/+$'), ''),
+        (_r(r'(/export)?$'), '/export'),
+    ]
 
     async def scrape(self) -> None:
         await self.runner.scrape()
@@ -40,16 +43,16 @@ class CO(Scraper):
                 writer.writerows(reader)
         self.runner.file.unlink()
         # Download xlsx files for building artifacts index
-        doc = bs(self.cache/'main/source.html')
+        doc = dom.bs(self.cache/'main/source.html')
         currtext = 'View Real Time Warns'
         links = (
             doc.find('a', text=currtext),
             *doc.find(class_='ckeditor-accordion').find_all('a'))
-        now = utils.now()
+        now = utils.now(tz=self.tz)
         params = dict(format='xlsx')
         for a in links:
             # Normalize whitespace & null bytes
-            text = ' '.join(a.text.split())
+            text = ' '.join(a.get_text().split())
             if text == currtext:
                 year = now.year
                 key = f'current.xlsx'
@@ -59,12 +62,9 @@ class CO(Scraper):
             if year < self.artifacts_minyear:
                 # No need to download xlsx that won't contain artifacts data
                 continue
-            url = a['href'].split('edit')[0].rstrip('/')
-            url = self.sheets_urlmap.get(url, url)
-            url = f'{url}/export'
-            is_recent = year >= now.year
+            url = strs.rewrite(a['href'], self.url_rewrites)
             # Redownload prior year util July
-            is_recent = is_recent or year == now.year - 1 and now.month <= 6
+            is_recent = year >= now.year or year == now.year - 1 and now.month <= 6
             await self.download(key, url, params=params, missing_only=not is_recent)
         # Download artifacts
         index = await self.build_index()
@@ -73,7 +73,7 @@ class CO(Scraper):
                 await self.download(key, url, missing_only=True)
                 self.artifacts.add(key)
 
-    def statobjs(self):
+    def statobjs(self) -> Iterator[Any]:
         yield self.cache/'normalized.csv'
         yield self.cache/'index.json'
 
@@ -91,10 +91,11 @@ class CO(Scraper):
                     todo.discard(key)
             return row
 
-        with self.cache.open('normalized.csv') as file:
-            yield map(makerow, csv.DictReader(file))
-            for key in todo:
-                self.logger.warning(f'Unassociated artifacts {key=}')
+        file = self.cache/'normalized.csv'
+        with file.open(newline='') as fp:
+            yield map(makerow, csv.DictReader(fp))
+        for key in todo:
+            self.logger.warning(f'Unassociated artifacts {key=}')
 
     def rowkey(self, row: dict[str, str]) -> str|None:
         """
@@ -225,3 +226,17 @@ class CO(Scraper):
             index[rowkey][cachekey] = url
         self.cache.write_json('index.json', index, indent=2)
         return dict(index)
+
+    def get_patches(self) -> dict[str, Any]:
+        return super().get_patches()|dict(utils=PatchUtils(self))
+
+class PatchUtils:
+
+    def __init__(self, scraper: CO) -> None:
+        self.get_url = scraper.session.get
+        from warn import utils as wutils
+        self.delegate = wutils
+        self.write_dict_rows_to_csv = self.delegate.write_dict_rows_to_csv
+
+    def __getattr__(self, name: str):
+        return self.__dict__.setdefault(name, getattr(self.delegate, name))

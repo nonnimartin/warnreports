@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 
@@ -12,13 +13,13 @@ from pydantic import ValidationError
 from starlette import status
 from starlette.datastructures import URL
 
-from .. import settings, utils
+from .. import settings
 from ..backends.mongo import Search, filters
 from ..models import *
 from .common import (FeedSearchParams, clean_feed_params, feed_id_encode,
                      site_absurl)
 
-logger = utils.get_logger('feed')
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/feed')
 
 @router.get('/rss')

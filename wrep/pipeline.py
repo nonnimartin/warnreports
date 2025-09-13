@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
 import operator
 import time
 import uuid
@@ -24,6 +25,7 @@ from .backends.etl import *
 from .models import *
 from .orm import *
 from .ref import normls
+from .tools import asyn
 
 if TYPE_CHECKING:
     from typing import overload
@@ -44,7 +46,7 @@ class Pipeline:
         self.context = context
         self.opts = PipelineOpts.model_validate(opts or {})
         self.session: orm.Session|None = None
-        self.logger = utils.get_logger(f'pipeline.{self.state}')
+        self.logger = logging.getLogger(f'{__name__}.{self.state}')
 
     if TYPE_CHECKING:
         @overload
@@ -162,8 +164,8 @@ class Pipeline:
         if clean:
             await self.clean(stage)
         scraper = self.scraper
-        async with utils.awith(scraper.extract()) as source:
-            it = utils.as_aiter(source)
+        async with asyn.awith(scraper.extract()) as source:
+            it = asyn.as_aiter(source)
             it = (dict(state=state, data=x) async for x in it)
             count, created, updated = await backend.update(it)
             deleted = await backend.clean(dict(state=[state], i_min=count+1))
@@ -187,8 +189,8 @@ class Pipeline:
             with SessionLocal() as session:
                 factory = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
-                it = utils.amap(factory.translate, it)
-                it = utils.achain_from_iterable(it)
+                it = asyn.amap(factory.translate, it)
+                it = asyn.achain_from_iterable(it)
                 count, created, updated = await backend.update(it)
                 if self.opts.rollback:
                     session.rollback()
@@ -419,7 +421,7 @@ class PipelineRunner:
         Stage.Translate: 1,
         Stage.Load: 2,
         Stage.Index: 3})
-    logger: ClassVar[utils.logging.Logger] = utils.get_logger('pipeline.runner')
+    logger: ClassVar[logging.Logger] = logging.getLogger(f'{__name__}.runner')
 
     def __init__(
         self,

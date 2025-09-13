@@ -65,7 +65,7 @@ class TN(Scraper):
 
         def augment(row: dict[str, str]) -> dict[str, str]:
             "Normalize noticeid and associate artifacts"
-            noticeid = row['Notice ID'] = strs.rewrite_all(
+            noticeid = row['Notice ID'] = strs.rewrite(
                 row['Notice ID'],
                 self.noticeid_rewrites)
             if noticeid in index:
@@ -137,7 +137,7 @@ class TN(Scraper):
 
         def add(noticeid: str, href: str) -> None:
             url = self.absurl(href)
-            noticeid = strs.rewrite_all(noticeid, self.noticeid_rewrites)
+            noticeid = strs.rewrite(noticeid, self.noticeid_rewrites)
             if not (noticeid and url.endswith('.pdf')):
                 if not href.startswith('mailto:'):
                     self.logger.warning(f'No index item for {href=}')

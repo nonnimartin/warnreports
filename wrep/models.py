@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, Callable, ClassVar, Iterator, Literal, Self
@@ -9,15 +10,15 @@ from zoneinfo import ZoneInfo
 
 from annotated_types import Gt, Le, Lt
 from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, HttpUrl,
-                      NonNegativeFloat, NonNegativeInt, PlainSerializer, PositiveInt,
-                      StringConstraints, TypeAdapter, field_serializer,
-                      model_validator)
+                      NonNegativeFloat, NonNegativeInt, PlainSerializer,
+                      PositiveInt, StringConstraints, TypeAdapter,
+                      field_serializer, model_validator)
 from pydantic_core import ValidationError as ValidationError
 
 from . import Stage, settings, utils
 from .ref.tz import zoneinfos
 
-logger = utils.get_logger('models')
+logger = logging.getLogger(__name__)
 
 __all__ = [
     'ArtifactData',

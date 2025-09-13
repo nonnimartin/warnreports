@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 from contextlib import asynccontextmanager
 from functools import cached_property as lazy
 from typing import Any, Callable, Coroutine, Sequence
@@ -12,8 +13,8 @@ from . import frontend, routers, settings, utils
 from .backends.mongo import MissingControlDoc
 
 type FNext = Callable[[Request], Coroutine[Any, Any, Response]]
-logger = utils.get_logger('main')
 
+logger = logging.getLogger(__name__)
 appslist: Sequence[str] = []
 
 def wapp[F: Callable](wrapped: F):

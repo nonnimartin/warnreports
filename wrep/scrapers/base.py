@@ -4,6 +4,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import logging
 import time
 from collections import defaultdict
 from contextlib import contextmanager
@@ -13,11 +14,11 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, ClassVar, Generator, Iterable, Iterator
 
-from starlette.datastructures import URL
 import requests
 import requests.models
 from requests.adapters import HTTPAdapter, Retry
 from requests.exceptions import HTTPError
+from starlette.datastructures import URL
 
 from .. import Stage, settings, utils
 from ..models import ScraperOpts, StateCode, ValidStateCode
@@ -43,7 +44,7 @@ class Scraper:
             settings.ARTIFACTS_DIR/self.state.lower(),
             self.cache.dir)
         self.metrics = defaultdict(int)
-        self.logger = utils.get_logger(f'scrapers.{self.state}')
+        self.logger = logging.getLogger(f'{__name__}.{self.state}')
         self.tz = zoneinfos[self.state]
         self.session = self.Session(self)
         self.runner = Runner(self)
@@ -378,8 +379,8 @@ class JobCenterSiteProxy:
     def _clsinit(cls):
         if 'BaseSite' in cls.__dict__:
             return
-        from warn.platforms.job_center.site import Site as BaseSite
         from warn.platforms.job_center import utils as jcutils
+        from warn.platforms.job_center.site import Site as BaseSite
         cls.BaseSite = BaseSite
         cls._jcutils = jcutils
         for name in set(BaseSite.__dict__).difference(cls.__dict__):

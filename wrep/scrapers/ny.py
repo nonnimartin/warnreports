@@ -14,8 +14,7 @@ from typing import Any, ClassVar, Generator, Iterator
 from starlette.datastructures import URL
 
 from .. import settings, utils
-from ..backends import webdrivers
-from ..tools import dom, files, pdfs, strs, xlsx
+from ..tools import asyn, dom, files, pdfs, strs, webd, xlsx
 from .base import Scraper
 
 __all__ = ['NY']
@@ -53,9 +52,9 @@ class NY(Scraper):
         if settings.SELENIUM_ENABLED:
             args = [f'--user-agent={self.user_agent}']
             prefs = {'download.default_directory': self.cache.path}
-            async with webdrivers.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
+            async with webd.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
                 await self.driver_scrape(driver)
-                count, size = webdrivers.getmetrics(driver)
+                count, size = webd.getmetrics(driver)
                 self.metrics['request_count'] += count
                 self.metrics['request_bytes'] += size
         else:
@@ -71,11 +70,11 @@ class NY(Scraper):
                 await self.download(key, url, missing_only=True)
                 self.artifacts.add(key)
 
-    async def driver_scrape(self, driver: webdrivers.Chrome) -> None:
+    async def driver_scrape(self, driver: webd.Chrome) -> None:
         from selenium.common.exceptions import WebDriverException
         driver.set_window_size(1920, 3840)
         driver.get(self.driver_url)
-        wait = utils.Wait(
+        wait = asyn.Wait(
             timeout=self.driver_timeout,
             ignored=WebDriverException,
             callback=driver.find_element)
@@ -90,7 +89,7 @@ class NY(Scraper):
             self.logger.debug(f'Clicked {selector} {element=}')
             return element
 
-        pastnyears = utils.now().year - self.tableau_mindate.year
+        pastnyears = utils.now(tz=self.tz).year - self.tableau_mindate.year
         if pastnyears:
             # Select Year dropdown
             await waitandclick('.tabComboBoxButtonHolder')
@@ -233,7 +232,7 @@ class NY(Scraper):
                 if len(item) == 1:
                     continue
                 header, value = item
-                header = strs.rewrite_all(header, pdfheader_rewrites)
+                header = strs.rewrite(header, pdfheader_rewrites)
                 yield header, value
 
         it = chain(self.archive_filenames, [self.tableau_filename])
@@ -254,7 +253,7 @@ class NY(Scraper):
         def hrefkey(href: str) -> str:
             "Return a cache key and download URL from the href value"
             url = self.absurl(href.strip())
-            url = strs.rewrite_all(url, url_rewrites)
+            url = strs.rewrite(url, url_rewrites)
             filename = Path(URL(url).path).name
             key = f'records/{filename}'
             if not filename.endswith('.pdf'):

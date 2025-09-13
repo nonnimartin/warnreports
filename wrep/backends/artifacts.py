@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import logging
 from email.utils import formatdate
 from pathlib import Path
 from typing import Literal
@@ -9,12 +10,12 @@ from typing import Literal
 from fastapi import HTTPException, status
 from fastapi.responses import Response, StreamingResponse
 
-from .. import settings, utils
+from .. import settings
 from ..models import *
 
 type Disp = Literal['inline', 'download']
 
-logger = utils.get_logger('artifacts')
+logger = logging.getLogger(__name__)
 
 def get_artifact_response(method: str, artifact: ArtifactDetail, disposition: Disp):
     headers = get_resp_headers(artifact, disposition)
