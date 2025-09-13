@@ -608,7 +608,7 @@ class PipelineRunner:
             capture_exception()
         finally:
             run.end = utils.utcnow()
-            run.elapsed = (run.end - run.start).total_seconds()
+            run.sync()
 
     async def pollsave[T](self, coro: CoroutineType[Any, Any, T]) -> T:
         task = asyncio.create_task(coro)

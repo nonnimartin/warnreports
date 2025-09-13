@@ -225,6 +225,11 @@ class PipelineRunDetail(DataModel):
     def ischange(self) -> bool:
         return bool(self.result and not self.result.get('nochange'))
 
+    def sync(self) -> None:
+        if self.start:
+            until = self.end or utils.utcnow()
+            self.elapsed = (until - self.start).total_seconds()
+
 class PipelineRunError(DataModel):
     type: str
     message: str
@@ -287,6 +292,8 @@ class PipelineLog(DataModel):
         if self.start:
             until = self.end or utils.utcnow()
             self.elapsed = (until - self.start).total_seconds()
+        for run in self.runs:
+            run.sync()
 
     def stageruns(self, stage: Stage):
         for run in self.runs:
