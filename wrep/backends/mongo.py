@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import re
 import uuid
 from datetime import timedelta
@@ -15,10 +16,11 @@ from pymongo.operations import IndexModel
 
 from .. import settings, utils
 from ..models import DataModel, Fi, FilterModel, Limit, Offset, OrderItem
+from ..tools import asyn
 
 type Filts[DM] = dict[type[DM: DataModel], type[FilterModel[DM: DataModel]]]
 filters: Filts = {}
-logger = utils.get_logger('backends.mongo')
+logger = logging.getLogger(__name__)
 
 @dataclasses.dataclass
 class MongoClient:
@@ -183,7 +185,7 @@ class MongoCollection(AbstractMongoCollection):
 class MongoFilterModel[DM: DataModel](FilterModel[DM]):
     collection: ClassVar[MongoCollection]
 
-    def get_query(self):
+    def get_query(self) -> dict[str, Any]:
         q = self.model_dump(context={'tofilter': True})
         if (filts := list(self.get_filters())):
             q.setdefault('$and', []).extend(filts)
@@ -193,7 +195,7 @@ class MongoFilterModel[DM: DataModel](FilterModel[DM]):
         yield from ()
 
     @model_serializer(mode='wrap')
-    def serialize_filter(self, nxt: SerializerFunctionWrapHandler, info: SerializationInfo):
+    def serialize_filter(self, nxt: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
         if not (info.context and info.context.get('tofilter')):
             return nxt(self)
         result = {}
@@ -283,7 +285,7 @@ class Search[DM: DataModel]:
 
     async def docs(self) -> AsyncIterator[dict[str, Any]]:
         if self.limit == 0:
-            return utils.as_aiter(())
+            return asyn.as_aiter(())
         if settings.QUERY_LOGGING:
             logger.info(f'FIND q={self.q}')
         cur = (await self.get_collection()).find(self.q)

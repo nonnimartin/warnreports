@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 from typing import Any, Callable, ClassVar, Mapping
@@ -15,7 +16,7 @@ from ..models import *
 from .base import AP, AppCommand, BaseCommand, NonNegIntTa, PosIntTa
 from .mongo import ClientControlCommand
 
-logger = utils.get_logger('etl')
+logger = logging.getLogger(__name__)
 
 class EtlBaseCommand(AppCommand):
     output_formats: ClassVar[list[str]] = ['json', 'yaml']

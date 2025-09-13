@@ -105,7 +105,7 @@ class OH(Scraper):
     def build_index(self) -> dict[str, dict[str, str]]:
         'Build mapping of notice_id to artifacts dict (key: url)'
         def rewriteurl(url: str) -> str:
-            return strs.rewrite_all(url, self.rewrites['artifact'])
+            return strs.rewrite(url, self.rewrites['artifact'])
         # Mapping from notice_id to urls
         builder: dict[str, set[str]] = defaultdict(set)
         sourcekeys: list[str] = list(self.cache.read_json('sources.json'))
@@ -140,7 +140,7 @@ class OH(Scraper):
         return index
 
     def normalize_notice_id(self, value: str) -> str:
-        return strs.rewrite_all(value, self.rewrites['notice_id']).strip()
+        return strs.rewrite(value, self.rewrites['notice_id']).strip()
 
     @contextmanager
     def extract(self):

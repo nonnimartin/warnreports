@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Iterable
-
-from .. import utils
 
 if TYPE_CHECKING:
     from selenium.webdriver import Chrome, ChromeOptions, ChromeService
@@ -31,7 +30,7 @@ else:
             from selenium.webdriver.remote.webelement import WebElement
             return WebElement(*args, **kw)
 
-logger = utils.get_logger('backends.webdrivers')
+logger = logging.getLogger(__name__)
 
 DEFAULT_CHROME_ARGS = (
     '--headless',
@@ -45,7 +44,7 @@ DEFAULT_CHROME_PREFS = {
     'download.directory_upgrade': True}
 
 @asynccontextmanager
-async def selenium(*, args: Iterable[str]|None = None, prefs: dict[str, Any]|None = None, metrics: bool = True, logger: utils.logging.Logger = logger):
+async def selenium(*, args: Iterable[str]|None = None, prefs: dict[str, Any]|None = None, metrics: bool = True, logger: logging.Logger = logger):
     args = tuple(args or ()) + DEFAULT_CHROME_ARGS
     prefs = DEFAULT_CHROME_PREFS|(prefs or {})
     options = ChromeOptions()

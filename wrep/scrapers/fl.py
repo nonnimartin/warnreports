@@ -62,7 +62,7 @@ class FL(AugmentArtifactsScraper):
             if clean.startswith('\\'):
                 return
             clean = clean.removesuffix('.pdf')
-            clean = strs.rewrite_all(clean, uri_rewrites)
+            clean = strs.rewrite(clean, uri_rewrites)
             clean = clean.strip('_-')
             if not clean:
                 return

@@ -4,15 +4,15 @@ import asyncio
 import csv
 import dataclasses
 import json
+import logging
 import uuid
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Generator, Iterable, Iterator
 
-from .. import settings, utils
-from ..backends import webdrivers
-from ..tools import files, strs
+from .. import settings
+from ..tools import asyn, files, strs, webd
 from .base import Scraper
 
 __all__ = ['KY']
@@ -73,7 +73,7 @@ class ArtifactDownloader:
         'https://kydev.my.salesforce.com'}
 
     @property
-    def logger(self) -> utils.logging.Logger:
+    def logger(self) -> logging.Logger:
         return self.scraper.logger
 
     async def run(self) -> None:
@@ -120,13 +120,13 @@ class ArtifactDownloader:
         cache.mkdir()
         args = [f'--user-agent={self.scraper.user_agent}']
         prefs = {'download.default_directory': cache.path}
-        async with webdrivers.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
+        async with webd.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
             helper = WorkerHelper(self, driver, cache)
             while queue:
                 url, prefix = queue.popleft()
                 cache.delete('*', glob=True)
                 await helper.run(url, prefix)
-            count, size = webdrivers.getmetrics(driver)
+            count, size = webd.getmetrics(driver)
             self.scraper.metrics['request_count'] += count
             self.scraper.metrics['request_bytes'] += size
         cache.nuke()
@@ -141,7 +141,7 @@ class ArtifactDownloader:
 @dataclasses.dataclass
 class WorkerHelper:
     downloader: ArtifactDownloader
-    driver: webdrivers.Chrome
+    driver: webd.Chrome
     cache: files.FileCache
 
     @property
@@ -153,18 +153,18 @@ class WorkerHelper:
         return self.downloader.index
 
     @property
-    def logger(self) -> utils.logging.Logger:
+    def logger(self) -> logging.Logger:
         return self.downloader.logger
 
     def find_title(self) -> str:
         return self.get_title(self.driver.page_source)
 
-    def find_fileinfos(self) -> list[webdrivers.WebElement]:
+    def find_fileinfos(self) -> list[webd.WebElement]:
         return self.driver.find_elements('xpath',
             "//*[contains(text(), 'Word document') or "
             "contains(text(), 'Adobe PDF')]")
 
-    def find_buttons(self) -> list[webdrivers.WebElement]:
+    def find_buttons(self) -> list[webd.WebElement]:
         return self.driver.find_elements('css selector', 'button.downloadbutton')
 
     def find_downloads(self) -> list[Path]:
@@ -176,7 +176,7 @@ class WorkerHelper:
 
     async def run(self, url: str, prefix: str) -> None:
         self.driver.get(url)
-        wait = utils.Wait(timeout=10)
+        wait = asyn.Wait(timeout=10)
         try:
             element = (await wait.until(self.find_fileinfos))[0]
             doc_type = element.get_attribute('innerHTML')
@@ -186,7 +186,7 @@ class WorkerHelper:
         except Exception:
             self.logger.warning(f'Failed to fetch {url=}', exc_info=True)
             return
-        wait = utils.Wait(timeout=5)
+        wait = asyn.Wait(timeout=5)
         try:
             title = await wait.until(self.find_title)
         except TimeoutError:
@@ -210,22 +210,20 @@ class WorkerHelper:
         if dest.exists():
             self.logger.debug(f'Skipping download {key} already downloaded')
             return
-        wait = utils.Wait(timeout=5)
+        wait = asyn.Wait(timeout=5)
         try:
             button = (await wait.until(self.find_buttons))[0]
         except TimeoutError:
             self.logger.warning(f'No download button found for {key} {url=}')
             return
         self.logger.info(f'Clicking download button for {key}')
-        wait = utils.Wait(timeout=5, ignored=[Exception], oper=id)
         try:
-            await wait.until(button.click)
+            await wait.until(button.click, ignored=[Exception], oper=id)
         except TimeoutError:
             self.logger.warning(f'Click to download failed for {url=}', exc_info=True)
             return
-        wait = utils.Wait(timeout=10)
         try:
-            downloads = await wait.until(self.find_downloads)
+            downloads = await wait.until(self.find_downloads, timeout=10)
         except TimeoutError:
             self.logger.warning(f'Downloads did not complete for {key} {url=}')
             return

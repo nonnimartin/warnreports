@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import glob
+import logging
 import shutil
 from pathlib import Path
 from typing import Iterator
 
-from .. import settings, utils
+from .. import settings
 
-logger = utils.get_logger('frontend.build')
+logger = logging.getLogger(__name__)
 
 class FrontentBuilder:
 

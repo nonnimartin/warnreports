@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from .. import Stage, settings, utils
+from .. import Stage, settings
 from .base import AppCommand, resolve_statesopt
 
-logger = utils.get_logger('pipeline')
+logger = logging.getLogger(__name__)
 
 class Command(AppCommand):
     description = """

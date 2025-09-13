@@ -46,7 +46,7 @@ class CT(AugmentArtifactsScraper):
                     info = getkeyurl(year, a.get('href', ''))
                     if info:
                         rowkey = self.rowkey(td.text for td in tds)
-                        rowkey = strs.rewrite_all(rowkey, rowkey_rewrites)
+                        rowkey = strs.rewrite(rowkey, rowkey_rewrites)
                         yield rowkey, *info
                         break
 
@@ -54,7 +54,7 @@ class CT(AugmentArtifactsScraper):
             "Check the raw 'download' value, and if valid, return a clean cache key and download URL"
             if not uri.endswith('.pdf'):
                 return
-            uri = strs.rewrite_all(uri, uri_rewrites)
+            uri = strs.rewrite(uri, uri_rewrites)
             url = self.absurl(uri)
             clean = Path(URL(url).path).name
             clean = unquote_plus(clean)

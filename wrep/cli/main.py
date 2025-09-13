@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Iterator
@@ -7,11 +8,10 @@ from typing import Iterator
 import click
 import uvicorn
 
-from .. import settings, utils
+from .. import settings
 from ..main import appslist
 
-logger = utils.get_logger('main')
-
+logger = logging.getLogger(__name__)
 
 class Command:
 

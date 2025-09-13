@@ -46,10 +46,12 @@ class AK(Scraper):
 
     @utils.wrapcontext
     def extract(self) -> Iterator[dict[str, str]]:
+        index: dict[str, str] = self.cache.read_json('index.json')
+        todo = set(index)
 
         def parseurl(tr: dom.Soup) -> str:
             td = tr.find('td')
-            if td.text.strip() == 'Company':
+            if td.get_text(strip=True) == 'Company':
                 # header row
                 return 'url'
             a = td.find('a')
@@ -59,7 +61,7 @@ class AK(Scraper):
 
         def readtr(tr: dom.Soup) -> Iterator[str]:
             for td in tr.find_all('td'):
-                yield ' '.join(td.text.split())
+                yield ' '.join(td.get_text().split())
 
         def readtable(table: dom.Soup) -> Iterator[list[str]]:
             for tr in table.find_all('tr'):
@@ -68,12 +70,14 @@ class AK(Scraper):
                 if len(values) > 2 and values[0]:
                     if url in index:
                         values.append(json.dumps({index[url]: url}))
+                        todo.discard(url)
                     yield values
 
-        index: dict[str, str] = self.cache.read_json('index.json')
         doc = dom.bs(self.cache/'latest.html')
         it = readtable(doc.find('table'))
         headers = next(it)
         headers.append('artifacts_json')
         for values in it:
             yield dict(zip(headers, values))
+        for url in todo:
+            self.logger.warning(f'Unassociated artifact {url=}')

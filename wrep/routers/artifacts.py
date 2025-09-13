@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Request
 
-from .. import utils
 from ..backends.artifacts import Disp, get_artifact_response
 from ..models import ArtifactDetail
 from .api import retrieve404
 
-logger = utils.get_logger('artifacts')
-
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix='/api/v0')
 
 @router.head('/artifacts/{id}/data')

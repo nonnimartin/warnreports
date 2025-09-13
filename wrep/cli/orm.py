@@ -2,20 +2,21 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .. import settings, utils
+from .. import settings
 from ..models import DataModel
 from ..orm import *
 from ..orm import Base, MapReduceBase, dump_update, load_naics, select
 from ..tools import files
 from .base import AppCommand, BaseCommand, FuncCommand, resolve_statesopt
 
-logger = utils.get_logger('orm')
+logger = logging.getLogger(__name__)
 
 class NaicsCommand(FuncCommand(load_naics, AppCommand)):
     pass

@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Iterable
 from pydantic import NonNegativeInt, PositiveInt, TypeAdapter
 
 from .. import utils
+from ..tools import asyn
 from ..models import StateCode
 
 type AP = ArgumentParser
@@ -105,7 +106,7 @@ class BaseCommand:
         parser = cls.create_parser()
         opts = parser.parse_args(args)
         cmd = cls(opts, parser)
-        asyncio.run(utils.wait(cmd.run()))
+        asyncio.run(asyn.wait(cmd.run()))
 
     def __init__(self, opts, parser: AP) -> None:
         self.opts = opts
@@ -122,7 +123,7 @@ class BaseCommand:
 
     async def run(self):
         if self.command:
-            await utils.wait(self.command.run())
+            await asyn.wait(self.command.run())
 
     def __init_subclass__(cls) -> None:
         cls.command_opt = f'_command_{abs(hash(cls))}'
@@ -136,7 +137,7 @@ def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
         func = staticmethod(f)
 
         async def run(self):
-            await utils.wait(self.func(**vars(self.opts)))
+            await asyn.wait(self.func(**vars(self.opts)))
 
     class Command(*bases, Base):
         description = f.__doc__

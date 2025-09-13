@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import logging
 import shutil
 import uuid
 from collections import defaultdict
@@ -45,7 +46,7 @@ type CompanyRowType = tuple[Company, Report, Naics|None]
 type NaicsRowType = tuple[Naics, Report|None]
 type ArtifactRowType = tuple[Artifact, Report|None]
 DEFAULT_YIELD_PER = 1000
-logger = utils.get_logger('orm')
+logger = logging.getLogger(__name__)
 engine = create_engine(settings.DB_URL, echo=settings.QUERY_LOGGING)
 SessionLocal = sessionmaker(autocommit=False, autoflush=True, bind=engine)
 
