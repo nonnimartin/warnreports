@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import sys
 from typing import Any, Callable, ClassVar, Mapping
 from uuid import UUID
 
@@ -229,13 +232,15 @@ class LogCommand(BaseCommand):
         summary_methods: ClassVar[dict[str, str]] = {
             'short': 'get_short',
             'runs': 'get_runs',
+            'running': 'get_running',
             'load-changes': 'get_load_changes',
             'scrape-stats': 'get_scrape_stats'}
         summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
             'short': dict(key=0, value=1),
             'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
+            'running': ('stage', 'state', 'elapsed', 'failed'),
             'load-changes': ('state', 'created', 'updated'),
-            'scrape-stats': ('state', 'elapsed')}
+            'scrape-stats': ('state', 'elapsed', 'request_count', 'request_bytes')}
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
@@ -250,6 +255,12 @@ class LogCommand(BaseCommand):
                 action='store_true',
                 help=f'Verbose output')
             arg(
+                '--watch', '-w',
+                nargs='?',
+                metavar='interval',
+                default=False,
+                help=f'Watch')
+            arg(
                 'id',
                 type=UUID,
                 nargs='?',
@@ -261,6 +272,9 @@ class LogCommand(BaseCommand):
             super().setup(opts)
             self.verbose: bool = opts.verbose
             self.summary: str|None = opts.summary
+            self.watch: utils.Delta|None = (
+                None if opts.watch is False else
+                utils.deltaparse(opts.watch or '5s', default_unit='seconds'))
             if not self.summary and self.output == 'table':
                 self.parser.error(f'Table output only supported with summary')
             if self.verbose:
@@ -274,13 +288,23 @@ class LogCommand(BaseCommand):
                 log = await self.backend.fetch(self.opts.id)
             else:
                 log = await self.backend.fetch_latest()
-            if self.summary:
-                body = getattr(log, self.summary_methods[self.summary])()
-                if self.output == 'table':
-                    body = self.output_table(body)
-            else:
-                body = self.default_body(log)
-            self.printobj(body)
+            try:
+                while True:
+                    if self.watch and sys.stdout.isatty():
+                        os.system('clear')
+                    if self.summary:
+                        body = getattr(log, self.summary_methods[self.summary])()
+                        if self.output == 'table':
+                            body = self.output_table(body)
+                    else:
+                        body = self.default_body(log)
+                    self.printobj(body)
+                    if log.end or not self.watch:
+                        break
+                    await asyncio.sleep(self.watch.total_seconds())
+                    log = await self.backend.fetch(log.id)
+            except KeyboardInterrupt:
+                pass
 
         def output_table(self, body: dict) -> str:
             head = self.summary_fields[self.summary]

@@ -225,6 +225,11 @@ class PipelineRunDetail(DataModel):
     def ischange(self) -> bool:
         return bool(self.result and not self.result.get('nochange'))
 
+    def sync(self) -> None:
+        if self.start:
+            until = self.end or utils.utcnow()
+            self.elapsed = (until - self.start).total_seconds()
+
 class PipelineRunError(DataModel):
     type: str
     message: str
@@ -278,7 +283,7 @@ class PipelineLog(DataModel):
     pipeline_opts: PipelineOpts = Field(default_factory=PipelineOpts)
     start: datetime|None = None
     end: datetime|None = None
-    elapsed: NonNegativeFloat = 0
+    elapsed: NonNegativeFloat = 0.0
     errors: list[PipelineRunError] = Field(default_factory=list)
     runs: list[PipelineRunDetail] = Field(default_factory=list)
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -287,6 +292,8 @@ class PipelineLog(DataModel):
         if self.start:
             until = self.end or utils.utcnow()
             self.elapsed = (until - self.start).total_seconds()
+        for run in self.runs:
+            run.sync()
 
     def stageruns(self, stage: Stage):
         for run in self.runs:
@@ -309,9 +316,13 @@ class PipelineLog(DataModel):
     def get_scrape_stats(self) -> list[dict[str, Any]]:
         body = []
         for run in self.stageruns(Stage.Scrape):
-            elapsed = run.elapsed if run.end else None
-            body.append(dict(state=run.state, elapsed=elapsed))
-        body.sort(key=lambda x: x['elapsed'] or 0, reverse=True)
+            metrics = run.result and run.result.get('metrics')
+            body.append(dict(
+                state=run.state,
+                elapsed=run.elapsed,
+                request_count=metrics and metrics.get('request_count'),
+                request_bytes=metrics and metrics.get('request_bytes')))
+        body.sort(key=lambda x: x['elapsed'], reverse=True)
         return body
 
     def get_runs(self) -> list[dict[str, Any]]:
@@ -320,9 +331,17 @@ class PipelineLog(DataModel):
                 stage=run.stage[0].upper(),
                 state=run.state,
                 elapsed=run.elapsed,
-                failed=run.failed,
+                failed=run.failed if run.end else None,
                 nochange=run.result and run.result.get('nochange'))
             for run in self.runs]
+
+    def get_running(self) -> list[dict[str, Any]]:
+        runs = [
+            run for run in self.get_runs()
+            if run['failed'] in (True, None)]
+        for run in runs:
+            run.pop('nochange', None)
+        return runs
 
     def get_short(self) -> dict[str, Any]:
         mapping = dict(

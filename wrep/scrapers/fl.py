@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Iterator
 from urllib.parse import unquote_plus
 
 from ..tools import dom, strs
-from .base import AugmentArtifactsScraper
+from .base import AugmentArtifactsScraper, Scraper
 
 __all__ = ['FL']
 
@@ -16,6 +16,21 @@ class FL(AugmentArtifactsScraper):
     user_agent: ClassVar = (
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36')
+
+    class Session(Scraper.Session):
+
+        def request(self, method: str, url: str, *, check = True, **kw):
+            # Force verify
+            kw['verify'] = self.verify
+            # Force https
+            url = url.replace('http://', 'https://')
+            return super().request(method, url, check=check, **kw)
+
+    def get_patches(self) -> dict[str, Any]:
+        'Bug in _scrape_pdf uses os.exists instead of cache.exists'
+        def exists(key: str) -> bool:
+            return self.cache.exists(key.removeprefix(f'{self.state.lower()}/'))
+        return super().get_patches()|dict(exists=exists)
 
     def build_index(self) -> dict[str, dict[str, str]]:
         "Build the artifacts index {rowkey: {cachekey: url}}"
@@ -28,7 +43,7 @@ class FL(AugmentArtifactsScraper):
         uri_fmt = '/WarnList/DownloadAzureFile?file={}'
 
         def parse_table(year: int, table: dom.Soup) -> Iterator[tuple[str, str, str]]:
-            "Yields (values_key, cache_key, url) for an html table"
+            "Yields (rowkey, cachekey, url) for an html table"
             tbody = table.find('tbody')
             for tr in tbody.find_all('tr'):
                 tds = tr.find_all('td')
@@ -52,9 +67,9 @@ class FL(AugmentArtifactsScraper):
             if not clean:
                 return
             name = f'{year}_{clean}.pdf'
-            cache_key = f'records/{name}'
+            cachekey = f'records/{name}'
             url = self.absurl(uri_fmt.format(uri))
-            return cache_key, url
+            return cachekey, url
 
         # Sequence of (rowkey, cachekey, URL)
         items: deque[tuple[str, str, str]] = deque()

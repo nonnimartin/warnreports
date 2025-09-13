@@ -27,8 +27,7 @@ class CO(Scraper):
     artifacts_minyear: ClassVar[int] = 2020
 
     async def scrape(self) -> None:
-        self.runner.scrape()
-        await asyncio.sleep(0)
+        await self.runner.scrape()
         # Rewrite CSV
         with self.runner.file.open() as file:
             # upstream scraper uses set() for header, which is unordered & breaks hashing.

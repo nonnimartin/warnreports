@@ -32,7 +32,7 @@ class GA(Scraper):
         await self.download('latest.html', self.latest_url)
         payload = dict(self.payload, nonce=self.extract_nonce())
         async def getbody():
-            return (await self.request('POST', self.api_url, data=payload)).json()
+            return (await self.session.arequest('POST', self.api_url, data=payload)).json()
         wait = utils.Wait(timeout=20, poll=2, ignored=(requests.exceptions.JSONDecodeError,))
         try:
             body = await wait.until(getbody)
@@ -42,7 +42,7 @@ class GA(Scraper):
         index = self.build_index()
         if self.needs_scrape():
             await asyncio.sleep(0)
-            self.runner.scrape()
+            await self.runner.scrape()
         artifacts = {}
         for notice_id in index:
             infos = dict(self.extract_artifact_infos(notice_id))
