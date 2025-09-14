@@ -10,11 +10,16 @@ from ..models import StateCode
 StatesOpt = Annotated[
     list[StateCode],
     BeforeValidator(lambda x: resolve_statesopt(x)),
-    Field(min_length=1)]
+    Field(
+        min_length=1,
+        description=(
+            'Optionally specify states as additional arguments. '
+            'If not specified, include all states. To exclude a '
+            'state, prefix with ^'))]
 StagesOpt = Annotated[
     list[Stage],
     BeforeValidator(lambda x: resolve_stagesopt(x)),
-    Field(min_length=1)]
+    Field(min_length=1, description='Stage name(s) (various formats) or "all"')]
 StatesOptTa = TypeAdapter(StatesOpt)
 
 def resolve_statesopt(value: Iterable[StateCode]) -> list[StateCode]:

@@ -7,14 +7,18 @@ from typing import Any, ClassVar
 from pydantic import Field
 
 from .. import search
-from .base import AppCommand, BaseCommand, BaseCommandOpts
+from .base import AppCommand, BaseCommand, AppCommandOpts
 from .mongo import ClientControlCommand
 
 logger = logging.getLogger(__name__)
 
-class SearchCommandOpts(BaseCommandOpts):
-    dbname: str|None = None
-    names: list[str] = Field(default_factory=list)
+class SearchCommandOpts(AppCommandOpts):
+    dbname: str|None = Field(
+        default=None,
+        description=f'Alternate mongo search db name')
+    names: list[str] = Field(
+        default_factory=list,
+        description='Collection names, default all')
 
 class Command(BaseCommand):
     'Search collection commands'
@@ -26,13 +30,8 @@ class Command(BaseCommand):
         @classmethod
         def add_arguments(cls, parser):
             arg = parser.add_argument
-            arg('--dbname', '-d',
-                default=None,
-                help=f'Alternate mongo search db name')
-            arg('names',
-                nargs='*',
-                choices=search.mapped_collections,
-                help='Collection names, default all')
+            arg('--dbname', '-d', metavar='<db>')
+            arg('names', nargs='*', choices=search.mapped_collections)
             super().add_arguments(parser)
 
         def setup(self):

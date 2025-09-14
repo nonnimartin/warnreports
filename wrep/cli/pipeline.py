@@ -5,15 +5,27 @@ from pathlib import Path
 from textwrap import dedent
 from typing import ClassVar
 
+from pydantic import Field
+
 from .. import Stage, settings
-from .base import AppCommand, BaseCommandOpts
+from ..models import *
+from .base import AppCommand, AppCommandOpts
 from .validators import StagesOpt, StatesOpt, StatesOptTa
 
 logger = logging.getLogger(__name__)
 
-class PipelineCommandOpts(BaseCommandOpts):
+class PipelineCommandOpts(AppCommandOpts, PipelineBatchOpts, PipelineOpts):
     stages: StagesOpt
     states: StatesOpt
+    etl_dbname: str|None = Field(
+        default=None,
+        description=f'Alternate mongo etl db name')
+    search_dbname: str|None = Field(
+        default=None,
+        description=f'Alternate mongo search db name')
+    idfile: Path|None = Field(
+        default=None,
+        description='Write the pipeline log ID to the given file')
 
 class Command(AppCommand[PipelineCommandOpts]):
     options_class: ClassVar = PipelineCommandOpts
@@ -38,7 +50,7 @@ class Command(AppCommand[PipelineCommandOpts]):
     Selecting Stages
     -----------------
 
-    Available stages: """ + ', '.join(Stage) + """
+    Available stages: {allstages}
 
     Specify multiple stages with a comma:
       {prog} scrape,extract [state ...]
@@ -61,94 +73,45 @@ class Command(AppCommand[PipelineCommandOpts]):
     @classmethod
     def parser_fmtargs(cls, parser):
         return super().parser_fmtargs(parser)|dict(
+            allstages=', '.join(Stage),
             allstates=' '.join(StatesOptTa.validate_python([])))
 
     @classmethod
     def add_arguments(cls, parser):
         arg = parser.add_argument
-        arg('stages',
-            metavar='<stages>',
-            help='Stage name(s) (various formats) or "all"')
-        arg('states',
-            nargs='*',
-            metavar='state',
-            help=(
-                'Optionally specify states as additional arguments. '
-                'If not specified, include all states. To exclude a '
-                'state, prefix with ^'))
-        arg('--clean', '-c',
-            action='store_true',
-            help='Clean each stage before running')
-        arg('--incremental', '-i',
-            action='store_true',
-            help=(
-                'If a stage indicates no change after running, '
-                'skip subsequent stages for the state'))
-        arg('--concurrent', '-t',
-            action='store_true',
-            help=(
-                'Use multiple async workers when applicable. '
-                'The load stage is always synchronized with one worker'))
+        arg('stages', metavar='<stages>')
+        arg('states', nargs='*', metavar='state')
+        arg('--clean', '-c', action='store_true')
+        arg('--incremental', '-i', action='store_true')
+        arg('--concurrent', '-t', action='store_true')
         arg('--nofail', '-n',
             action='store_false',
             dest='fail',
             help=(
                 'Do not fail on error. Instead, log an exception, '
                 'and skip subsequent stages for the state'))
-        arg('--clean-only', '-x',
-            action='store_true',
-            help='Only clean, do not run')
-        arg('--stat-only', '-s',
-            action='store_true',
-            help='Only show stats, do not run')
-        arg('--search-dbname', '-d',
-            metavar='<db>',
-            help=f'Alternate mongo search db name')
-        arg('--etl-dbname', '-b',
-            metavar='<db>',
-            help=f'Alternate mongo etl db name')
-        arg('--max-workers', '-w',
-            type=int,
-            metavar='<n>',
-            default=settings.ETL_DEFAULT_WORKERS,
-            help=(
-                'Max workers, applicable only when --concurrent is specified, '
-                f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
-        arg('--max-threads', '-T',
-            type=int,
-            metavar='<n>',
-            default=settings.ETL_DEFAULT_THREADS,
-            help=(
-                'Max threads, applicable only when --concurrent is specified, '
-                f'default ETL_DEFAULT_THREADS ({settings.ETL_DEFAULT_THREADS})'))
-        arg('--selenium-max-procs', '-E',
-            type=int,
-            metavar='<n>',
-            default=settings.SELENIUM_MAX_PROCS,
-            help=(
-                'Max number of concurrent web drivers if applicable, '
-                f'default SELENIUM_MAX_PROCS ({settings.SELENIUM_MAX_PROCS})'))
-        arg('--rollback',
-            action='store_true',
-            help='Rollback SQL transaction on load stage')
-        arg('--idfile',
-            type=Path,
-            metavar='<file>',
-            help='Write the pipeline log ID to the given file')
+        arg('--clean-only', '-x', action='store_true')
+        arg('--stat-only', '-s', action='store_true')
+        arg('--search-dbname', '-d', metavar='<db>')
+        arg('--etl-dbname', '-b', metavar='<db>')
+        arg('--max-workers', '-w', metavar='<n>', default=...)
+        arg('--max-threads', '-T', metavar='<n>', default=...)
+        arg('--selenium-max-procs', '-E', metavar='<n>', default=...)
+        arg('--rollback', action='store_true')
+        arg('--idfile', metavar='<file>')
         super().add_arguments(parser)
 
     def setup(self):
         super().setup()
         from ..pipeline import PipelineRunner
-        runneropts = self.opts.model_dump()
-        self.idfile: Path|None = runneropts.pop('idfile')
-        runneropts['context'] = {
-            settings.ETL_MONGODB_DBNAME_KEY: runneropts.pop('etl_dbname'),
-            settings.SEARCH_MONGODB_DBNAME_KEY: runneropts.pop('search_dbname')}
-        self.runner = PipelineRunner(**runneropts)
+        self.runner = PipelineRunner(
+            **self.opts.model_dump(),
+            context={
+                settings.ETL_MONGODB_DBNAME_KEY: self.opts.etl_dbname,
+                settings.SEARCH_MONGODB_DBNAME_KEY: self.opts.search_dbname})
 
     async def run(self) -> None:
-        if self.idfile:
-            logger.info(f'Writing pipeline log ID to {self.idfile}')
-            self.idfile.write_text(str(self.runner.log.id))
+        if self.opts.idfile:
+            logger.info(f'Writing pipeline log ID to {self.opts.idfile}')
+            self.opts.idfile.write_text(str(self.runner.log.id))
         await self.runner.run()

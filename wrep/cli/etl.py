@@ -17,20 +17,22 @@ from pydantic import (BeforeValidator, Field, PositiveFloat, field_validator,
 from .. import orm, settings, utils
 from ..backends import etl
 from ..models import *
-from .base import AP, AppCommand, BaseCommand, BaseCommandOpts
+from .base import AP, AppCommand, BaseCommand, AppCommandOpts
 from .mongo import ClientControlCommand
 
 logger = logging.getLogger(__name__)
 
-class EtlCommandOpts(BaseCommandOpts):
+class EtlCommandOpts(AppCommandOpts):
     output: Literal['json', 'yaml'] = 'json'
     etl_dbname: str|None = None
 
 class OneCommandOpts(EtlCommandOpts):
-    id: UUID
-    save: bool = False
+    id: UUID = Field(description='The tanslation doc id')
+    save: bool = Field(False, description='Save the result')
 
 class TrOneCommandOpts(OneCommandOpts):
+    id: UUID = Field(
+        description='The extraction doc id, or state & sequence (e.g. WI.123)')
 
     @field_validator('id', mode='before')
     @classmethod
@@ -50,10 +52,17 @@ class LogSummaryMethod(enum.StrEnum):
 
 class LogShowOpts(EtlCommandOpts):
     output: Literal['json', 'yaml', 'table'] = 'json'
-    summary: LogSummaryMethod|None = None
-    verbose: bool = False
-    id: UUID|None = None
-    watch: PositiveFloat|None = Field(False, validate_default=True)
+    summary: LogSummaryMethod|None = Field(
+        default=None,
+        description=f'The summary type to show')
+    verbose: bool = Field(False, description=f'Verbose output')
+    id: UUID|None = Field(
+        default=None,
+        description='The pipeline log ID, default is to fetch latest')
+    watch: PositiveFloat|None = Field(
+        default=False,
+        validate_default=True,
+        description='Watch')
     watch_default: ClassVar[PositiveFloat] = 5.0
 
     @field_validator('watch', mode='before')
@@ -78,17 +87,20 @@ class LogShowOpts(EtlCommandOpts):
 
 class LogListOpts(EtlCommandOpts):
     output: Literal['json', 'yaml', 'table'] = 'table'
-    limit: Limit = 10
-    offset: Offset = 0
+    limit: Limit = Field(10, description=f'Results limit, default 10')
+    offset: Offset = Field(0, description=f'Skip n results (offset)')
 
 class LogCopyOpts(EtlCommandOpts):
-    dest: str
+    dest: str = Field(description='The destination db name')
 
 class LogPruneOpts(EtlCommandOpts):
     maxage: Annotated[
         timedelta,
-        BeforeValidator(utils.deltaopt('days'))] = Field('30d', validate_default=True)
-    dryrun: bool = False
+        BeforeValidator(utils.deltaopt('days'))] = Field(
+            default='30d',
+            description='Max age, default 30d',
+            validate_default=True)
+    dryrun: bool = Field(False, description='Dry run only')
 
 class EtlBaseCommand[O: EtlCommandOpts](AppCommand[O]):
     output_formats: ClassVar[list[str]] = ['json', 'yaml']
@@ -137,21 +149,14 @@ class EtlBaseCommand[O: EtlCommandOpts](AppCommand[O]):
 class OneCommand(BaseCommand):
 
     class Base[O: OneCommandOpts](EtlBaseCommand[O]):
-        label: ClassVar[str] = ''
         backend_class: ClassVar[type[etl.MongoETBase]]
         options_class: ClassVar[type[O]] = OneCommandOpts
-        idopt_help: ClassVar[str|None] = None
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
             arg = parser.add_argument
-            arg(
-                '--save', '-s',
-                action='store_true',
-                help='Save the result')
-            arg(
-                'id',
-                help=cls.idopt_help or f'The {cls.label} doc id')
+            arg('id')
+            arg('--save', '-s', action='store_true')
             super().add_arguments(parser)
 
         def setup(self) -> None:
@@ -169,8 +174,6 @@ class OneCommand(BaseCommand):
         'Run translations for a single extraction doc, and print the result'
         backend_class: ClassVar[type[etl.MongoExtraction]] = etl.MongoExtraction
         options_class: ClassVar = TrOneCommandOpts
-        label: ClassVar = 'extraction'
-        idopt_help: ClassVar = 'The extraction doc id, or state & sequence (e.g. WI.123)'
         trdumpopts: ClassVar = dict(
             mode='json',
             exclude_unset=True,
@@ -211,7 +214,6 @@ class OneCommand(BaseCommand):
 
     class Ldone(Base[OneCommandOpts]):
         'Run load operations for a single translation doc, and print the result'
-        label: ClassVar = 'translation'
         backend_class: ClassVar = etl.MongoTranslation
 
         async def run(self) -> None:
@@ -265,15 +267,8 @@ class LogCommand(BaseCommand):
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
             arg = parser.add_argument
-            arg(
-                '--limit', '-l',
-                default=10,
-                help=f'Results limit, default 10')
-            arg(
-                '--skip', '-s',
-                default=0,
-                dest='offset',
-                help=f'Skip n results (offset)')
+            arg('--limit', '-l', default=...)
+            arg('--skip', '-s', dest='offset', default=...)
             super().add_arguments(parser)
 
         async def run(self) -> None:
@@ -303,24 +298,10 @@ class LogCommand(BaseCommand):
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
             arg = parser.add_argument
-            arg(
-                '--summary', '-s',
-                choices=list(map(str, LogSummaryMethod)),
-                help=(f'The summary type to show'))
-            arg(
-                '--verbose', '-v',
-                action='store_true',
-                help=f'Verbose output')
-            arg(
-                '--watch', '-w',
-                nargs='?',
-                metavar='interval',
-                default=False,
-                help=f'Watch')
-            arg(
-                'id',
-                nargs='?',
-                help='The pipeline log ID, default latest')
+            arg('--summary', '-s', choices=(...,))
+            arg('--verbose', '-v', action='store_true')
+            arg('--watch', '-w', nargs='?', metavar='interval', default=...)
+            arg('id', nargs='?')
             super().add_arguments(parser)
 
         async def run(self) -> None:
@@ -366,7 +347,7 @@ class LogCommand(BaseCommand):
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
-            parser.add_argument('dest', help='The destination db name')
+            parser.add_argument('dest')
             super().add_arguments(parser)
 
         def setup(self) -> None:
@@ -391,14 +372,8 @@ class LogCommand(BaseCommand):
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
-            parser.add_argument(
-                '--maxage', '-m',
-                default='30d',
-                help='Max age, default 30d')
-            parser.add_argument(
-                '--dryrun',
-                action='store_true',
-                help='Dry run only')
+            parser.add_argument('--maxage', '-m', default=...)
+            parser.add_argument('--dryrun', action='store_true')
             super().add_arguments(parser)
 
         async def run(self) -> None:

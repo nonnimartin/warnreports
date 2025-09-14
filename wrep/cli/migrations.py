@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from .. import settings
 from ..migrations import auto, migrate
-from .base import AppCommand, BaseCommand, FuncCommand
+from .base import BaseCommand, FuncCommand
 
 
 class Command(BaseCommand):
     'Migration commands'
 
-    class Migrate(FuncCommand(migrate, AppCommand)):
+    class Migrate(FuncCommand(migrate)):
 
         @classmethod
         def add_arguments(cls, parser):
             parser.add_argument('--auto-only', action='store_true', help='Only run if DB_AUTO_MIGRATE=true')
             super().add_arguments(parser)
 
-    class Auto(FuncCommand(auto, AppCommand)):
+    class Auto(FuncCommand(auto)):
 
         @classmethod
         def add_arguments(cls, parser):

@@ -242,14 +242,38 @@ class PipelineRunError(DataModel):
         return cls(type=type(exc).__name__, message=str(exc), **kw)
 
 class PipelineBatchOpts(DataModel):
-    clean: bool = False
-    clean_only: bool = False
-    stat_only: bool = False
-    fail: bool = True
-    incremental: bool = False
-    concurrent: bool = False
-    max_workers: NonNegativeInt = settings.ETL_DEFAULT_WORKERS
-    max_threads: NonNegativeInt = settings.ETL_DEFAULT_THREADS
+    clean: bool = Field(
+        default=False,
+        description='Clean each stage before running')
+    clean_only: bool = Field(
+        default=False,
+        description='Only clean, do not run')
+    stat_only: bool = Field(
+        default=False,
+        description='Only show stats, do not run')
+    fail: bool = Field(
+        default=True,
+        description='Fail on error')
+    incremental: bool = Field(
+        default=False,
+        description=(
+            'If a stage indicates no change after running, '
+            'skip subsequent stages for the state'))
+    concurrent: bool = Field(
+        default=False,
+        description=(
+            'Use multiple async workers when applicable. '
+            'The load stage is always synchronized with one worker'))
+    max_workers: NonNegativeInt = Field(
+        default=settings.ETL_DEFAULT_WORKERS,
+        description=(
+            'Max workers, applicable only when concurrent is specified, '
+            f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
+    max_threads: NonNegativeInt = Field(
+        default=settings.ETL_DEFAULT_THREADS,
+        description=(
+            'Max threads, applicable only when concurrent is specified, '
+            f'default ETL_DEFAULT_THREADS ({settings.ETL_DEFAULT_THREADS})'))
 
     @model_validator(mode='after')
     def check_flags(self) -> Self:
@@ -260,15 +284,22 @@ class PipelineBatchOpts(DataModel):
         return self
 
 class ScraperOpts(DataModel):
-    selenium_max_procs: NonNegativeInt = settings.SELENIUM_MAX_PROCS
+    selenium_max_procs: NonNegativeInt = Field(
+        default=settings.SELENIUM_MAX_PROCS,
+        description=(
+            'Max number of concurrent web drivers if applicable, '
+            f'default SELENIUM_MAX_PROCS ({settings.SELENIUM_MAX_PROCS})'))
 
 class PipelineOpts(ScraperOpts):
-    lazy: bool = True
-    'Use result set iterators for database queries'
-    rollback: bool = False
-    'Rollback database transactions (dry run)'
-    load_per_tick: PositiveInt = 100
-    'How frequently to asyncio.sleep(0) during load stage'
+    lazy: bool = Field(
+        default=True,
+        description='Use result set iterators for database queries')
+    rollback: bool = Field(
+        default=False,
+        description='Rollback database transactions (dry run)')
+    load_per_tick: PositiveInt = Field(
+        default=100,
+        description='How frequently to asyncio.sleep(0) during load stage')
 
 type UniqueList[T] = Annotated[
     list[T],

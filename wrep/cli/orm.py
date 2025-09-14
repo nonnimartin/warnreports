@@ -9,21 +9,22 @@ from textwrap import dedent
 from typing import Any, ClassVar
 
 import yaml
+from pydantic import Field
 
 from .. import orm, settings
 from ..models import DataModel
 from ..orm import *
 from ..orm import Base, MapReduceBase, dump_update, load_naics, select
 from ..tools import files
-from .base import AppCommand, BaseCommand, BaseCommandOpts, FuncCommand
+from .base import AppCommand, AppCommandOpts, BaseCommand, FuncCommand
 from .validators import StatesOpt
 
 logger = logging.getLogger(__name__)
 
-class NaicsCommand(FuncCommand(load_naics, AppCommand)):
+class NaicsCommand(FuncCommand(load_naics)):
     pass
 
-class DumpCommand(FuncCommand(dump_update, AppCommand)):
+class DumpCommand(FuncCommand(dump_update)):
 
     @classmethod
     def add_arguments(cls, parser):
@@ -40,7 +41,10 @@ class DumpCommand(FuncCommand(dump_update, AppCommand)):
             help=('The output file, default BUILD_DIR/dump/[table].csv'))
         super().add_arguments(parser)
 
-class MroneCommand(AppCommand[BaseCommandOpts]):
+class MroneOpts(AppCommandOpts):
+    ...
+
+class MroneCommand(AppCommand[MroneOpts]):
     description = dedent("""
     Run map-reduce for a single object and print the resulting data model object
 
@@ -137,9 +141,11 @@ class MroneCommand(AppCommand[BaseCommandOpts]):
             return yaml.safe_dump(objdict, sort_keys=False)
         return json.dumps(objdict, indent=2)
 
-class ArtifactsCommandOpts(BaseCommandOpts):
-    change: bool = True
-    dir: Path = settings.ARTIFACTS_DIR
+class ArtifactsCommandOpts(AppCommandOpts):
+    dryrun: bool = Field(False, description='Dry run only')
+    dir: Path = Field(
+        default=settings.ARTIFACTS_DIR,
+        description=f'Artifacts base dir, default ARTIFACTS_DIR')
     states: StatesOpt
 
 class ArtifactsCommand(BaseCommand):
@@ -151,21 +157,9 @@ class ArtifactsCommand(BaseCommand):
         @classmethod
         def add_arguments(cls, parser):
             arg = parser.add_argument
-            arg(
-                '--check-only', '-c',
-                action='store_false',
-                dest='change',
-                help='Check only, do not make changes')
-            arg(
-                '--dir', '-d',
-                type=Path,
-                default=settings.ARTIFACTS_DIR,
-                help=f'Artifacts base dir, default is settings.ARTIFACTS_DIR')
-            arg(
-                'states',
-                nargs='*',
-                metavar='state',
-                help='Restrict to a specific states')
+            arg('--dryrun', action='store_true')
+            arg('--dir', '-d', default=...)
+            arg('states', nargs='*', metavar='state')
             super().add_arguments(parser)
 
     class Prune(Base):
@@ -187,7 +181,7 @@ class ArtifactsCommand(BaseCommand):
             file = self.opts.dir/path
             if path.endswith('.sha1'):
                 logger.info(f'Cruft {path=}')
-                if self.opts.change:
+                if not self.opts.dryrun:
                     file.unlink()
                 return
             id = Artifact.path_to_id(path)
@@ -195,7 +189,7 @@ class ArtifactsCommand(BaseCommand):
                 session.get_one(Artifact, id)
             except NoResultFound:
                 logger.info(f'Orphan {path=} {id=}')
-                if self.opts.change:
+                if not self.opts.dryrun:
                     file.unlink()
                     files.digestfile(file).unlink(missing_ok=True)
             else:
@@ -212,7 +206,7 @@ class ArtifactsCommand(BaseCommand):
                         .where(Artifact.path.startswith(f'{state.lower()}/')))
                     for art in session.scalars(stmt):
                         self.checkart(art, session)
-                if self.opts.change:
+                if not self.opts.dryrun:
                     session.commit()
                 else:
                     session.rollback()
