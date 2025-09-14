@@ -31,10 +31,11 @@ class Command(BaseCommand):
                     continue
                 parser._add_action(action)
 
-        def setup(self, opts):
-            if not hasattr(opts, 'cmd'):
+        def setup(self):
+            super().setup()
+            if not hasattr(self.opts, 'cmd'):
                 self.parser.error('too few arguments')
-            self.config = Config(settings.ALEMBIC_INI, ini_section=opts.name, cmd_opts=opts)
+            self.config = Config(settings.ALEMBIC_INI, ini_section=self.opts.name, cmd_opts=self.opts)
 
         def run(self):
             CommandLine().run_cmd(self.config, self.opts)

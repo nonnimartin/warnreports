@@ -2,57 +2,51 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from argparse import ArgumentParser, _SubParsersAction
-from typing import Any, ClassVar, Iterable
+import enum
+from typing import Any, ClassVar, Sequence
 
-from pydantic import NonNegativeInt, PositiveInt, TypeAdapter
+from pydantic import ConfigDict, Field
 
 from .. import utils
+from ..models import DataModel
 from ..tools import asyn
-from ..models import StateCode
+from .formatters import SmartFormatter
 
-type AP = ArgumentParser
-type SubParsers = _SubParsersAction[ArgumentParser]
+type AP = argparse.ArgumentParser
+type SubParsers = argparse._SubParsersAction[AP]
 
+class LogLevelEnum(enum.StrEnum):
+    CRITICAL = 'CRITICAL'
+    FATAL = 'FATAL'
+    ERROR = 'ERROR'
+    WARNING = 'WARNING'
+    INFO = 'INFO'
+    DEBUG = 'DEBUG'
 
-PosIntTa = TypeAdapter(PositiveInt)
-NonNegIntTa = TypeAdapter(NonNegativeInt)
+    @classmethod
+    def _missing_(cls, value):
+        value = str(value).upper()
+        if value == 'WARN':
+            value = 'WARNING'
+        if value in cls:
+            return cls(value)
 
-class HelpFormatter(argparse.HelpFormatter):
-    """
-    From: https://gist.github.com/panzi/b4a51b3968f67b9ff4c99459fb9c5b3d
-    Author: Mathias Panzenböck
-    """
+class BaseCommandOpts(DataModel):
+    log_level: LogLevelEnum|None = Field(None, exclude=True)
+    model_config: ClassVar = ConfigDict(extra='allow')
 
-    def _split_lines(self, text: str, width: int) -> list[str]:
-        lines: list[str] = []
-        for line_str in text.split('\n'):
-            line: list[str] = []
-            line_len = 0
-            for word in line_str.split():
-                word_len = len(word)
-                line_len += word_len + bool(line)
-                if line_len > width:
-                    lines.append(' '.join(line))
-                    line.clear()
-                    line_len = word_len
-                line.append(word)
-            lines.append(' '.join(line))
-        return lines
-    
-    def _fill_text(self, text: str, width: int, indent: str) -> str:
-        return '\n'.join(indent + line for line in self._split_lines(text, width - len(indent)))
-
-class BaseCommand:
+class BaseCommand[O: BaseCommandOpts]:
     description: ClassVar[str|None] = None
     prog: ClassVar[str|None] = None
     usage: ClassVar[str|None] = None
-    parser_class: ClassVar[type[AP]] = ArgumentParser
-    formatter_class: ClassVar[type[argparse.HelpFormatter]] = HelpFormatter
+    parser_class: ClassVar[type[AP]] = argparse.ArgumentParser
+    formatter_class: ClassVar[type[argparse.HelpFormatter]] = SmartFormatter
+    options_class: ClassVar[type[O]] = BaseCommandOpts
     commands: ClassVar[dict[str, type[BaseCommand]]] = {}
     command_metavar: ClassVar[str] = 'command'
     command_name: str|None = None
     command: BaseCommand|None = None
+    opts: O
 
     @classmethod
     def create_parser(cls) -> AP:
@@ -102,26 +96,27 @@ class BaseCommand:
         return dict(prog=parser.prog)
 
     @classmethod
-    def main(cls, args=None):
+    def main(cls, args: Sequence[str]|None = None) -> None:
         parser = cls.create_parser()
-        opts = parser.parse_args(args)
-        cmd = cls(opts, parser)
+        cmd = cls(parser.parse_args(args), parser)
         asyncio.run(asyn.wait(cmd.run()))
 
-    def __init__(self, opts, parser: AP) -> None:
-        self.opts = opts
+    def __init__(self, nsargs: argparse.Namespace, parser: AP) -> None:
+        self.nsargs = nsargs
+        self.nsvars: dict[str, Any] = vars(nsargs)
+        self.opts: O = self.options_class.model_validate(self.nsvars)
         self.parser = parser
-        if hasattr(opts, self.command_opt):
-            self.command_name = getattr(opts, self.command_opt)
-            delattr(opts, self.command_opt)
-            self.command = self.commands[self.command_name](opts, parser)
+        if hasattr(nsargs, self.command_opt):
+            self.command_name = getattr(nsargs, self.command_opt)
+            delattr(nsargs, self.command_opt)
+            self.command = self.commands[self.command_name](nsargs, parser)
         else:
-            self.setup(opts)
+            self.setup()
 
-    def setup(self, opts) -> None:
+    def setup(self) -> None:
         pass
 
-    async def run(self):
+    async def run(self) -> None:
         if self.command:
             await asyn.wait(self.command.run())
 
@@ -133,48 +128,31 @@ class BaseCommand:
             cls.description)
 
 def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
-    class Base(BaseCommand):
+    class Base(BaseCommand[BaseCommandOpts]):
         func = staticmethod(f)
 
-        async def run(self):
-            await asyn.wait(self.func(**vars(self.opts)))
+        async def run(self) -> None:
+            await asyn.wait(self.func(**self.opts.model_dump()))
 
     class Command(*bases, Base):
         description = f.__doc__
 
     return Command
 
-class AppCommand(BaseCommand):
+class AppCommand[O: BaseCommandOpts](BaseCommand[O]):
 
-    def setup(self, opts):
-        super().setup(opts)
-        if opts.log_level:
+    def setup(self):
+        super().setup()
+        if self.opts.log_level:
             from .. import settings
-            settings.LOG_LEVEL = opts.log_level
-            utils.init_logging()
-        del opts.log_level
+            if settings.LOG_LEVEL != self.opts.log_level:
+                settings.LOG_LEVEL = self.opts.log_level
+                utils.init_logging()
 
     @classmethod
-    def add_arguments(cls, parser: AP):
-        parser.add_argument('--log-level', default=None)
+    def add_arguments(cls, parser: AP) -> None:
+        parser.add_argument(
+            '--log-level',
+            metavar='level',
+            help=f'Log level')
         super().add_arguments(parser)
-
-
-def resolve_statesopt(statesopt: Iterable[StateCode], allstates: Iterable[StateCode]|None = None) -> list[StateCode]:
-    if allstates is None:
-        from ..translators import TranslationFactory
-        allstates = TranslationFactory.translators
-    states: set[StateCode] = set()
-    skips: set[StateCode] = set()
-    for opt in map(str.upper, statesopt):
-        if opt.startswith('^'):
-            skips.add(opt[1:])
-        else:
-            states.add(opt)
-    if not states:
-        states.update(allstates)
-    states.difference_update(skips)
-    bad = states.difference(allstates)
-    if bad:
-        raise ValueError(f'Invalid states: {sorted(bad)}')
-    return sorted(states)

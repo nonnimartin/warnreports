@@ -13,7 +13,7 @@ __all__ = [
     'search']
 
 class Command(BaseCommand):
-    prog = __package__
+    prog = __package__.rsplit('.', 1)[0]
     commands = dict(
         pipeline=pipeline.Command,
         search=search.Command,

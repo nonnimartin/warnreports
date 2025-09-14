@@ -4,17 +4,24 @@ import json
 import logging
 from typing import Any, ClassVar
 
+from pydantic import Field
+
 from .. import search
-from .base import AppCommand, BaseCommand
+from .base import AppCommand, BaseCommand, BaseCommandOpts
 from .mongo import ClientControlCommand
 
 logger = logging.getLogger(__name__)
 
+class SearchCommandOpts(BaseCommandOpts):
+    dbname: str|None = None
+    names: list[str] = Field(default_factory=list)
+
 class Command(BaseCommand):
     'Search collection commands'
 
-    class Base(AppCommand):
+    class Base(AppCommand[SearchCommandOpts]):
         method: ClassVar[str]
+        options_class: ClassVar = SearchCommandOpts
 
         @classmethod
         def add_arguments(cls, parser):
@@ -22,23 +29,15 @@ class Command(BaseCommand):
             arg('--dbname', '-d',
                 default=None,
                 help=f'Alternate mongo search db name')
-            if cls.method == 'build':
-                arg('--eager', '-e',
-                    action='store_false',
-                    dest='lazy',
-                    help='Use eager loading of SQL result sets. Uses more memory.')
             arg('names',
                 nargs='*',
                 choices=search.mapped_collections,
                 help='Collection names, default all')
             super().add_arguments(parser)
 
-        def setup(self, opts):
-            super().setup(opts)
+        def setup(self):
+            super().setup()
             self.names = self.opts.names or search.mapped_collections
-            self.funckw = {}
-            if hasattr(opts, 'lazy'):
-                self.funckw.update(lazy=opts.lazy)
 
         async def run(self):
             if self.opts.dbname:
@@ -47,7 +46,7 @@ class Command(BaseCommand):
             results: dict[str, Any] = {}
             for name in self.names:
                 defn = search.mapped_collections[name]
-                res = await getattr(defn, self.method)(db=db, **self.funckw)
+                res = await getattr(defn, self.method)(db=db)
                 if res is not None:
                     results[name] = res
             if res:

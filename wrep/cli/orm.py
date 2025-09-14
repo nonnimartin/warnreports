@@ -5,16 +5,18 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any
+from textwrap import dedent
+from typing import Any, ClassVar
 
 import yaml
 
-from .. import settings
+from .. import orm, settings
 from ..models import DataModel
 from ..orm import *
 from ..orm import Base, MapReduceBase, dump_update, load_naics, select
 from ..tools import files
-from .base import AppCommand, BaseCommand, FuncCommand, resolve_statesopt
+from .base import AppCommand, BaseCommand, BaseCommandOpts, FuncCommand
+from .validators import StatesOpt
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,8 @@ class DumpCommand(FuncCommand(dump_update, AppCommand)):
             help=('The output file, default BUILD_DIR/dump/[table].csv'))
         super().add_arguments(parser)
 
-class MroneCommand(AppCommand):
-    description = """
+class MroneCommand(AppCommand[BaseCommandOpts]):
+    description = dedent("""
     Run map-reduce for a single object and print the resulting data model object
 
     Examples
@@ -63,17 +65,13 @@ class MroneCommand(AppCommand):
     $ {prog} -m artifact 0ab65afb-2d9f-5754-b1ad-e03d99cac511
     $ {prog} -m artifact ca/warn_report1.xlsx
     ------------------------------------------------------------
-    """
-    mrclasses = [
-        cls for cls in MapReduceBase.__subclasses__()
-        if not cls.__abstract__]
-    mrclasses.sort(key=lambda x: x.__name__)
+    """)
 
     @classmethod
     def modelopt(cls, value: str) -> type[MapReduceBase]:
         if value.lower() == 'state':
             value = 'StateStat'
-        for model in cls.mrclasses:
+        for model in orm.MRCLASSES:
             if model.__name__.lower() == value.lower():
                 return model
         raise ValueError
@@ -86,7 +84,7 @@ class MroneCommand(AppCommand):
             type=cls.modelopt,
             default=Report,
             help=(f'The ORM model name, default Report '
-                  f'({'|'.join(x.__name__ for x in cls.mrclasses)})'))
+                  f'({'|'.join(x.__name__ for x in orm.MRCLASSES)})'))
         arg(
             '--yaml',
             action='store_true',
@@ -96,14 +94,14 @@ class MroneCommand(AppCommand):
             help='The object primary key (see examples)')
         super().add_arguments(parser)
 
-    def setup(self, opts):
-        super().setup(opts)
-        self.model: type[MapReduceBase] = opts.model
+    def setup(self):
+        super().setup()
+        self.model: type[MapReduceBase] = self.opts.model
         if self.model is Company:
             field = 'name_norm_id'
         else:
             field = 'id'
-        value = opts.id
+        value = self.opts.id
         if self.model is Company:
             try:
                 value = uuid.UUID(value)
@@ -139,10 +137,16 @@ class MroneCommand(AppCommand):
             return yaml.safe_dump(objdict, sort_keys=False)
         return json.dumps(objdict, indent=2)
 
+class ArtifactsCommandOpts(BaseCommandOpts):
+    change: bool = True
+    dir: Path = settings.ARTIFACTS_DIR
+    states: StatesOpt
+
 class ArtifactsCommand(BaseCommand):
     'Artifacts maintenance'
 
-    class Base(AppCommand):
+    class Base(AppCommand[ArtifactsCommandOpts]):
+        options_class: ClassVar = ArtifactsCommandOpts
 
         @classmethod
         def add_arguments(cls, parser):
@@ -155,7 +159,8 @@ class ArtifactsCommand(BaseCommand):
             arg(
                 '--dir', '-d',
                 type=Path,
-                help=f'Alternate artifacts base dir')
+                default=settings.ARTIFACTS_DIR,
+                help=f'Artifacts base dir, default is settings.ARTIFACTS_DIR')
             arg(
                 'states',
                 nargs='*',
@@ -163,63 +168,64 @@ class ArtifactsCommand(BaseCommand):
                 help='Restrict to a specific states')
             super().add_arguments(parser)
 
-        def setup(self, opts):
-            super().setup(opts)
-            self.states = resolve_statesopt(opts.states)
-            if not self.states:
-                raise ValueError(f'No states selected')
-            self.root: Path = opts.dir or settings.ARTIFACTS_DIR
-            self.change: bool = opts.change
-
     class Prune(Base):
         'Delete orphan artifacts from file system'
 
-        def run(self):
-            for state in self.states:
-                logger.debug(f'Checking {state=}')
-                it = glob.iglob(f'{state.lower()}/**/*.*', root_dir=self.root, recursive=True)
-                with SessionLocal() as session:
+        def run(self) -> None:
+            with SessionLocal() as session:
+                for state in self.opts.states:
+                    logger.debug(f'Checking {state=}')
+                    it = glob.iglob(
+                        f'{state.lower()}/**/*.*',
+                        root_dir=self.opts.dir,
+                        recursive=True)
                     for path in it:
-                        logger.debug(f'Checking {path=}')
-                        file = self.root/path
-                        if path.endswith('.sha1'):
-                            logger.info(f'Cruft {path=}')
-                            if self.change:
-                                file.unlink()
-                            continue
-                        id = Artifact.path_to_id(path)
-                        try:
-                            session.get_one(Artifact, id)
-                        except NoResultFound:
-                            logger.info(f'Orphan {path=} {id=}')
-                            if self.change:
-                                file.unlink()
-                                files.digestfile(file).unlink(missing_ok=True)
-                        else:
-                            logger.debug(f'Found {path=} {id=}')
+                        self.checkpath(path, session)
+
+        def checkpath(self, path: str, session: orm.Session) -> None:
+            logger.debug(f'Checking {path=}')
+            file = self.opts.dir/path
+            if path.endswith('.sha1'):
+                logger.info(f'Cruft {path=}')
+                if self.opts.change:
+                    file.unlink()
+                return
+            id = Artifact.path_to_id(path)
+            try:
+                session.get_one(Artifact, id)
+            except NoResultFound:
+                logger.info(f'Orphan {path=} {id=}')
+                if self.opts.change:
+                    file.unlink()
+                    files.digestfile(file).unlink(missing_ok=True)
+            else:
+                logger.debug(f'Found {path=} {id=}')
 
     class Update(Base):
         'Update artifacts in DB from files'
 
         def run(self):
             with SessionLocal() as session:
-                for state in self.states:
+                for state in self.opts.states:
                     logger.debug(f'Updating {state=}')
                     stmt = (select(Artifact)
                         .where(Artifact.path.startswith(f'{state.lower()}/')))
                     for art in session.scalars(stmt):
-                        file = self.root/art.path
-                        if file.exists():
-                            logger.debug(f'Found path={art.path} id={art.id}')
-                            if art.self_update(root=self.root):
-                                logger.info(f'Updated path={art.path} id={art.id}')
-                                session.add(art)
-                        else:
-                            logger.warning(f'Missing path={art.path} id={art.id}')
-                if self.change:
+                        self.checkart(art, session)
+                if self.opts.change:
                     session.commit()
                 else:
                     session.rollback()
+
+        def checkart(self, art: Artifact, session: orm.Session) -> None:
+            file = self.opts.dir/art.path
+            if file.exists():
+                logger.debug(f'Found path={art.path} id={art.id}')
+                if art.self_update(root=self.opts.dir):
+                    logger.info(f'Updated path={art.path} id={art.id}')
+                    session.add(art)
+            else:
+                logger.warning(f'Missing path={art.path} id={art.id}')
 
     commands = dict(update=Update, prune=Prune)
 

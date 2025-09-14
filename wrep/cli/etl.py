@@ -1,33 +1,105 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import json
 import logging
 import os
 import sys
-from typing import Any, Callable, ClassVar, Mapping
+from datetime import timedelta
+from typing import Annotated, Any, ClassVar, Literal, Mapping, Self
 from uuid import UUID
 
 import yaml
+from pydantic import (BeforeValidator, Field, PositiveFloat, field_validator,
+                      model_validator)
 
-from .. import orm, utils
+from .. import orm, settings, utils
 from ..backends import etl
 from ..models import *
-from .base import AP, AppCommand, BaseCommand, NonNegIntTa, PosIntTa
+from .base import AP, AppCommand, BaseCommand, BaseCommandOpts
 from .mongo import ClientControlCommand
 
 logger = logging.getLogger(__name__)
 
-class EtlBaseCommand(AppCommand):
+class EtlCommandOpts(BaseCommandOpts):
+    output: Literal['json', 'yaml'] = 'json'
+    etl_dbname: str|None = None
+
+class OneCommandOpts(EtlCommandOpts):
+    id: UUID
+    save: bool = False
+
+class TrOneCommandOpts(OneCommandOpts):
+
+    @field_validator('id', mode='before')
+    @classmethod
+    def idopt(cls, value: str|Any) -> UUID:
+        value = str(value)
+        if '.' in value:
+            state, i = value.rsplit('.', 1)
+            return etl.ExtractionBackend.get_seq_id(ValidStateCode(state), int(i))
+        return UUID(value)
+
+class LogSummaryMethod(enum.StrEnum):
+    get_short = 'short'
+    get_runs = 'runs'
+    get_running = 'running'
+    get_load_changes = 'load-changes'
+    get_scrape_stats = 'scrape-stats'
+
+class LogShowOpts(EtlCommandOpts):
+    output: Literal['json', 'yaml', 'table'] = 'json'
+    summary: LogSummaryMethod|None = None
+    verbose: bool = False
+    id: UUID|None = None
+    watch: PositiveFloat|None = Field(False, validate_default=True)
+    watch_default: ClassVar[PositiveFloat] = 5.0
+
+    @field_validator('watch', mode='before')
+    @classmethod
+    def validate_watch(cls, value: Literal[False]|None|utils.Delta|Any) -> PositiveFloat|None:
+        if value is False:
+            return None
+        if value is None:
+            return cls.watch_default
+        return utils.deltaparse(value, default_unit='seconds').total_seconds()
+
+    @model_validator(mode='after')
+    def check_compatibility(self) -> Self:
+        if not self.summary and self.output == 'table':
+            raise ValueError(f'Table output only supported with summary')
+        if self.verbose:
+            if self.summary:
+                raise ValueError(f'Verbose output not supported with summary')
+            if self.output == 'table':
+                raise ValueError(f'Verbose output not supported with table output')
+        return self
+
+class LogListOpts(EtlCommandOpts):
+    output: Literal['json', 'yaml', 'table'] = 'table'
+    limit: Limit = 10
+    offset: Offset = 0
+
+class LogCopyOpts(EtlCommandOpts):
+    dest: str
+
+class LogPruneOpts(EtlCommandOpts):
+    maxage: Annotated[
+        timedelta,
+        BeforeValidator(utils.deltaopt('days'))] = Field('30d', validate_default=True)
+    dryrun: bool = False
+
+class EtlBaseCommand[O: EtlCommandOpts](AppCommand[O]):
     output_formats: ClassVar[list[str]] = ['json', 'yaml']
     default_format: ClassVar[str] = 'json'
+    options_class: ClassVar[type[O]] = EtlCommandOpts
 
     @classmethod
     def add_arguments(cls, parser: AP) -> None:
         arg = parser.add_argument
         arg(
             '--etl-dbname', '-b',
-            default=None,
             help=f'Alternate mongo etl db name')
         arg(
             '--output', '-o',
@@ -41,10 +113,9 @@ class EtlBaseCommand(AppCommand):
                 help=f'Table format')
         super().add_arguments(parser)
 
-    def setup(self, opts) -> None:
-        super().setup(opts)
-        self.output: str = opts.output
-        self.context = {etl.default_client.dbname_key: opts.etl_dbname}
+    def setup(self) -> None:
+        super().setup()
+        self.context = {settings.ETL_MONGODB_DBNAME_KEY: self.opts.etl_dbname}
 
     def printobj(self, obj: Any) -> None:
         print(self.objtext(obj))
@@ -52,7 +123,7 @@ class EtlBaseCommand(AppCommand):
     def objtext(self, obj: Any) -> str:
         if isinstance(obj, str):
             text = obj
-        elif self.output == 'yaml':
+        elif self.opts.output == 'yaml':
             text = yaml.safe_dump(obj, sort_keys=False)
         else:
             text = json.dumps(obj, indent=2)
@@ -65,10 +136,10 @@ class EtlBaseCommand(AppCommand):
 
 class OneCommand(BaseCommand):
 
-    class Base(EtlBaseCommand):
-        label: ClassVar[str] = '?'
+    class Base[O: OneCommandOpts](EtlBaseCommand[O]):
+        label: ClassVar[str] = ''
         backend_class: ClassVar[type[etl.MongoETBase]]
-        idopt: ClassVar[Callable[[str], UUID]] = UUID
+        options_class: ClassVar[type[O]] = OneCommandOpts
         idopt_help: ClassVar[str|None] = None
 
         @classmethod
@@ -80,12 +151,11 @@ class OneCommand(BaseCommand):
                 help='Save the result')
             arg(
                 'id',
-                type=cls.idopt,
                 help=cls.idopt_help or f'The {cls.label} doc id')
             super().add_arguments(parser)
 
-        def setup(self, opts) -> None:
-            super().setup(opts)
+        def setup(self) -> None:
+            super().setup()
             self.backend = self.backend_class(context=self.context)
 
         async def get_inst(self) -> etl.ETBase:
@@ -95,20 +165,17 @@ class OneCommand(BaseCommand):
             except StopAsyncIteration:
                 raise ValueError(f'Doc not found: {self.opts.id}')
 
-    class Trone(Base):
+    class Trone(Base[TrOneCommandOpts]):
         'Run translations for a single extraction doc, and print the result'
-        label = 'extraction'
         backend_class: ClassVar[type[etl.MongoExtraction]] = etl.MongoExtraction
-        idopt_help = 'The extraction doc id, or state & sequence (e.g. WI.123)'
-
-        @classmethod
-        def idopt(cls, value: str) -> UUID:
-            if '.' in value:
-                state, i = value.rsplit('.', 1)
-                if len(state) != 2:
-                    raise ValueError(f'{state=}')
-                return cls.backend_class.get_seq_id(state, int(i))
-            return super().idopt(value)
+        options_class: ClassVar = TrOneCommandOpts
+        label: ClassVar = 'extraction'
+        idopt_help: ClassVar = 'The extraction doc id, or state & sequence (e.g. WI.123)'
+        trdumpopts: ClassVar = dict(
+            mode='json',
+            exclude_unset=True,
+            exclude_none=True,
+            exclude=['extraction'])
 
         async def run(self) -> None:
             from ..translators import TranslationFactory
@@ -116,16 +183,11 @@ class OneCommand(BaseCommand):
             with orm.SessionLocal() as session:
                 factory = TranslationFactory(session)
                 translations = list(factory.translate(extraction.model_dump()))
-                res = dict(
+                self.printobj(dict(
                     translations=[
-                        x.model_dump(
-                            mode='json',
-                            exclude_unset=True,
-                            exclude_none=True,
-                            exclude=['extraction'])
+                        x.model_dump(**self.trdumpopts)
                         for x in translations],
-                    extraction=extraction.model_dump(mode='json'))
-                self.printobj(res)
+                    extraction=extraction.model_dump(mode='json')))
                 if self.opts.save:
                     backend = etl.MongoTranslation(context=self.context)
                     await backend.update(translations)
@@ -147,10 +209,10 @@ class OneCommand(BaseCommand):
             self.opts.id = translation.extraction.id
             return await super().get_inst()
 
-    class Ldone(Base):
+    class Ldone(Base[OneCommandOpts]):
         'Run load operations for a single translation doc, and print the result'
-        label = 'translation'
-        backend_class = etl.MongoTranslation
+        label: ClassVar = 'translation'
+        backend_class: ClassVar = etl.MongoTranslation
 
         async def run(self) -> None:
             translation: Translation = await self.get_inst()
@@ -186,17 +248,19 @@ class OneCommand(BaseCommand):
 class LogCommand(BaseCommand):
     'Pipeline log commands'
 
-    class Base(EtlBaseCommand):
+    class Base[O: EtlCommandOpts](EtlBaseCommand[O]):
+        options_class: ClassVar[type[O]] = EtlCommandOpts
 
-        def setup(self, opts) -> None:
-            super().setup(opts)
+        def setup(self) -> None:
+            super().setup()
             self.backend = etl.MongoPipelineLog(context=self.context)
 
-    class List(Base):
+    class List(Base[LogListOpts]):
         'List pipeline logs'
         output_formats: ClassVar[list[str]] = EtlBaseCommand.output_formats + ['table']
         default_format: ClassVar[str] = 'table'
         headers: ClassVar[list[str]] = ['id', 'start', 'states', 'stages', 'runs', 'errors', 'elapsed']
+        options_class: ClassVar = LogListOpts
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
@@ -204,13 +268,11 @@ class LogCommand(BaseCommand):
             arg(
                 '--limit', '-l',
                 default=10,
-                type=PosIntTa.validate_strings,
                 help=f'Results limit, default 10')
             arg(
                 '--skip', '-s',
                 default=0,
                 dest='offset',
-                type=NonNegIntTa.validate_strings,
                 help=f'Skip n results (offset)')
             super().add_arguments(parser)
 
@@ -220,23 +282,18 @@ class LogCommand(BaseCommand):
             results = [
                 dict(zip(self.headers, map(x.get_short().get, self.headers)))
                 async for x in srch.objs()]
-            if self.output == 'table':
+            if self.opts.output == 'table':
                 head = dict(zip(self.headers, self.headers))
                 body = self.tablulate(results, head)
             else:
                 body = dict(results=results)
             self.printobj(body)
 
-    class Show(Base):
+    class Show(Base[LogShowOpts]):
         'Show pipeline log'
+        options_class: ClassVar = LogShowOpts
         output_formats: ClassVar[list[str]] = EtlBaseCommand.output_formats + ['table']
-        summary_methods: ClassVar[dict[str, str]] = {
-            'short': 'get_short',
-            'runs': 'get_runs',
-            'running': 'get_running',
-            'load-changes': 'get_load_changes',
-            'scrape-stats': 'get_scrape_stats'}
-        summary_fields: ClassVar[dict[str, tuple[str, ...]|dict[str, Any]]] = {
+        summary_fields: ClassVar[dict[LogSummaryMethod, tuple[str, ...]|dict[str, Any]]] = {
             'short': dict(key=0, value=1),
             'runs': ('stage', 'state', 'elapsed', 'failed', 'nochange'),
             'running': ('stage', 'state', 'elapsed', 'failed'),
@@ -248,8 +305,7 @@ class LogCommand(BaseCommand):
             arg = parser.add_argument
             arg(
                 '--summary', '-s',
-                choices=cls.summary_methods,
-                default=None,
+                choices=list(map(str, LogSummaryMethod)),
                 help=(f'The summary type to show'))
             arg(
                 '--verbose', '-v',
@@ -263,26 +319,9 @@ class LogCommand(BaseCommand):
                 help=f'Watch')
             arg(
                 'id',
-                type=UUID,
                 nargs='?',
-                default=None,
                 help='The pipeline log ID, default latest')
             super().add_arguments(parser)
-
-        def setup(self, opts) -> None:
-            super().setup(opts)
-            self.verbose: bool = opts.verbose
-            self.summary: str|None = opts.summary
-            self.watch: utils.Delta|None = (
-                None if opts.watch is False else
-                utils.deltaparse(opts.watch or '5s', default_unit='seconds'))
-            if not self.summary and self.output == 'table':
-                self.parser.error(f'Table output only supported with summary')
-            if self.verbose:
-                if self.summary:
-                    self.parser.error(f'Verbose output not supported with summary')
-                if self.output == 'table':
-                    self.parser.error(f'Verbose output not supported with table output')
 
         async def run(self) -> None:
             if self.opts.id:
@@ -291,24 +330,24 @@ class LogCommand(BaseCommand):
                 log = await self.backend.fetch_latest()
             try:
                 while True:
-                    if self.watch and sys.stdout.isatty():
+                    if self.opts.watch and sys.stdout.isatty():
                         os.system('clear')
-                    if self.summary:
-                        body = getattr(log, self.summary_methods[self.summary])()
-                        if self.output == 'table':
+                    if self.opts.summary:
+                        body = getattr(log, self.opts.summary.name)()
+                        if self.opts.output == 'table':
                             body = self.output_table(body)
                     else:
                         body = self.default_body(log)
                     self.printobj(body)
-                    if log.end or not self.watch:
+                    if log.end or not self.opts.watch:
                         break
-                    await asyncio.sleep(self.watch.total_seconds())
+                    await asyncio.sleep(self.opts.watch)
                     log = await self.backend.fetch(log.id)
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
                 pass
 
         def output_table(self, body: dict) -> str:
-            head = self.summary_fields[self.summary]
+            head = self.summary_fields[self.opts.summary]
             if not isinstance(head, Mapping):
                 head = dict(zip(head, head))
             if isinstance(body, Mapping):
@@ -317,22 +356,24 @@ class LogCommand(BaseCommand):
 
         def default_body(self, log: PipelineLog) -> dict[str, Any]:
             body = log.model_dump(mode='json', exclude_none=True)
-            if not self.verbose:
+            if not self.opts.verbose:
                 body.update(runs=len(body['runs']), states=len(body['states']))
             return body
 
-    class Copy(Base):
+    class Copy(Base[LogCopyOpts]):
         'Copy pipeline logs to another db'
+        options_class: ClassVar = LogCopyOpts
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
             parser.add_argument('dest', help='The destination db name')
             super().add_arguments(parser)
 
-        def setup(self, opts) -> None:
-            super().setup(opts)
+        def setup(self) -> None:
+            super().setup()
             self.src = self.backend
-            self.dst = etl.MongoPipelineLog(context={next(iter(self.context)): opts.dest})
+            self.dst = etl.MongoPipelineLog(
+                context={next(iter(self.context)): self.opts.dest})
 
         async def run(self) -> None:
             src_db = await self.src.db()
@@ -344,14 +385,14 @@ class LogCommand(BaseCommand):
             counts = dict(zip(('count', 'created', 'updated'), res))
             self.printobj(counts)
 
-    class Prune(Base):
+    class Prune(Base[LogPruneOpts]):
         'Prune old pipeline logs'
+        options_class: ClassVar = LogPruneOpts
 
         @classmethod
         def add_arguments(cls, parser: AP) -> None:
             parser.add_argument(
                 '--maxage', '-m',
-                type=utils.deltaopt('days'),
                 default='30d',
                 help='Max age, default 30d')
             parser.add_argument(

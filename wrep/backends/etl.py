@@ -124,6 +124,11 @@ class ETBase[DM: (Extraction, Translation)](StageBackend):
 
 class ExtractionBackend(ETBase[Extraction]):
     stage: ClassVar = Stage.Extract
+    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
+
+    @classmethod
+    def get_seq_id(cls, state: StateCode, i: NonNegativeInt) -> UUID:
+        return uuid5(cls.NS, f'{state.upper()}:seq:{int(i)}')
 
 class TranslationBackend(ETBase[Translation]):
     stage: ClassVar = Stage.Translate
@@ -271,7 +276,6 @@ class MongoETBase[DM: (Extraction, Translation)](ETBase[DM], MongoContextCollect
         return doc
 
 class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
-    NS: ClassVar[UUID] = uuid5(settings.NAMESPACE, 'extractions')
     collection: ClassVar = collections['extractions']
 
     @override
@@ -284,10 +288,6 @@ class MongoExtraction(MongoETBase[Extraction], ExtractionBackend):
     def clean_stat_doc(self, doc: Doc) -> Doc:
         super().clean_stat_doc(doc['data'])
         return doc
-
-    @classmethod
-    def get_seq_id(cls, state: StateCode, i: NonNegativeInt) -> UUID:
-        return uuid5(cls.NS, f'{state.upper()}:seq:{int(i)}')
 
 class MongoTranslation(MongoETBase[Translation], TranslationBackend):
     collection: ClassVar = collections['translations']

@@ -150,29 +150,29 @@ class AbstractMongoCollection(AbstractCollection):
     def filter_class(self) -> type[MongoFilterModel]:
         return filters[self.data_model]
 
-    async def stats(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> dict[str, str|int]:
+    async def stats(self, *, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> dict[str, str|int]:
         'Get collection stats'
         client = client or self.client
         db = await client.get_database(db)
         stat = await db.command('collstats', self.name)
         return dict(name=self.name, count=stat['count'], size=stat['size'])
 
-    async def init(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> None:
+    async def init(self, *, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> None:
         'Init collection'
         client = client or self.client
         db = await client.get_database(db)
         logger.info(f'Initializing {self.name}')
         await db.get_collection(self.name).create_indexes(self.indexes)
 
-    async def clean(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> None:
+    async def clean(self, *, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None) -> None:
         'Clean collection'
         client = client or self.client
         db = await client.get_database(db)
-        stat = await self.stats(db=db)
+        stat = await self.stats(db=db, client=client)
         logger.info(f'Cleaning {self.name} {stat=}')
         await db.get_collection(self.name).drop()
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class MongoCollection(AbstractMongoCollection):
     name: str
     client: MongoClient

@@ -67,6 +67,11 @@ class Base(DeclarativeBase):
         super().__init_subclass__(**kw)
 
 class MapReduceBase[DM: DataModel, RT](Base):
+    """
+    Base class for an ORM Model to provide map-reduce functionality. A subclass
+    would specify the DataModel [DM] class that it reduces into, as well as the
+    row type [RT] that will be produced by the reduce_select() database query.
+    """
     __abstract__ = True
     data_model: ClassVar[type[DM]]
 
@@ -94,6 +99,7 @@ class MapReduceBase[DM: DataModel, RT](Base):
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
+        'Build the database select query for the map-reduce operation'
         stmt = select(cls).where(*filters)
         stmt = lazify(stmt, lazy)
         return stmt
@@ -416,6 +422,11 @@ STMT_REPORT_GET: Select[tuple[Report, Artifact, Naics]] = (
     .options(
         joinedload(Report.naics),
         joinedload(Report.artifacts)))
+
+MRCLASSES: tuple[type[MapReduceBase], ...] = tuple(sorted(
+    (cls for cls in MapReduceBase.__subclasses__() if not cls.__abstract__),
+    key=lambda x: x.__name__))
+'All concrete MapReducing ORM Model classes'
 
 def lazify[RT](stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None) -> Select[RT]:
     if lazy:

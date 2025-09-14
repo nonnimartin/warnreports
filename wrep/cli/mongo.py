@@ -5,7 +5,7 @@ from typing import Self
 
 from .. import utils
 from ..backends.mongo import MongoClient
-from .base import AppCommand
+from .base import AppCommand, BaseCommand
 
 
 class ControlBaseCommand(AppCommand):
@@ -61,8 +61,8 @@ class ControlTtlCommand(ControlBaseCommand):
         doc = await self.client.set_ttl(self.opts.ttl)
         print(json.dumps(doc, indent=2, default=str))
 
-def ClientControlCommand(client: MongoClient) -> type[AppCommand]:
-    return type('MongoClientControlCommand', (AppCommand,), dict(
+def ClientControlCommand(client: MongoClient) -> type[BaseCommand]:
+    return type('MongoClientControlCommand', (BaseCommand,), dict(
         __doc__=f'Mongo control doc commands for {client.dbname_key}',
         commands=dict(
             get=ControlGetCommand.fromclient(client),
