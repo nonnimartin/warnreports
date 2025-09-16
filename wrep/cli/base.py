@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import enum
 import typing
 from collections import ChainMap
 from types import GenericAlias, UnionType
-from typing import Any, ClassVar, Iterable, Sequence
+from typing import Any, ClassVar, Iterable, Self, Sequence
 
 from pydantic import ConfigDict, Field
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefinedType
 
-from .. import settings, utils
+from .. import settings
 from ..models import DataModel
-from ..tools import asyn
 from .formatters import SmartFormatter
 
 type AP = argparse.ArgumentParser
 type SubParsers = argparse._SubParsersAction[AP]
+type CommandsDict = dict[str, type[BaseCommand]|CommandsDict]
 
 class LogLevelEnum(enum.StrEnum):
     CRITICAL = 'CRITICAL'
@@ -29,7 +28,7 @@ class LogLevelEnum(enum.StrEnum):
     DEBUG = 'DEBUG'
 
     @classmethod
-    def _missing_(cls, value):
+    def _missing_(cls, value: Any) -> Self:
         value = str(value).upper()
         if value == 'WARN':
             value = 'WARNING'
@@ -46,8 +45,9 @@ class BaseCommand[O: BaseCommandOpts]:
     parser_class: ClassVar[type[AP]] = argparse.ArgumentParser
     formatter_class: ClassVar[type[argparse.HelpFormatter]] = SmartFormatter
     options_class: ClassVar[type[O]] = BaseCommandOpts
-    commands: ClassVar[dict[str, type[BaseCommand]]] = {}
+    commands: ClassVar[CommandsDict] = {}
     command_metavar: ClassVar[str] = 'command'
+    command_opt: ClassVar[str]
     command_name: str|None = None
     command: BaseCommand|None = None
     opts: O
@@ -56,7 +56,13 @@ class BaseCommand[O: BaseCommandOpts]:
     def main(cls, args: Sequence[str]|None = None) -> None:
         "Main CLI entrypoint"
         parser = cls.create_parser()
-        cmd = cls(parser.parse_args(args), parser)
+        try:
+            cmd = cls(parser.parse_args(args), parser)
+        except ValueError as err:
+            parser.error(f'{err!r}')
+        import asyncio
+
+        from ..tools import asyn
         asyncio.run(asyn.wait(cmd.run()))
 
     @classmethod
@@ -95,12 +101,15 @@ class BaseCommand[O: BaseCommandOpts]:
             in cls.get_action_hint_classes()))
         fmtargs = cls.parser_fmtargs(parser)
         for action in parser._actions:
-            if not (field := fields.get(action.dest)):
-                continue
-            cls.extend_action(action, field, fmtargs=fmtargs)
+            if (field := fields.get(action.dest)):
+                cls.extend_action(action, field)
+            if action.help:
+                action.help = action.help.format(
+                    **(fmtargs|dict(action=action, field=field)))
 
     @classmethod
-    def extend_action(cls, action: argparse.Action, field: FieldInfo, fmtargs: dict[str, Any]) -> None:
+    def extend_action(cls, action: argparse.Action, field: FieldInfo) -> None:
+        "Autofill an action from a DataModel field"
         if action.const is False:
             # store_false
             return
@@ -110,11 +119,8 @@ class BaseCommand[O: BaseCommandOpts]:
             action.const = True
             action.default = False
             action.__class__ = argparse._StoreTrueAction
-        if not action.help and (text := field.description or field.title):
-            action.help = text.format(**fmtargs)
-        if action.default is ...:
-            if not isinstance(field.default, PydanticUndefinedType):
-                action.default = field.default
+        if action.default is None and not isinstance(field.default, PydanticUndefinedType):
+            action.default = field.default
         if action.choices == (...,):
             anno = field.annotation
             annoargs = anno.__args__ if isinstance(anno, UnionType) else [anno]
@@ -128,6 +134,8 @@ class BaseCommand[O: BaseCommandOpts]:
                 if isinstance(cand, type) and issubclass(cand, enum.Enum):
                     action.choices = list(cand)
                     break
+        if not action.help and (text := field.description or field.title):
+            action.help = text
 
     @classmethod
     def get_action_hint_classes(cls) -> Iterable[type[DataModel]]:
@@ -179,6 +187,7 @@ class BaseCommand[O: BaseCommandOpts]:
 
     async def run(self) -> None:
         if self.command:
+            from ..tools import asyn
             await asyn.wait(self.command.run())
 
     def __init_subclass__(cls) -> None:
@@ -189,20 +198,27 @@ class BaseCommand[O: BaseCommandOpts]:
             cls.description)
         for name, value in cls.commands.items():
             if isinstance(value, dict):
-                ns = dict(commands=value, description=value.pop('_description', None))
-                cls.commands[name] = type(f'{name.title()}Command', (BaseCommand,), ns)
+                clsname = f'{name.title()}Command'
+                ns = dict(
+                    commands=value,
+                    description=value.pop('_description', None))
+                cls.commands[name] = type(clsname, (BaseCommand,), ns)
 
 class AppCommandOpts(BaseCommandOpts):
-    log_level: LogLevelEnum|None = Field(None, exclude=True, description='Log level')
+    log_level: LogLevelEnum|None = Field(
+        default=None,
+        exclude=True,
+        description='Log level')
     model_config: ClassVar = ConfigDict(extra='allow')
 
 class AppCommand[O: AppCommandOpts](BaseCommand[O]):
     options_class: type[O] = AppCommandOpts
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
         if self.opts.log_level and settings.LOG_LEVEL != self.opts.log_level:
             settings.LOG_LEVEL = self.opts.log_level
+            from .. import utils
             utils.init_logging()
 
     @classmethod

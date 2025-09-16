@@ -17,6 +17,7 @@ from types import CoroutineType
 from types import MappingProxyType as MapProxy
 from typing import TYPE_CHECKING, Any, AsyncIterable, Iterable, Mapping
 
+from pydantic import NonNegativeInt
 from sentry_sdk import capture_exception
 
 from . import SaveType, Stage, orm, scrapers, utils
@@ -325,6 +326,8 @@ class Pipeline:
             if dirty or getattr(company, field) != value:
                 setattr(company, field, value)
                 dirty = True
+        if company.name != company.name_canon:
+            self.opts.normlog.append((company.name_canon, company.name))
         if save is save.Nochange and dirty:
             save = save.Update
         if save is not save.Nochange:
@@ -461,11 +464,11 @@ class PipelineRunner:
         self.sleepdelay = 0.005
 
     @property
-    def num_workers(self) -> int:
+    def num_workers(self) -> NonNegativeInt:
         return min(self.opts.max_workers, len(self.states_active))
 
     @property
-    def num_threads(self) -> int:
+    def num_threads(self) -> NonNegativeInt:
         return min(self.opts.max_threads, len(self.states_active))
 
     @property

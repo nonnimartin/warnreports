@@ -13,13 +13,12 @@ import yaml
 from pydantic import Field, model_validator
 
 from .. import settings
-from ..models import ValidStateCode
+from ..models import DataModel, ValidStateCode
 from .base import AppCommand, AppCommandOpts
 from .validators import StatesOpt
 
 if TYPE_CHECKING:
     from .. import orm
-    from ..models import DataModel
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +51,11 @@ class MrModelName(enum.StrEnum):
         raise ValueError(self.value)
 
 class DumpOpts(AppCommandOpts):
-    table: OrmTable = Field(description=f'The table ({'|'.join(OrmTable)})')
-    file: Path|None = Field(description='The output file, default BUILD_DIR/dump/[table].csv')
+    table: OrmTable = Field(
+        description=f'The table ({'|'.join(OrmTable)})')
+    file: Path|None = Field(
+        default=None,
+        description='The output file, default BUILD_DIR/dump/[table].csv')
 
 class NaicsOpts(AppCommandOpts):
     ...
@@ -66,11 +68,14 @@ class ArtifactsOpts(AppCommandOpts):
     states: StatesOpt
 
 class MroneOpts(AppCommandOpts):
-    id: str|int|uuid.UUID = Field(description='The object primary key (see examples)')
+    id: str|int|uuid.UUID = Field(
+        description='The object primary key (see examples)')
     model: MrModelName = Field(
         default=MrModelName.report,
-        description=f'The ORM model name, default Report')
-    output: Literal['json', 'yaml'] = Field('json', description='Output, default json')
+        description='The ORM model name, default {field.default}')
+    output: Literal['json', 'yaml'] = Field(
+        default='json',
+        description='Output, default {field.default}')
 
     @property
     def field(self) -> Literal['name_norm_id', 'id']:
@@ -103,7 +108,7 @@ class NaicsCommand(AppCommand[NaicsOpts]):
     'Load NAICS data'
     options_class: ClassVar = NaicsOpts
 
-    def run(self):
+    def run(self) -> None:
         from ..orm import load_naics
         load_naics(**self.opts.model_dump())
 
@@ -112,13 +117,13 @@ class DumpCommand(AppCommand[DumpOpts]):
     options_class: ClassVar = DumpOpts
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser) -> None:
         arg = parser.add_argument
         arg('table', metavar='table', choices=(...,))
         arg('file', nargs='?')
         super().add_arguments(parser)
 
-    def run(self):
+    def run(self) -> None:
         from ..orm import dump_update
         dump_update(**self.opts.model_dump())
 
@@ -131,40 +136,40 @@ class MroneCommand(AppCommand[MroneOpts]):
     --------
 
     Report
-    $ {prog} 9445518b-3192-5eb2-b5ce-710c18f24368
+      {prog} 9445518b-3192-5eb2-b5ce-710c18f24368
 
     Company
-    $ {prog} -m company 3224e161-3705-5f5e-9661-abcfe0e3f24e
-    $ {prog} -m company Safeway
-    $ {prog} -m company 'Safeway, Inc.'
+      {prog} -m company 3224e161-3705-5f5e-9661-abcfe0e3f24e
+      {prog} -m company Safeway
+      {prog} -m company 'Safeway, Inc.'
 
     State
-    $ {prog} -m state CA
+      {prog} -m state CA
 
     Naics
-    $ {prog} -m naics 44511
+      {prog} -m naics 44511
 
     Artifact
-    $ {prog} -m artifact 0ab65afb-2d9f-5754-b1ad-e03d99cac511
-    $ {prog} -m artifact ca/warn_report1.xlsx
+      {prog} -m artifact 0ab65afb-2d9f-5754-b1ad-e03d99cac511
+      {prog} -m artifact ca/warn_report1.xlsx
     ------------------------------------------------------------
     """)
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser) -> None:
         arg = parser.add_argument
-        arg('--model', '-m', default=...,)
-        arg('--output', '-o', default=..., choices=(...,))
+        arg('--model', '-m')
+        arg('--output', '-o', choices=(...,))
         arg('id')
         super().add_arguments(parser)
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
         self.model = self.opts.model.orm_model()
         self.filterkw = {self.opts.field: self.opts.id}
         self.filter = getattr(self.model, self.opts.field) == self.opts.id
 
-    def run(self):
+    def run(self) -> None:
         from .. import orm
         with orm.SessionLocal() as session:
             res = tuple(self.model.map_reduce_exec(session, self.filter, lazy=False))
@@ -187,19 +192,30 @@ class ArtifactsBase(AppCommand[ArtifactsOpts]):
     options_class: ClassVar = ArtifactsOpts
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser) -> None:
         arg = parser.add_argument
         arg('--dryrun')
-        arg('--dir', '-d', default=...)
+        arg('--dir', '-d')
         arg('states', nargs='*', metavar='state')
         super().add_arguments(parser)
+
+    def setup(self) -> None:
+        super().setup()
+        from .. import orm
+        self.orm = orm
+        self.Artifact = orm.Artifact
+        self.SessionLocal = orm.SessionLocal
 
 class ArtifactsPrune(ArtifactsBase):
     'Delete orphan artifacts from file system'
 
+    def setup(self) -> None:
+        super().setup()
+        from ..tools import files
+        self.digestfile = files.digestfile
+
     def run(self) -> None:
-        from .. import orm
-        with orm.SessionLocal() as session:
+        with self.SessionLocal() as session:
             for state in self.opts.states:
                 logger.debug(f'Checking {state=}')
                 it = glob.iglob(
@@ -210,8 +226,6 @@ class ArtifactsPrune(ArtifactsBase):
                     self.checkpath(path, session)
 
     def checkpath(self, path: str, session: orm.Session) -> None:
-        from .. import orm
-        from ..tools import files
         logger.debug(f'Checking {path=}')
         file = self.opts.dir/path
         if path.endswith('.sha1'):
@@ -219,27 +233,26 @@ class ArtifactsPrune(ArtifactsBase):
             if not self.opts.dryrun:
                 file.unlink()
             return
-        id = orm.Artifact.path_to_id(path)
+        id = self.Artifact.path_to_id(path)
         try:
-            session.get_one(orm.Artifact, id)
-        except orm.NoResultFound:
+            session.get_one(self.Artifact, id)
+        except self.orm.NoResultFound:
             logger.info(f'Orphan {path=} {id=}')
             if not self.opts.dryrun:
                 file.unlink()
-                files.digestfile(file).unlink(missing_ok=True)
+                self.digestfile(file).unlink(missing_ok=True)
         else:
             logger.debug(f'Found {path=} {id=}')
 
 class ArtifactsUpdate(ArtifactsBase):
     'Update artifacts in DB from files'
 
-    def run(self):
-        from .. import orm
-        with orm.SessionLocal() as session:
+    def run(self) -> None:
+        with self.SessionLocal() as session:
             for state in self.opts.states:
                 logger.debug(f'Updating {state=}')
-                stmt = (orm.select(orm.Artifact)
-                    .where(orm.Artifact.path.startswith(f'{state.lower()}/')))
+                stmt = (self.orm.select(self.Artifact)
+                    .where(self.Artifact.path.startswith(f'{state.lower()}/')))
                 for art in session.scalars(stmt):
                     self.checkart(art, session)
             if not self.opts.dryrun:
