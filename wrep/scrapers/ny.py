@@ -61,14 +61,17 @@ class NY(Scraper):
             key = self.tableau_filename
             url = strs.absurl(self.archive_url, key)
             await self.download(key, url)
-        for key in self.archive_filenames:
+
+        async def dltask(key: str) -> None:
             url = strs.absurl(self.archive_url, key)
             await self.download(key, url, missing_only=True)
-        # Download artifacts
-        for subidx in self.build_index().values():
-            for key, url in subidx.items():
-                await self.download(key, url, missing_only=True)
+            if key.startswith('records/'):
                 self.artifacts.add(key)
+
+        index = self.build_index()
+        keys = list(self.archive_filenames)
+        keys.extend(key for subidx in index.values() for key in subidx)
+        await asyn.pooled(keys, target=dltask, size=10)
 
     async def driver_scrape(self, driver: webd.Chrome) -> None:
         from selenium.common.exceptions import WebDriverException
