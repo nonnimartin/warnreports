@@ -44,14 +44,20 @@ DEFAULT_CHROME_PREFS = {
     'download.directory_upgrade': True}
 
 @asynccontextmanager
-async def selenium(*, args: Iterable[str]|None = None, prefs: dict[str, Any]|None = None, metrics: bool = True, logger: logging.Logger = logger):
+async def selenium(
+    *,
+    args: Iterable[str]|None = None,
+    prefs: dict[str, Any]|None = None,
+    metrics: dict[str, Any]|None = None,
+    logger: logging.Logger = logger,
+):
     args = tuple(args or ()) + DEFAULT_CHROME_ARGS
     prefs = DEFAULT_CHROME_PREFS|(prefs or {})
     options = ChromeOptions()
     for arg in args:
         options.add_argument(arg)
     options.add_experimental_option('prefs', prefs)
-    if metrics:
+    if metrics is not None:
         options.set_capability('goog:loggingPrefs', dict(performance='INFO'))
     service = ChromeService(executable_path=shutil.which('chromedriver'))
     logger.info(f'Creating selenium webdriver')
@@ -59,6 +65,10 @@ async def selenium(*, args: Iterable[str]|None = None, prefs: dict[str, Any]|Non
     try:
         yield driver
     finally:
+        if metrics is not None:
+            count, size = getmetrics(driver)
+            metrics['request_count'] = metrics.get('request_count', 0) + count
+            metrics['request_bytes'] = metrics.get('request_bytes', 0) + size
         logger.info(f'Quitting selenium webdriver')
         driver.quit()
 
@@ -68,8 +78,8 @@ def getmetrics(driver: Chrome) -> tuple[int, int]:
     for log in driver.get_log('performance'):
         message = json.loads(log['message'])['message']
         if message['method'] == 'Network.responseReceived':
-            rep = message['params']['response']
             reqids.add(message['params']['requestId'])
+            rep: dict = message['params']['response']
             for header in rep['headers']:
                 if header.lower() == 'content-length':
                     size += int(rep['headers'][header])

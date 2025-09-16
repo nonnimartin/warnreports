@@ -118,17 +118,17 @@ class ArtifactDownloader:
     async def start_worker(self, queue: deque[tuple[str, str]], name: str) -> None:
         cache = self.scraper.cache.subcache(f'download/{name}')
         cache.mkdir()
-        args = [f'--user-agent={self.scraper.user_agent}']
-        prefs = {'download.default_directory': cache.path}
-        async with webd.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
+        async with webd.selenium(
+            args=[f'--user-agent={self.scraper.user_agent}'],
+            prefs={'download.default_directory': cache.path},
+            logger=self.logger,
+            metrics=self.scraper.metrics
+        ) as driver:
             helper = WorkerHelper(self, driver, cache)
             while queue:
                 url, prefix = queue.popleft()
                 cache.delete('*', glob=True)
                 await helper.run(url, prefix)
-            count, size = webd.getmetrics(driver)
-            self.scraper.metrics['request_count'] += count
-            self.scraper.metrics['request_bytes'] += size
         cache.nuke()
 
     def save_index(self) -> None:

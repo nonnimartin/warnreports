@@ -50,13 +50,13 @@ class NY(Scraper):
 
     async def scrape(self) -> None:
         if settings.SELENIUM_ENABLED:
-            args = [f'--user-agent={self.user_agent}']
-            prefs = {'download.default_directory': self.cache.path}
-            async with webd.selenium(args=args, prefs=prefs, logger=self.logger) as driver:
+            async with webd.selenium(
+                args=[f'--user-agent={self.user_agent}'],
+                prefs={'download.default_directory': self.cache.path},
+                logger=self.logger,
+                metrics=self.metrics
+            ) as driver:
                 await self.driver_scrape(driver)
-                count, size = webd.getmetrics(driver)
-                self.metrics['request_count'] += count
-                self.metrics['request_bytes'] += size
         else:
             key = self.tableau_filename
             url = strs.absurl(self.archive_url, key)

@@ -20,14 +20,22 @@ TtlOpt = Annotated[
 
 class SetOpts(AppCommandOpts):
     name: str = Field(description='The database name')
-    ttl: TtlOpt|None = Field(description='Override the TTL')
+    ttl: TtlOpt|None = Field(None, description='Override the TTL')
 
 class TtlOpts(AppCommandOpts):
     ttl: TtlOpt
 
 class ControlBase[O: AppCommandOpts](AppCommand[O]):
     dbname_key: ClassVar[str]
-    client: MongoClient
+    clientpath: ClassVar[str]
+
+    @cached_property
+    def client(self) -> MongoClient:
+        modname, attr = self.clientpath.rsplit('.', 1)
+        modname = __package__.rsplit('.', 1)[0] + f'.{modname}'
+        import importlib
+        mod = importlib.import_module(modname)
+        return getattr(mod, attr)
 
 class ControlGet(ControlBase[AppCommandOpts]):
     'Get the mongo control doc for {cls.dbname_key}'
@@ -65,17 +73,7 @@ class ControlTtl(ControlBase[TtlOpts]):
         print(json.dumps(doc, indent=2, default=str))
 
 def makecommands(clientpath: str, dbname_key: str) -> dict[str, str|type[ControlBase]]:
-    modname, attr = clientpath.rsplit('.', 1)
-    modname = __package__.rsplit('.', 1)[0] + f'.{modname}'
-
-    def getclient(_) -> MongoClient:
-        import importlib
-        mod = importlib.import_module(modname)
-        return getattr(mod, attr)
-
-    ns = dict(
-        client=cached_property(getclient),
-        dbname_key=dbname_key)
+    ns = dict(clientpath=clientpath, dbname_key=dbname_key)
     return dict(
         _description=f'Mongo control doc commands for {dbname_key}',
         **{

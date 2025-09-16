@@ -28,8 +28,11 @@ class MO(Scraper):
                 return driver.find_element('css selector', 'div.view-warn-notices')
 
             wait = asyn.Wait(timeout=10, callback=find_content)
-            args = [f'--user-agent={self.user_agent}']
-            async with webd.selenium(args=args, logger=self.logger) as driver:
+            async with webd.selenium(
+                args=[f'--user-agent={self.user_agent}'],
+                logger=self.logger,
+                metrics=self.metrics
+            ) as driver:
                 for year, key in zip(years, keys):
                     if not isrecent(year) and self.cache.exists(key):
                         continue
@@ -42,9 +45,6 @@ class MO(Scraper):
                         return
                     self.logger.info(f'Scraped {key}')
                     self.cache.write(key, driver.page_source)
-                count, size = webd.getmetrics(driver)
-                self.metrics['request_count'] += count
-                self.metrics['request_bytes'] += size
         else:
             for year, key in zip(years, keys):
                 url = strs.absurl(self.archive_url, key)

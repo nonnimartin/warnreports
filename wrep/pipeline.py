@@ -125,17 +125,17 @@ class Pipeline:
             count = await backend.clean(dict(state=state))
             res = dict(count=count)
         elif stage is stage.Load:
-            filters = self.orm_clean_filters()
             stmts = {
                 model.__name__: orm.delete(model).where(*filters)
-                for model, filters in filters.items()}
+                for model, filters in self.orm_clean_filters().items()}
             res = {}
             with ensure_session(self.session) as session:
                 for name, stmt in stmts.items():
                     res[name] = session.execute(stmt).rowcount
                     await asyncio.sleep(0)
-                if not self.session and not self.opts.rollback:
+                if not (self.session or self.opts.rollback):
                     session.commit()
+                await asyncio.sleep(0)
         elif stage is stage.Index:
             backend = self.backend(SearchIndexBackend)
             coros = dict(
@@ -242,6 +242,7 @@ class Pipeline:
                         session.commit()
             finally:
                 self.session = _session
+        await asyncio.sleep(0)
         self.artifact_cache = set()
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
         return dict(nochange=nochange, count=count, counts=counts)
@@ -461,8 +462,6 @@ class PipelineRunner:
         self.backend = etl.MongoPipelineLog(context=context, client=client)
         self.states_active = dict.fromkeys(self.states)
         self.lastsaved = 0.0
-        self.saveinterval = 1.0
-        self.sleepdelay = 0.005
 
     @property
     def num_workers(self) -> NonNegativeInt:
@@ -503,10 +502,10 @@ class PipelineRunner:
         if await self.savelog(now=True):
             self.logger.info(f'start id={self.log.id}')
         try:
-            await self.pollsave(self.run_concurrently(True, *next(it)))
-            await self.pollsave(self.run_concurrently(False, *next(it)))
+            await self.pollsave(self.run_concurrently(*next(it), threads=True))
+            await self.pollsave(self.run_concurrently(*next(it)))
             await self.pollsave(self.run_consecutively(*next(it)))
-            await self.pollsave(self.run_concurrently(False, *next(it)))
+            await self.pollsave(self.run_concurrently(*next(it)))
         except* Exception as grp:
             if not self.log.errors:
                 exc = grp.exceptions[-1]
@@ -524,7 +523,7 @@ class PipelineRunner:
         for state in tuple(self.states_active):
             await self.run_stages(state, *stages)
 
-    async def run_concurrently(self, threads: bool, *stages: Stage) -> None:
+    async def run_concurrently(self, *stages: Stage, threads: bool = False) -> None:
         style = 'threads' if threads else 'workers'
         num: int = getattr(self, f'num_{style}')
         if not (
@@ -563,7 +562,7 @@ class PipelineRunner:
         for thread in threads:
             thread.start()
         while (active := sum(thread.is_alive() for thread in threads)):
-            await asyncio.sleep(self.sleepdelay * min(10, active))
+            await asyncio.sleep(self.opts.sleepdelay * min(10, active))
         if excs:
             if len(excs) == 1:
                 raise excs[0] from None
@@ -639,13 +638,14 @@ class PipelineRunner:
         task = asyncio.create_task(coro)
         while not task.done():
             if not await self.savelog():
-                await asyncio.sleep(self.sleepdelay)
+                await asyncio.sleep(self.opts.sleepdelay)
         return await task
 
     async def savelog(self, *, now: bool = False) -> bool:
-        if not now and time.monotonic() - self.lastsaved < self.saveinterval:
+        t = time.monotonic()
+        if not now and t - self.lastsaved < self.opts.saveinterval:
             return False
-        self.lastsaved = time.monotonic()
+        self.lastsaved = t
         self.log.sync()
         if self.opts.stat_only:
             return False

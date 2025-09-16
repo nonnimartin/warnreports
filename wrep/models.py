@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from collections import deque
 import dataclasses
 import logging
 import re
+from collections import deque
 from datetime import datetime, timezone
 from typing import Annotated, Any, Callable, ClassVar, Iterator, Literal, Self
 from uuid import UUID, uuid4, uuid5
@@ -12,8 +12,8 @@ from zoneinfo import ZoneInfo
 from annotated_types import Gt, Le, Lt
 from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, HttpUrl,
                       NonNegativeFloat, NonNegativeInt, PlainSerializer,
-                      PositiveInt, StringConstraints, TypeAdapter,
-                      field_serializer, model_validator)
+                      PositiveFloat, PositiveInt, StringConstraints,
+                      TypeAdapter, field_serializer, model_validator)
 from pydantic_core import ValidationError as ValidationError
 
 from . import Stage, settings, utils
@@ -277,6 +277,14 @@ class PipelineBatchOpts(DataModel):
         description=(
             'Max threads, applicable only when concurrent is specified, '
             'default ETL_DEFAULT_THREADS ({field.default})'))
+    saveinterval: PositiveFloat = Field(
+        default=1.0,
+        exclude=True,
+        description='How often to update PipelineLog in seconds')
+    sleepdelay: PositiveFloat = Field(
+        default=0.005,
+        exclude=True,
+        description='Polling sleep interval in seconds')
 
     @property
     def fail(self) -> bool:
@@ -305,7 +313,7 @@ class PipelineOpts(ScraperOpts):
         default=False,
         description='Rollback database transactions (dry run)')
     load_per_tick: PositiveInt = Field(
-        default=100,
+        default=20,
         exclude=True,
         description='How frequently to asyncio.sleep(0) during load stage')
     normlog: deque[tuple[str, str]] = Field(
