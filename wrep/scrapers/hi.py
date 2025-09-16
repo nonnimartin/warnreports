@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 
 from .. import utils
 from ..tools import strs
+from .base import PatchUtils as BasePatchUtils
 from .base import Scraper
 
 __all__ = ['HI']
@@ -31,15 +32,9 @@ class HI(Scraper):
             pass
         return super().get_patches()|dict(utils=PatchUtils(self), sleep=sleep)
 
-class PatchUtils:
+class PatchUtils(BasePatchUtils):
 
-    def __init__(self, scraper: HI) -> None:
-        self.scraper = scraper
-        from warn import utils as wutils
-        self.delegate = wutils
-        self.write_dict_rows_to_csv = self.delegate.write_dict_rows_to_csv
-
-    def get_url(self, url: str) -> str:
+    def get_url(self, url: str) -> SimpleNamespace:
         scraper = self.scraper
         leaf = url.rstrip('/').rsplit('/', 1)[1]
         try:
@@ -52,9 +47,9 @@ class PatchUtils:
             now = utils.now(tz=scraper.tz)
             isrecent = year >= now.year or year == now.year - 1 and now.month <= 6
             usecache = not isrecent
-        scraper.logger.debug(f'{usecache=} {key=}')
+        self.logger.debug(f'{usecache=} {key=}')
         if usecache and scraper.cache.exists(key):
-            scraper.logger.debug(f'Reading from cache')
+            self.logger.debug(f'Reading from cache')
             text = scraper.cache.read(key)
         else:
             if scraper.metrics['request_count']:
@@ -62,6 +57,3 @@ class PatchUtils:
             text = scraper.session.get(url).text
             scraper.cache.write(key, text)
         return SimpleNamespace(text=text)
-
-    def __getattr__(self, name: str):
-        return self.__dict__.setdefault(name, getattr(self.delegate, name))

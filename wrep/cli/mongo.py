@@ -32,7 +32,7 @@ class ControlBase[O: AppCommandOpts](AppCommand[O]):
 class ControlGet(ControlBase[AppCommandOpts]):
     'Get the mongo control doc for {cls.dbname_key}'
 
-    async def run(self):
+    async def run(self) -> None:
         doc = await self.client.get_doc()
         print(json.dumps(doc, indent=2, default=str))
 
@@ -41,13 +41,13 @@ class ControlSet(ControlBase[SetOpts]):
     options_class: ClassVar = SetOpts
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser) -> None:
         arg = parser.add_argument
         arg('--ttl')
         arg('name')
         super().add_arguments(parser)
 
-    async def run(self):
+    async def run(self) -> None:
         doc = await self.client.set_dbname(self.opts.name, ttl=self.opts.ttl)
         print(json.dumps(doc, indent=2, default=str))
 
@@ -56,11 +56,11 @@ class ControlTtl(ControlBase[TtlOpts]):
     options_class: ClassVar = TtlOpts
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser) -> None:
         parser.add_argument('ttl')
         super().add_arguments(parser)
 
-    async def run(self):
+    async def run(self) -> None:
         doc = await self.client.set_ttl(self.opts.ttl)
         print(json.dumps(doc, indent=2, default=str))
 
@@ -68,7 +68,7 @@ def makecommands(clientpath: str, dbname_key: str) -> dict[str, str|type[Control
     modname, attr = clientpath.rsplit('.', 1)
     modname = __package__.rsplit('.', 1)[0] + f'.{modname}'
 
-    def getclient(_):
+    def getclient(_) -> MongoClient:
         import importlib
         mod = importlib.import_module(modname)
         return getattr(mod, attr)
@@ -82,5 +82,5 @@ def makecommands(clientpath: str, dbname_key: str) -> dict[str, str|type[Control
             name: type(cls.__name__, (cls,), ns)
             for name, cls in [
                 ('get', ControlGet),
-                ('set', ControlGet),
+                ('set', ControlSet),
                 ('ttl', ControlTtl)]})

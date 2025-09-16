@@ -36,7 +36,7 @@ class Auto(AppCommand[AutoOpts]):
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument('--message', '-m', default=...,)
+        parser.add_argument('--message', '-m')
         super().add_arguments(parser)
 
     def run(self):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import dataclasses
 import logging
 import re
@@ -251,9 +252,11 @@ class PipelineBatchOpts(DataModel):
     stat_only: bool = Field(
         default=False,
         description='Only show stats, do not run')
-    fail: bool = Field(
-        default=True,
-        description='Fail on error')
+    nofail: bool = Field(
+        default=False,
+        description=(
+            'Do not fail on error. Instead, log an exception, '
+            'and skip subsequent stages for the state'))
     incremental: bool = Field(
         default=False,
         description=(
@@ -268,12 +271,16 @@ class PipelineBatchOpts(DataModel):
         default=settings.ETL_DEFAULT_WORKERS,
         description=(
             'Max workers, applicable only when concurrent is specified, '
-            f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
+            'default ETL_DEFAULT_WORKERS ({field.default})'))
     max_threads: NonNegativeInt = Field(
         default=settings.ETL_DEFAULT_THREADS,
         description=(
             'Max threads, applicable only when concurrent is specified, '
-            f'default ETL_DEFAULT_THREADS ({settings.ETL_DEFAULT_THREADS})'))
+            'default ETL_DEFAULT_THREADS ({field.default})'))
+
+    @property
+    def fail(self) -> bool:
+        return not self.nofail
 
     @model_validator(mode='after')
     def check_flags(self) -> Self:
@@ -288,7 +295,7 @@ class ScraperOpts(DataModel):
         default=settings.SELENIUM_MAX_PROCS,
         description=(
             'Max number of concurrent web drivers if applicable, '
-            f'default SELENIUM_MAX_PROCS ({settings.SELENIUM_MAX_PROCS})'))
+            'default SELENIUM_MAX_PROCS ({field.default})'))
 
 class PipelineOpts(ScraperOpts):
     lazy: bool = Field(
@@ -299,7 +306,11 @@ class PipelineOpts(ScraperOpts):
         description='Rollback database transactions (dry run)')
     load_per_tick: PositiveInt = Field(
         default=100,
+        exclude=True,
         description='How frequently to asyncio.sleep(0) during load stage')
+    normlog: deque[tuple[str, str]] = Field(
+        default_factory=lambda: deque(maxlen=0),
+        exclude=True)
 
 type UniqueList[T] = Annotated[
     list[T],

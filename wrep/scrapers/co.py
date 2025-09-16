@@ -226,17 +226,3 @@ class CO(Scraper):
             index[rowkey][cachekey] = url
         self.cache.write_json('index.json', index, indent=2)
         return dict(index)
-
-    def get_patches(self) -> dict[str, Any]:
-        return super().get_patches()|dict(utils=PatchUtils(self))
-
-class PatchUtils:
-
-    def __init__(self, scraper: CO) -> None:
-        self.get_url = scraper.session.get
-        from warn import utils as wutils
-        self.delegate = wutils
-        self.write_dict_rows_to_csv = self.delegate.write_dict_rows_to_csv
-
-    def __getattr__(self, name: str):
-        return self.__dict__.setdefault(name, getattr(self.delegate, name))

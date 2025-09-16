@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from re import compile as _r
+from re import compile as r
 from typing import Callable, Iterable
 
 type StrPat = str|re.Pattern
@@ -9,56 +9,74 @@ type Norms = dict[StrPat, str|Callable[[re.Match], str]]
 type SpecFunc = Callable[[str], StrPat|Iterable[StrPat]]
 type SrchSpec = StrPat|SpecFunc
 type NormDefs = dict[str, SrchSpec|list[SrchSpec]|tuple[SrchSpec, ...]]
-PAT_NONALPHA = _r(r'[^a-z\d\s]')
-PAT_SPACES = _r(r'\s+')
+PAT_NONALPHA = r(r'[^a-z\d\s]')
+PAT_SPACES = r(r'\s+')
 
-def _sw(s: str, *strings: str) -> re.Pattern:
+def sw(s: str, *strings: str, flags=re.I) -> re.Pattern:
     "Build a 'starts with' case-insensitive pattern"
     strings = (s, *strings)
-    return _r(f'^({'|'.join(map(re.escape, strings))}).*', re.I)
+    return r(f'^({'|'.join(map(re.escape, strings))}).*', flags)
 
 COMPANY_NAMES: NormDefs = {
-    '3M': _sw('3M '),
-    '99 Cents Only': _sw,
+    '3M': sw('3M '),
+    '99 Cents Only': sw,
+    'A&B Beverage': sw,
+    'A.C. Moore': sw,
     'A. O. Smith': [
-        _r(r'^a\.\s*o\.\s+smith(\s.*|$)', re.I),
+        r(r'^a\.\s*o\.\s+smith(\s.*|$)', re.I),
     ],
-    'ABM Aviation': _sw,
-    'Advance Stores Company': _sw,
+    'ABM Aviation': sw,
+    'ACCO': [
+        sw('ACCO', flags=re.NOFLAG),
+    ],
+    'ADC Telecommunications': sw,
+    'ADESA': sw,
+    'Advance Stores Company': sw,
     'Advanced Micro Devices': [
         'Advanced Micro Devices (AMD)',
         'Advanced Micro Devices Inc',
         'AMD Inc',
     ],
+    'Adventist Health': [
+        sw,
+        r(r'^.*dba Adventist Health.*', re.I),
+    ],
     'Air Wisconsin Airlines': [
         'Air Wisconsin',
     ],
     "Albertson's": [
-        _r(r'^albertsons.*', re.I),
+        r(r'^albertsons.*', re.I),
     ],
-    'Alorica': _sw,
+    'Alorica': sw,
+    'Allied Waste': sw,
+    'Alpha Natural Resources': sw,
     'Amazon': [
-        _sw('Amazon.com'),
-        _r(r'^Amazon.[A-Z]{3}.*'),
+        sw('Amazon.com'),
+        r(r'^Amazon.[A-Z]{3}.*'),
     ],
     'Amentum': [
-        _sw('Amentum', 'PAE Shared Services'),
+        sw('Amentum', 'PAE Shared Services'),
     ],
-    'Ameri-Kleen': _sw,
-    'Applied Materials': _sw,
-    'Aramark': [
-        _r(r'^Aramark (-|\(|@|at )', re.I),
-    ],
-    'Aspen Sports': _sw,
-    'AT&T': _sw,
-    'Avis Budget': _sw,
-    'BAE Systems': _sw,
-    'Bank of America': _sw,
+    'Ameri-Kleen': sw,
+    "America's Auto Auction": sw,
+    'American Apparel': sw,
+    'AmeriCold': sw,
+    'AmeriHealth': sw,
+    'Ames Department Stores': sw,
+    'APAC Customer Service': sw,
+    'APL Logistics': sw,
+    'Applied Materials': sw,
+    'Aramark': sw,
+    'Aspen Sports': sw,
+    'AT&T': sw('AT&T', 'AT & T'),
+    'Avis Budget': sw,
+    'BAE Systems': sw,
+    'Bank of America': sw,
     'BH Security': [
-        _sw('BH Security', 'Brinks Home'),
+        sw('BH Security', 'Brinks Home'),
     ],
     'Big Lots': [
-        _r(r'^Big Lots(,?\s+.*)?$', re.I),
+        r(r'^Big Lots(,?\s+.*)?$', re.I),
     ],
     'Boeing': [
         'Boeing Co',
@@ -70,207 +88,230 @@ COMPANY_NAMES: NormDefs = {
     'Carbon Health': [
         'Carbon Health Medical Group',
     ],
-    'Caterpillar': _sw,
-    'Cisco Systems': _sw('Cisco'),
+    'Caterpillar': sw,
+    'Chep Services': sw,
+    'Cisco Systems': sw('Cisco'),
     'Concentrix': [
-        _sw('Concentrix', 'Convergys'),
+        sw('Concentrix', 'Convergys'),
     ],
     'Constellis': [
-        _sw('Centerra', 'Constellis', 'Triple Canopy'),
+        sw('Centerra', 'Constellis', 'Triple Canopy'),
     ],
     'CVS': [
-        _r(r'^cvs\s.*', re.I),
+        r(r'^cvs\s.*', re.I),
     ],
-    'Danimer Scientific': _sw,
+    'Danimer Scientific': sw,
     'DHL': [
-        _r(r'^.*DHL.*'),
+        r(r'^.*DHL.*'),
     ],
-    'Dish Network': _sw,
-    'Dollar Express': _sw,
-    'Eastman Kodak': _sw,
-    'Enterprise Holdings': _sw,
+    'Dish Network': sw,
+    'Dollar Express': sw,
+    'Eastman Kodak': sw,
+    'Enterprise Holdings': sw,
     'Ericsson Inc': [
-        _r(r'^Ericsson,? Inc.*', re.I),
+        r(r'^Ericsson,? Inc.*', re.I),
     ],
     'Federal Express': [
-        _sw('Federal Express', 'FedEx'),
+        sw('Federal Express', 'FedEx'),
     ],
-    'First Student': _sw,
-    'First Transit': _sw,
+    'First Student': sw,
+    'First Transit': sw,
     'Forever 21': [
-        _sw('Forever 21', 'F21'),
+        sw('Forever 21', 'F21'),
     ],
-    'G2 Secure Staff': _sw,
+    'G2 Secure Staff': sw,
     'GCA Education Services': [
-        _r(r'^(ABM/)?GCA Education.*$', re.I),
+        r(r'^(ABM/)?GCA Education.*$', re.I),
     ],
-    'GDI Services': _sw,
+    'GDI Services': sw,
     'Goodwill': [
-        _r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
+        r(r'^Goodwill (Industries| of |Retail|Outlet|Store).*', re.I),
     ],
+    'GXO Logistics': sw,
     'Hard Rock Cafe': [
-        _r(r'^Hard Rock (Cafe|Café|International|Hotel).*', re.I),
+        r(r'^Hard Rock (Cafe|Café|International|Hotel).*', re.I),
     ],
     'Hawker Beechcraft': [
-        _r(r'^Hawker Beechcraft Corp.*', re.I),
+        r(r'^Hawker Beechcraft Corp.*', re.I),
     ],
+    'HMS Host': sw,
     'Hostess Brands': [
-        _r(r'^Hostess( Brand.*)?$', re.I),
+        r(r'^Hostess( Brand.*)?$', re.I),
     ],
-    'HyAxiom': _sw,
+    'HyAxiom': sw,
+    'IG Design Group': sw,
     'Intel Corporation': [
-        _r(r'^Intel( Corp.*)?$', re.I),
+        r(r'^Intel( Corp.*)?$', re.I),
     ],
     'International Paper': [
-        _r(r'^(The )?International Paper.*', re.I),
+        r(r'^(The )?International Paper.*', re.I),
     ],
     'Jabil': [
-        _r(r'^(Nypro .*)?Jabil( .*)?$', re.I),
+        r(r'^(Nypro .*)?Jabil( .*)?$', re.I),
     ],
-    'Jack Cooper': _sw,
+    'Jack Cooper': sw,
+    'J.B. Hunt': sw,
     'JCPenney': [
-        _r(r'^.*JCPenney.*$', re.I),
+        r(r'^.*JCPenney.*$', re.I),
     ],
-    'John Deere': _sw,
-    'Kaiser Foundation': _sw,
+    'JP Morgan Chase': sw('JP Morgan Chase', 'JPMorgan Chase'),
+    'John Deere': sw,
+    'Hormel Foods': [
+        r(r'^(.*subsidiary.*)?Hormel Foods.*', re.I),
+    ],
+    'Kaiser Foundation': sw,
     'Kmart': [
         'KMART CORPORATION',
         'Kmart Store',
     ],
-    "Kohl's": _sw,
-    'LEGOLAND': _sw,
+    "Kohl's": sw,
+    'LEGOLAND': sw,
     'Levi Strauss & Company': [
-        _r(r'^.*Levi Strauss & Co.*$'),
+        r(r'^.*Levi Strauss & Co.*$'),
     ],
     'Leviton Manufacturing Company': [
-        _r(r'^Leviton (Manufacturing|Mfg).*', re.I),
+        r(r'^Leviton (Manufacturing|Mfg).*', re.I),
     ],
     'Levy Premium Foodservice': [
-        _r(r'^Levy Premium Food\s*service.*', re.I),
+        r(r'^Levy Premium Food\s*service.*', re.I),
     ],
     'Lockheed Martin': [
-        _r(r'^Lockheed (Martin|Aeronautical).*', re.I),
+        r(r'^Lockheed (Martin|Aeronautical).*', re.I),
     ],
-    'LogRhythm': _sw,
+    'LogRhythm': sw,
     'Lord & Taylor': [
-        _r(r'^Lord\s*(&|\+|and)\s*(Taylor|Tyalor)(\s.*|$)', re.I),
+        r(r'^Lord\s*(&|\+|and)\s*(Taylor|Tyalor)(\s.*|$)', re.I),
     ],
-    'LSC Communications': _sw,
-    'LTF Club Management Company': _sw('LTF Club Management'),
-    "Macy's Systems": _sw,
-    "Macy's": _sw,
-    'ManpowerGroup': _sw,
-    'Marvell Semiconductor': _sw,
-    'Meta Platforms': _sw,
-    'Microsoft': _sw,
-    'MVM': _sw,
+    'LSC Communications': sw,
+    'LTF Club Management Company': sw('LTF Club Management'),
+    "Macy's Systems": sw,
+    "Macy's": sw,
+    'ManpowerGroup': sw,
+    'Marvell Semiconductor': sw,
+    'Merck': sw,
+    'Meta Platforms': sw,
+    'Microsoft': sw,
+    'MVM': sw,
+    'NeueHouse': sw,
+    'New York Life Insurance': sw('New York Life'),
     'Nordstrom': [
-        _r(r'^Nordstrom.*(Anchorage|Center|Inc|Place|Plaza|Rack|Stonestown|Store|Waterside).*', re.I),
-        _r(r'^(Dadeland|Lloyd Center)?\s*Nordstrom$', re.I),
+        r(r'^Nordstrom.*(Anchorage|Center|Inc|Place|Plaza|Rack|Stonestown|Store|Waterside).*', re.I),
+        r(r'^(Dadeland|Lloyd Center)?\s*Nordstrom$', re.I),
     ],
-    'Novartis Pharmaceuticals': _sw,
+    'Novartis Pharmaceuticals': sw,
+    'Owens Corning': sw,
     "P.F. Chang's": [
-        _r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
+        r(r'^P[.\s]*F[.\s]*Chang.*', re.I),
     ],
-    'Packers Sanitation Services': _sw('Packers Sanitation'),
-    'PepsiCo': _sw,
-    'Pioneer Hi-Bred': _sw,
+    'Packers Sanitation Services': sw('Packers Sanitation'),
+    'Penske Logistics': sw,
+    'PepsiCo': sw,
+    'Perdue Foods': sw,
+    'Pfizer': sw,
+    'Pioneer Hi-Bred': sw,
     'Pitney Bowes': [
-        _r(r'^(Newgistics.*)?Pitney Bowes.*', re.I),
+        r(r'^(Newgistics.*)?Pitney Bowes.*', re.I),
     ],
-    'Qualcomm': _sw,
-    'Radisson Hotel': _sw('Radisson '),
-    'Ryder': _sw,
+    'Providence Health': sw,
+    'Qualcomm': sw,
+    'Radisson Hotel': sw('Radisson '),
+    'Ryder': sw,
     'Safeway': [
-        _r(r'^Safeway(,?\s+Inc.*)?$', re.I),
+        r(r'^Safeway(,?\s+(Inc|Store).*)?$', re.I),
     ],
+    'Salesforce': sw,
     'Sears': [
-        _r(r'^Sears.*Roebuck.*', re.I),
+        r(r'^Sears.*Roebuck.*', re.I),
     ],
     'Sears Holdings': [
-        _r(r'^Sears .*Holdings.*', re.I),
+        r(r'^Sears .*Holdings.*', re.I),
     ],
-    'Shaw Industries': _sw,
+    'Shaw Industries': sw,
     'Sherwood Food Distributors': [
-        _sw,
-        _r(r'^Harvest (Sherwood|Meat).*', re.I),
+        sw,
+        r(r'^Harvest (Sherwood|Meat).*', re.I),
     ],
     'Sikorsky': [
-        _r(r'^Sikorsky(,?\s.*)?$', re.I),
+        r(r'^Sikorsky(,?\s.*)?$', re.I),
     ],
-    'Silgan Containers': _sw,
+    'Silgan Containers': sw,
+    'Six Flags Entertainment': sw('Six Flags'),
     'Sky Chefs': [
-        _r(r'^(LSG.*)?Sky Chefs.*', re.I),
+        r(r'^(LSG.*)?Sky Chefs.*', re.I),
     ],
     'Sodexo': [
-        _r(r'^Sodexo(,?\s+Inc.*)?$', re.I),
+        r(r'^Sodexo(,?\s+Inc.*)?$', re.I),
     ],
     'Solo Cup': [
         'Solo Cup Company',
         'Solo Cup Operating Corporation',
     ],
     'Southwest Airlines': [
-        _sw('Southwest - Dallas'),
+        sw('Southwest - Dallas'),
     ],
-    'Sprint': _sw,
+    'Sprint': sw,
     'Staples': [
         'Staples the Office Superstore LLC',
         'Staples Inc',
     ],
     'State Farm Insurance': [
-        _r(r'^state farm mutual.* insurance.*', re.I),
+        r(r'^state farm mutual.* insurance.*', re.I),
     ],
-    'Sun Microsystems': _sw,
+    'Sun Microsystems': sw,
     'SunPower': [
-        _r(r'^SunPower( Corp.*)?$', re.I),
+        r(r'^SunPower( Corp.*)?$', re.I),
     ],
-    'Syzygy Plasmonics': _sw('Syzygy'),
+    'Syzygy Plasmonics': sw('Syzygy'),
     'Symantec': [
-        _r(r'^Symantec( -.*|Corp.*)?$', re.I),
+        r(r'^Symantec( -.*|Corp.*)?$', re.I),
     ],
-    'T-Mobile': _sw,
-    'Telluride Sports': _sw,
+    'T-Mobile': sw,
+    'Telluride Sports': sw,
     'Tesla': [
         'Tesla Inc',
     ],
     'The Home Depot': [
-        _sw('The Home Depot', 'Home Depot'),
+        sw('The Home Depot', 'Home Depot'),
     ],
-    'The North Face': _sw,
-    'Thermo Fisher Scientific': _sw('Thermo Fisher'),
-    'Transamerica Insurance': _sw('Transamerica Life'),
-    'Transdev Services': _sw,
+    'The North Face': sw,
+    'Thermo Fisher Scientific': sw('Thermo Fisher'),
+    'TouchPoint Support Services': sw,
+    'Transamerica Insurance': sw('Transamerica Life'),
+    'Transdev Services': sw,
     'True Value': [
-        _sw,
+        sw,
         'Ziegler True Value',
     ],
     'Tyson Foods': [
-        _r(r'^(Tyson|Keystone) Food.*', re.I),
+        r(r'^(Tyson|Keystone) Food.*', re.I),
     ],
     'United Parcel Service': [
-        _sw,
-        _r(r'^UPS(,?\s.*)?$'),
+        sw,
+        r(r'^UPS(,?\s.*)?$'),
     ],
     'United Retail Service': [
-        _r(r'^United Retail Service(, LLC)? -.*', re.I),
+        sw,
+        'Urs-united Retail Service',
     ],
-    'US Foods': _r(r'^US Foods(,? .*)?$'),
-    'Visionworks': _sw,
+    'US Foods': r(r'^US Foods(,? .*)?$'),
+    'Virginia Mason': sw,
+    'Visionworks': sw,
     'Walgreens': [
-        _sw('Walgreens', 'Walgreen Co', 'Walgreen Lab'),
+        sw('Walgreens', 'Walgreen Co', 'Walgreen Lab'),
     ],
-    'Walmart': _sw,
-    'Wells Fargo': [
-        'Wells Fargo Company',
-        'Wells Fargo Co',
-        'Wells Fargo and Co',
-        'Wells Fargo Company',
-    ],
+    'Walmart': sw,
+    'Wells Fargo': sw,
+    # 'Wells Fargo': [
+    #     'Wells Fargo Company',
+    #     'Wells Fargo Co',
+    #     'Wells Fargo and Co',
+    #     'Wells Fargo Company',
+    # ],
     'Yellow Corporation': [
-        _r(r'^Yellow (Corp|Freight|Transportation|Trucking).*', re.I),
-        _r(r'^YRC .*Freight.*', re.I),
+        r(r'^Yellow (Corp|Freight|Transportation|Trucking).*', re.I),
+        r(r'^YRC .*Freight.*', re.I),
     ],
-    'Zillow Group': _sw('Zillow'),
+    'Zillow Group': sw('Zillow'),
 }
 AIRLINE_COMPANIES = [
     'United',
@@ -300,9 +341,9 @@ INSURANCE_COMPANIES = [
 ]
 
 COMPANY_NAME_NORMS: Norms = {
-    _r(r'^('f'{'|'.join(AIRLINE_COMPANIES)}'r') airlines.*', re.I):
+    r(r'^('f'{'|'.join(AIRLINE_COMPANIES)}'r') airlines.*', re.I):
         lambda m: f'{m.group(1).title()} Airlines',
-    _r(r'^('f'{'|'.join(INSURANCE_COMPANIES)}'r')( insurance.*)?$', re.I):
+    r(r'^('f'{'|'.join(INSURANCE_COMPANIES)}'r')( insurance.*)?$', re.I):
         lambda m: f'{m.group(1).title()} Insurance',
 }
 

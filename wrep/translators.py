@@ -32,6 +32,7 @@ ASCII_TRANS = {
     0x0093: '',
     0x0095: ' ',
     0x00a0: ' ',
+    0x00bf: '',
     0x200b: '',
     0x2013: '-',
     0x2019: "'",
@@ -41,7 +42,7 @@ ASCII_TRANS = {
 
 logger = logging.getLogger(__name__)
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True, slots=True)
 class TranslateInfo:
     data: Mapping[str, str]
     memo: dict = dataclasses.field(default_factory=dict)
@@ -49,14 +50,14 @@ class TranslateInfo:
 def varcall[T](func: Callable[..., T], *args) -> T:
     return func(*args[:len(inspect.signature(func).parameters)])
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True, slots=True)
 class TranslationFactory:
     session: orm.Session
-    translators: ClassVar[dict[StateCode, type[Translator]]] = {}
+    translators: ClassVar[dict[StateCode, Translator]] = {}
 
     def translate(self, extraction: Extraction|Any) -> Iterable[Translation]:
         extraction: Extraction = Extraction.model_validate(extraction)
-        translator = self.translators[extraction.state]()
+        translator = self.translators[extraction.state]
         # Remove nulls
         data = MapProxy({
             key: value for key, value in extraction.data.items()
@@ -163,7 +164,13 @@ class TranslationFactory:
                 second=0,
                 microsecond=0)
 
-class Translator:
+class TranslatorMeta(type):
+
+    @classmethod
+    def __prepare__(cls, name, bases, **kw):
+        return dict(__slots__=())
+
+class Translator(metaclass=TranslatorMeta):
     fieldsmap: ClassVar[Mapping[str, list[str]]] = dict(
         company=[],
         reported=[],
@@ -176,9 +183,6 @@ class Translator:
         report_id=[],
         naics=[],
         artifacts=[])
-    default_url: ClassVar[str|None] = None
-    values_hash_exclude: ClassVar[list[str]] = []
-    report_id_extra: ClassVar[list[str]] = []
     rewrites: ClassVar[dict[str, list[strs.SrchRepl]]] = dict(
         employees=[
             (_r(r'(\d),(\d)'), r'\1\2'), # remove comma separators
@@ -186,6 +190,12 @@ class Translator:
             (_r(r'\d{1,2}/\d{2,4}'), ''), # remove dates M/Y
             (_r(r'\d{4}-\d{2}-\d{2}'), ''), # remove dates YYYY-MM-DD
         ])
+    default_url: ClassVar[str|None] = None
+    values_hash_exclude: ClassVar[list[str]] = [
+        'artifacts_json',
+        'row_key',
+        *Extraction.stat_exclude_fields]
+    report_id_extra: ClassVar[list[str]] = []
 
     def individuate(self, data: Mapping[str, str]) -> Iterable[Mapping[str, str]]:
         """
@@ -293,17 +303,25 @@ class Translator:
             yield from filter(self.parse_date, value.split())
 
     def __init_subclass__(cls) -> None:
-        cls.rewrites = Translator.rewrites | cls.rewrites
+        cls.fieldsmap = Translator.fieldsmap|cls.fieldsmap
+        for field, headers in cls.fieldsmap.items():
+            cls.fieldsmap[field] = list(headers)
+        cls.rewrites = Translator.rewrites|cls.rewrites
+        for field, rewrites in Translator.rewrites.items():
+            cls.rewrites[field] = [*rewrites, *cls.rewrites[field]]
         cls.values_hash_exclude = sorted({
-            'artifacts_json',
-            'row_key',
-            *cls.values_hash_exclude,
-            *Extraction.stat_exclude_fields})
-        if len(state := cls.__name__.upper()) == 2:
+            *Translator.values_hash_exclude,
+            *cls.values_hash_exclude})
+        cls.report_id_extra = list(cls.report_id_extra)
+        try:
+            state = ValidStateCode(cls.__name__)
+        except ValueError:
+            pass
+        else:
             cls.state = state
-            cls.tz = zoneinfos[cls.state]
+            cls.tz = zoneinfos[state]
             cls.ns = uuid.uuid5(ReportData.NS, state)
-            TranslationFactory.translators[state] = cls
+            TranslationFactory.translators[state] = cls()
 
 # 1/1/2000-1/2/2000 -> 1/1/2000 - 1/2/2000
 REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')
@@ -311,7 +329,8 @@ REWRITE_COMPACT_DATERANGE = (_r(r'(/\d+)-(\d+/)'), r'\1 - \2')
 # // -> /
 REWRITE_DOUBLE_SLASH = (_r('//'), '/')
 
-REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]))
+# After unescaping, need to resanitize
+REWRITE_UNESCAPE_HTML = (_r(r'.*'), lambda m: html_unescape(m[0]).translate(ASCII_TRANS))
 
 def jobcenter_fieldsmap() -> dict[str, list[str]]:
     return dict(
@@ -908,6 +927,9 @@ class LA(Translator):
         naics=[],
         artifacts=[])
     rewrites = dict(
+        company=[
+            (_r(r'^\(\*\)\s*'), ''),
+        ],
         starting=[
             REWRITE_COMPACT_DATERANGE,
             ('6/31/09', '2009-06-30'),
@@ -950,7 +972,6 @@ class MD(Translator):
             ('5/62011', '2011-05-06'),
         ],
         employees=[
-            *Translator.rewrites['employees'],
             (_r(r'December 2013$'), ''),
         ],
         action=[
@@ -1123,6 +1144,8 @@ class NY(Translator):
             'Industry Type'],
         artifacts=['artifacts_json'])
     rewrites = dict(
+        company=[
+        ],
         naics=[
             ('79', ''),
         ],

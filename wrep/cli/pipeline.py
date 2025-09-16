@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict, deque
 from pathlib import Path
 from textwrap import dedent
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import Field
 
 from .. import Stage, settings
-from ..models import *
+from ..models import PipelineBatchOpts, PipelineOpts
 from .base import AppCommand, AppCommandOpts
 from .validators import ALLSTATES, StagesOpt, StatesOpt
 
@@ -19,13 +20,20 @@ class PipelineCommandOpts(AppCommandOpts, PipelineBatchOpts, PipelineOpts):
     states: StatesOpt
     etl_dbname: str|None = Field(
         default=None,
+        exclude=True,
         description=f'Alternate mongo etl db name')
     search_dbname: str|None = Field(
         default=None,
+        exclude=True,
         description=f'Alternate mongo search db name')
     idfile: Path|None = Field(
         default=None,
+        exclude=True,
         description='Write the pipeline log ID to the given file')
+    normfile: Path|None = Field(
+        default=None,
+        exclude=True,
+        description='Write company name normalizations to the given file')
 
 class Command(AppCommand[PipelineCommandOpts]):
     options_class: ClassVar = PipelineCommandOpts
@@ -70,47 +78,66 @@ class Command(AppCommand[PipelineCommandOpts]):
     {allstates}""")
 
     @classmethod
-    def parser_fmtargs(cls, parser):
+    def parser_fmtargs(cls, parser) -> dict[str, Any]:
         return super().parser_fmtargs(parser)|dict(
             allstages=', '.join(Stage),
             allstates=' '.join(ALLSTATES))
 
     @classmethod
-    def add_arguments(cls, parser):
+    def add_arguments(cls, parser) -> None:
         arg = parser.add_argument
         arg('stages', metavar='<stages>')
         arg('states', nargs='*', metavar='state')
         arg('--clean', '-c')
         arg('--incremental', '-i')
         arg('--concurrent', '-t')
-        arg('--nofail', '-n',
-            action='store_false',
-            dest='fail',
-            help=(
-                'Do not fail on error. Instead, log an exception, '
-                'and skip subsequent stages for the state'))
+        arg('--nofail', '-n')
         arg('--clean-only', '-x')
         arg('--stat-only', '-s')
         arg('--search-dbname', '-d', metavar='<db>')
         arg('--etl-dbname', '-b', metavar='<db>')
-        arg('--max-workers', '-w', metavar='<n>', default=...)
-        arg('--max-threads', '-T', metavar='<n>', default=...)
-        arg('--selenium-max-procs', '-E', metavar='<n>', default=...)
+        arg('--max-workers', '-w', metavar='<n>')
+        arg('--max-threads', '-T', metavar='<n>')
+        arg('--selenium-max-procs', '-E', metavar='<n>')
         arg('--rollback')
         arg('--idfile', metavar='<file>')
+        arg('--normfile', metavar='<file>')
         super().add_arguments(parser)
 
-    def setup(self):
+    def setup(self) -> None:
         super().setup()
+        if self.opts.normfile:
+            self.opts.normlog = deque()
         from ..pipeline import PipelineRunner
         self.runner = PipelineRunner(
             **self.opts.model_dump(),
             context={
                 settings.ETL_MONGODB_DBNAME_KEY: self.opts.etl_dbname,
                 settings.SEARCH_MONGODB_DBNAME_KEY: self.opts.search_dbname})
+        self.runner.pipeline_opts.normlog = self.opts.normlog
 
     async def run(self) -> None:
         if self.opts.idfile:
             logger.info(f'Writing pipeline log ID to {self.opts.idfile}')
             self.opts.idfile.write_text(str(self.runner.log.id))
         await self.runner.run()
+        if self.opts.normfile:
+            self.write_normlog()
+
+    def write_normlog(self) -> None:
+        file = self.opts.normfile
+        normlog = self.opts.normlog
+        logger.info(f'Writing {len(normlog)} norms to {file}')
+        norms: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        for canon, raw in normlog:
+            norms[canon][raw] += 1
+        data = {
+            canon: dict(
+                sorted(
+                    norms[canon].items(),
+                    key=lambda x: x[1],
+                    reverse=True))
+            for canon in sorted(norms)}
+        import yaml
+        with file.open('w') as fp:
+            yaml.safe_dump(data, fp, sort_keys=False)

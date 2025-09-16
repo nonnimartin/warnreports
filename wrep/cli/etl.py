@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 class EtlOpts(AppCommandOpts):
     output: Literal['json', 'yaml'] = 'json'
-    etl_dbname: str|None = None
+    etl_dbname: str|None = Field(
+        default=None,
+        description=f'Alternate mongo etl db name')
 
 class OneOpts(EtlOpts):
     id: UUID = Field(description='The tanslation doc id')
@@ -114,9 +116,7 @@ class EtlBaseCommand[O: EtlOpts](AppCommand[O]):
     @classmethod
     def add_arguments(cls, parser: AP) -> None:
         arg = parser.add_argument
-        arg(
-            '--etl-dbname', '-b',
-            help=f'Alternate mongo etl db name')
+        arg('--etl-dbname', '-b')
         arg(
             '--output', '-o',
             choices=cls.output_formats,
@@ -274,8 +274,8 @@ class LogList(LogBase[LogListOpts]):
     @classmethod
     def add_arguments(cls, parser: AP) -> None:
         arg = parser.add_argument
-        arg('--limit', '-l', default=...)
-        arg('--skip', '-s', dest='offset', default=...)
+        arg('--limit', '-l')
+        arg('--skip', '-s', dest='offset')
         super().add_arguments(parser)
 
     async def run(self) -> None:
@@ -307,7 +307,7 @@ class LogShow(LogBase[LogShowOpts]):
         arg = parser.add_argument
         arg('--summary', '-s', choices=(...,))
         arg('--verbose', '-v')
-        arg('--watch', '-w', nargs='?', metavar='interval', default=...)
+        arg('--watch', '-w', nargs='?', metavar='interval')
         arg('id', nargs='?')
         super().add_arguments(parser)
 
@@ -380,7 +380,7 @@ class LogPrune(LogBase[LogPruneOpts]):
 
     @classmethod
     def add_arguments(cls, parser: AP) -> None:
-        parser.add_argument('--maxage', '-m', default=...)
+        parser.add_argument('--maxage', '-m')
         parser.add_argument('--dryrun')
         super().add_arguments(parser)
 

@@ -45,7 +45,7 @@ class Scraper:
             settings.ARTIFACTS_DIR/self.state.lower(),
             self.cache.dir)
         self.metrics = defaultdict(int)
-        self.logger = logging.getLogger(f'{__name__}.{self.state}')
+        self.logger = logging.getLogger(f'{__package__}.{self.state}')
         self.tz = zoneinfos[self.state]
         self.session = self.Session(self)
         self.runner = Runner(self)
@@ -295,6 +295,11 @@ class Runner:
             else:
                 scraper.logger.warning(
                     f'warn scraper has no attribute {name}, skipping runner patch')
+        if 'utils' not in patches and (wutils := getattr(mod, 'utils', None)):
+            patch = PatchUtils(scraper)
+            if wutils is patch.delegate:
+                patches.update(utils=patch)
+                restore.update(utils=wutils)
         for name, value in patches.items():
             scraper.logger.debug(f'Patching {name}')
             setattr(mod, name, value)
@@ -305,6 +310,31 @@ class Runner:
                 scraper.logger.debug(f'Restoring {name}')
                 setattr(mod, name, value)
 
+class PatchUtils:
+
+    def __init__(self, scraper: Scraper) -> None:
+        self.scraper = scraper
+        self.logger = scraper.logger
+        from warn import utils as wutils
+        self.delegate = wutils
+
+    def save_if_good_url(self, file: Path, url: str, **kwargs) -> tuple[bool, bytes]:
+        file.parent.mkdir(parents=True, exist_ok=True)
+        rep: requests.Response = self.get_url(url, check=False, **kwargs)
+        if not rep.ok:
+            self.logger.error(f'URL {url} fetch failed with {rep.status_code}')
+            content = False
+        else:
+            with file.open('wb') as fp:
+                fp.write(rep.content)
+                content = rep.content
+        return rep.ok, content
+
+    def get_url(self, url: str, user_agent=None, session=None, **kw) -> requests.Response:
+        return self.scraper.session.get(url, **kw)
+
+    def __getattr__(self, name: str):
+        return self.__dict__.setdefault(name, getattr(self.delegate, name))
 
 class JobCenterSiteProxy:
     """

@@ -163,21 +163,3 @@ class TN(Scraper):
             index[noticeid][cachekey] = url
         self.cache.write_json('index.json', index, indent=2)
         return dict(index)
-
-    # async def _scrape(self):
-    #     from warn.scrapers import tn
-    #     from warn import utils as wutils
-    #     class fakeutils:
-    #         @staticmethod
-    #         def get_url(url: str):
-    #             rep = self.session.get(url)
-    #             rep.raise_for_status()
-    #             return rep
-    #         @staticmethod
-    #         def __getattr__(name):
-    #             return getattr(wutils, name)
-    #     tn.utils = fakeutils()
-    #     try:
-    #         await super().scrape()
-    #     finally:
-    #         tn.utils = wutils

@@ -125,6 +125,8 @@ class GA(Scraper):
     def extract(self):
         index: dict = self.cache.read_json('index.json')
         artifacts = self.cache.read_json('artifacts.json')
+        todo = set(artifacts)
+
         def readrecords(it: Iterable[list[str]]):
             headers = next(it) + self.extra_headers
             fillrow = [''] * len(self.extra_headers)
@@ -135,8 +137,11 @@ class GA(Scraper):
                     fill[:2] = index[idkey]
                 if idkey in artifacts:
                     fill[2] = json.dumps(artifacts[idkey])
+                    todo.discard(idkey)
                 values.extend(fill)
                 yield dict(zip(headers, values))
+
         with self.runner.file.open() as file:
             yield readrecords(csv.reader(file))
-            
+        for idkey in todo:
+            self.logger.warning(f'Unassociated artifact {idkey}')
