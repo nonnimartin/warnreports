@@ -1,64 +1,92 @@
 from __future__ import annotations
 
+import enum
 import json
 import logging
+from contextlib import asynccontextmanager
 from typing import Any, ClassVar
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
-from .. import search
-from .base import AppCommand, BaseCommand, AppCommandOpts
-from .mongo import ClientControlCommand
+from .. import settings
+from . import mongo
+from .base import AppCommand, AppCommandOpts
 
 logger = logging.getLogger(__name__)
 
-class SearchCommandOpts(AppCommandOpts):
+class CollectionName(enum.StrEnum):
+    reports = 'reports'
+    companies = 'companies'
+    artifacts = 'artifacts'
+    naics = 'naics'
+    states = 'states'
+
+    def defn(self):
+        from ..search import mapped_collections
+        return mapped_collections[self]
+
+class SearchOpts(AppCommandOpts):
     dbname: str|None = Field(
         default=None,
         description=f'Alternate mongo search db name')
-    names: list[str] = Field(
+    names: list[CollectionName] = Field(
         default_factory=list,
         description='Collection names, default all')
 
-class Command(BaseCommand):
-    'Search collection commands'
+    @field_validator('names', mode='after')
+    @classmethod
+    def fillnames(cls, value) -> list[CollectionName]:
+        return value or list(CollectionName)
 
-    class Base(AppCommand[SearchCommandOpts]):
-        method: ClassVar[str]
-        options_class: ClassVar = SearchCommandOpts
+class Base(AppCommand[SearchOpts]):
+    method: ClassVar[str]
+    options_class: ClassVar = SearchOpts
 
-        @classmethod
-        def add_arguments(cls, parser):
-            arg = parser.add_argument
-            arg('--dbname', '-d', metavar='<db>')
-            arg('names', nargs='*', choices=search.mapped_collections)
-            super().add_arguments(parser)
+    @classmethod
+    def add_arguments(cls, parser):
+        arg = parser.add_argument
+        arg('--dbname', '-d', metavar='<db>')
+        arg('names', nargs='*', choices=(...,))
+        super().add_arguments(parser)
 
-        def setup(self):
-            super().setup()
-            self.names = self.opts.names or search.mapped_collections
-
-        async def run(self):
-            if self.opts.dbname:
-                logger.info(f'Using search dbname={self.opts.dbname}')
-            db = await search.default_client.get_database(self.opts.dbname)
-            results: dict[str, Any] = {}
-            for name in self.names:
-                defn = search.mapped_collections[name]
-                res = await getattr(defn, self.method)(db=db)
+    async def run(self):
+        if self.opts.dbname:
+            logger.info(f'Using search dbname={self.opts.dbname}')
+        results: dict[str, Any] = {}
+        async with self.ctxkw() as kw:
+            for name in self.opts.names:
+                func = getattr(name.defn(), self.method)
+                res = await func(**kw)
                 if res is not None:
                     results[name] = res
-            if res:
-                print(json.dumps(results, indent=2))
+        if results:
+            print(json.dumps(results, indent=2))
 
-    def Collection(method: str, base=Base) -> type[Command.Base]:
-        return type(f'{method}_Command', (base,), dict(
-            method=method,
-            description=getattr(search.MappedCollection, method).__doc__))
+    @asynccontextmanager
+    async def ctxkw(self):
+        from .. import search
+        client = search.default_client
+        db = await client.get_database(self.opts.dbname)
+        kw = dict(db=db, client=client)
+        if self.method == 'build':
+            from ..orm import SessionLocal
+            with SessionLocal() as session:
+                kw.update(session=session)
+                yield kw
+        else:
+            yield kw
 
-    commands = dict(
-        stats=Collection('stats'),
-        init=Collection('init'),
-        build=Collection('build'),
-        clean=Collection('clean'),
-        control=ClientControlCommand(search.default_client))
+def Collection(method: str, base=Base, description: str|None = None) -> type[Base]:
+    return type(f'{method}_Command', (base,), dict(
+        method=method,
+        description=description))
+
+commands = dict(
+    _description='Search collection commands',
+    stats=Collection('stats', description='Get collection stats'),
+    init=Collection('init', description='Init collections'),
+    build=Collection('build', description='Build collections'),
+    clean=Collection('clean', description='Clean collections'),
+    control=mongo.makecommands(
+        'search.default_client',
+        settings.SEARCH_MONGODB_DBNAME_KEY))

@@ -1,70 +1,86 @@
 from __future__ import annotations
 
 import json
-from typing import Self
+from datetime import timedelta
+from functools import cached_property
+from typing import TYPE_CHECKING, Annotated, ClassVar
+
+from pydantic import BeforeValidator, Field
 
 from .. import utils
-from ..backends.mongo import MongoClient
-from .base import AppCommand, BaseCommand
+from .base import AppCommand, AppCommandOpts
 
+if TYPE_CHECKING:
+    from ..backends.mongo import MongoClient
 
-class ControlBaseCommand(AppCommand):
+TtlOpt = Annotated[
+    timedelta,
+    BeforeValidator(utils.deltaopt('seconds')),
+    Field(description='The TTL')]
+
+class SetOpts(AppCommandOpts):
+    name: str = Field(description='The database name')
+    ttl: TtlOpt|None = Field(description='Override the TTL')
+
+class TtlOpts(AppCommandOpts):
+    ttl: TtlOpt
+
+class ControlBase[O: AppCommandOpts](AppCommand[O]):
+    dbname_key: ClassVar[str]
     client: MongoClient
 
-    @classmethod
-    def parser_fmtargs(cls, parser):
-        return super().parser_fmtargs(parser) | dict(client=cls.client)
-
-    @classmethod
-    def fromclient(cls, client: MongoClient) -> type[Self]:
-        return type(cls.__name__, (cls,), dict(client=client))
-
-class ControlGetCommand(ControlBaseCommand):
-    'Get the mongo control doc for {client.dbname_key}'
+class ControlGet(ControlBase[AppCommandOpts]):
+    'Get the mongo control doc for {cls.dbname_key}'
 
     async def run(self):
         doc = await self.client.get_doc()
         print(json.dumps(doc, indent=2, default=str))
 
-class ControlSetCommand(ControlBaseCommand):
-    'Update the mongo control doc for {client.dbname_key}'
+class ControlSet(ControlBase[SetOpts]):
+    'Update the mongo control doc for {cls.dbname_key}'
+    options_class: ClassVar = SetOpts
 
     @classmethod
     def add_arguments(cls, parser):
         arg = parser.add_argument
-        arg(
-            '--ttl',
-            type=utils.deltaopt('seconds'),
-            default=None,
-            help='Override the TTL')
-        arg(
-            'name',
-            help='The database name')
+        arg('--ttl')
+        arg('name')
         super().add_arguments(parser)
 
     async def run(self):
         doc = await self.client.set_dbname(self.opts.name, ttl=self.opts.ttl)
         print(json.dumps(doc, indent=2, default=str))
 
-class ControlTtlCommand(ControlBaseCommand):
-    'Update the mongo control doc TTL only for {client.dbname_key}'
+class ControlTtl(ControlBase[TtlOpts]):
+    'Update the mongo control doc TTL only for {cls.dbname_key}'
+    options_class: ClassVar = TtlOpts
 
     @classmethod
     def add_arguments(cls, parser):
-        parser.add_argument(
-            'ttl',
-            type=utils.deltaopt('seconds'),
-            help='The TTL')
+        parser.add_argument('ttl')
         super().add_arguments(parser)
 
     async def run(self):
         doc = await self.client.set_ttl(self.opts.ttl)
         print(json.dumps(doc, indent=2, default=str))
 
-def ClientControlCommand(client: MongoClient) -> type[BaseCommand]:
-    return type('MongoClientControlCommand', (BaseCommand,), dict(
-        __doc__=f'Mongo control doc commands for {client.dbname_key}',
-        commands=dict(
-            get=ControlGetCommand.fromclient(client),
-            set=ControlSetCommand.fromclient(client),
-            ttl=ControlTtlCommand.fromclient(client))))
+def makecommands(clientpath: str, dbname_key: str) -> dict[str, str|type[ControlBase]]:
+    modname, attr = clientpath.rsplit('.', 1)
+    modname = __package__.rsplit('.', 1)[0] + f'.{modname}'
+
+    def getclient(_):
+        import importlib
+        mod = importlib.import_module(modname)
+        return getattr(mod, attr)
+
+    ns = dict(
+        client=cached_property(getclient),
+        dbname_key=dbname_key)
+    return dict(
+        _description=f'Mongo control doc commands for {dbname_key}',
+        **{
+            name: type(cls.__name__, (cls,), ns)
+            for name, cls in [
+                ('get', ControlGet),
+                ('set', ControlGet),
+                ('ttl', ControlTtl)]})

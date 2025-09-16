@@ -440,9 +440,9 @@ def lazify[RT](stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = N
             stmt = stmt.options(joinfunc(column))
     return stmt
 
-def load_naics() -> None:
+def load_naics(session: Session|None = None) -> None:
     'Load NAICS data'
-    with SessionLocal() as session:
+    with ensure_session(session) as session:
         exists = bool(
             session
             .execute(select(Naics.id).limit(1))
@@ -472,7 +472,7 @@ def dump_csv(table: Table|str, f: io.TextIOWrapper, session: Session) -> None:
     writer.writerow(c.name for c in table.columns)
     writer.writerows(session.execute(lazify(stmt)).tuples())
 
-def dump_update(table: Table|str, file: Path|None = None) -> None:
+def dump_update(table: Table|str, file: Path|None = None, session: Session|None = None) -> None:
     'Dump table CSV'
     if isinstance(table, str):
         table = Base.metadata.tables[table.lower()]
@@ -487,7 +487,7 @@ def dump_update(table: Table|str, file: Path|None = None) -> None:
     tmp = Path(f'{file}.tmp')
     logger.info(f'Dumping table {table.name} to {file}')
     try:
-        with SessionLocal() as session:
+        with ensure_session(session) as session:
             with tmp.open('w') as f:
                 dump_csv(table, f, session)
         with tmp.open('rb') as f:

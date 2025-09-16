@@ -24,7 +24,6 @@ from .backends import etl, mongo
 from .backends.etl import *
 from .models import *
 from .orm import *
-from .ref import normls
 from .tools import asyn
 
 if TYPE_CHECKING:
@@ -39,14 +38,15 @@ class Pipeline:
         'location', 'starting', 'employees', 'action', 'url']
     'Writeable database fields when saving a translation'
 
-    def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
+    def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None, session: orm.Session|None = None) -> None:
         if context is None:
             context = {}
         self.state = ValidStateCode(state)
         self.context = context
         self.opts = PipelineOpts.model_validate(opts or {})
-        self.session: orm.Session|None = None
+        self.session = session
         self.logger = logging.getLogger(f'{__name__}.{self.state}')
+        self.artifact_cache: set[uuid.UUID] = set()
 
     if TYPE_CHECKING:
         @overload
@@ -59,6 +59,11 @@ class Pipeline:
     @lazy
     def scraper(self) -> scrapers.ScraperType:
         return scrapers.registry[self.state](opts=self.opts)
+
+    @lazy
+    def normls(self):
+        from .ref import normls
+        return normls
 
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
@@ -142,6 +147,8 @@ class Pipeline:
             res = {}
             for name, coro in coros.items():
                 res[name] = await coro
+        else:
+            raise ValueError(stage)
         self.logger.info(f'{stage}:clean:complete {res}')
         return res
 
@@ -191,7 +198,7 @@ class Pipeline:
         from .translators import TranslationFactory
         reader: AsyncIterable[Extraction]
         async with source.reader(dict(state=state)) as reader:
-            with SessionLocal() as session:
+            with ensure_session(self.session) as session:
                 factory = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
                 it = asyn.amap(factory.translate, it)
@@ -209,29 +216,31 @@ class Pipeline:
     async def load(self, clean: bool = False) -> dict:
         state = self.state
         counts = dict.fromkeys(map(str, SaveType), 0)
-        self.artifact_cache = {}
         count = 0
         source = self.backend(TranslationBackend)
         async with source.reader(dict(state=state)) as reader:
-            with SessionLocal() as session:
-                self.session = session
-                if clean:
-                    await self.clean(Stage.Load)
-                async for translation in reader:
-                    counts[self.save(translation)[1]] += 1
-                    count += 1
-                    if not count % self.opts.load_per_tick:
-                        await asyncio.sleep(0)
-                stat = session.get(StateStat, state)
-                stat = stat or StateStat(id=state)
-                stat.self_update(session)
-                session.add(stat)
-                if self.opts.rollback:
-                    session.rollback()
-                else:
-                    session.commit()
-            self.session = None
-        del self.artifact_cache
+            _session = self.session
+            try:
+                with ensure_session(self.session) as session:
+                    self.session = session
+                    if clean:
+                        await self.clean(Stage.Load)
+                    async for translation in reader:
+                        counts[self.save(translation)[1]] += 1
+                        count += 1
+                        if not count % self.opts.load_per_tick:
+                            await asyncio.sleep(0)
+                    stat = session.get(StateStat, state)
+                    stat = stat or StateStat(id=state)
+                    stat.self_update(session)
+                    session.add(stat)
+                    if self.opts.rollback:
+                        session.rollback()
+                    else:
+                        session.commit()
+            finally:
+                self.session = _session
+        self.artifact_cache = set()
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
         return dict(nochange=nochange, count=count, counts=counts)
 
@@ -242,7 +251,7 @@ class Pipeline:
         backend = self.backend(SearchIndexBackend)
         filters = self.orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
-        with SessionLocal() as session:
+        with ensure_session(self.session) as session:
             for name, defn in backend.collections.items():
                 it = defn.orm_model.map_reduce_exec(
                     session,
@@ -308,8 +317,8 @@ class Pipeline:
             save = save.Create
         record = dict(
             name=name,
-            name_norm=normls.company_name_norm(name),
-            name_canon=normls.company_name_canon(name))
+            name_norm=self.normls.company_name_norm(name),
+            name_canon=self.normls.company_name_canon(name))
         record['name_norm_id'] = uuid.uuid5(Company.NS, record['name_norm'])
         dirty = save is save.Create
         for field, value in record.items():
@@ -357,12 +366,12 @@ class Pipeline:
                 artifact = Artifact(id=uid, path=path, url=url)
                 artifact.self_update()
                 self.session.add(artifact)
-                self.artifact_cache[uid] = None
+                self.artifact_cache.add(uid)
             else:
                 if path.endswith('.xlsx') and uid not in self.artifact_cache:
                     if artifact.self_update():
                         self.session.add(artifact)
-                    self.artifact_cache[uid] = None
+                    self.artifact_cache.add(uid)
             artifacts.append(artifact)
         for artifact in set(report.artifacts).difference(artifacts):
             report.artifacts.remove(artifact)

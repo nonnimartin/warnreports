@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Iterable
 
-from pydantic import BeforeValidator, Field, TypeAdapter
+from pydantic import BeforeValidator, Field
 
 from .. import Stage
 from ..models import StateCode
@@ -20,11 +20,12 @@ StagesOpt = Annotated[
     list[Stage],
     BeforeValidator(lambda x: resolve_stagesopt(x)),
     Field(min_length=1, description='Stage name(s) (various formats) or "all"')]
-StatesOptTa = TypeAdapter(StatesOpt)
+
+ALLSTATES = str.split("""
+    AK AL AZ CA CO CT DC DE FL GA HI IA ID IL IN KS KY LA MD ME MI
+    MO MT NE NJ NM NY OH OK OR PA RI SC SD TN TX UT VA VT WA WI""")
 
 def resolve_statesopt(value: Iterable[StateCode]) -> list[StateCode]:
-    from ..translators import TranslationFactory
-    allstates = TranslationFactory.translators
     states: set[StateCode] = set()
     skips: set[StateCode] = set()
     for opt in map(str.upper, value):
@@ -33,9 +34,9 @@ def resolve_statesopt(value: Iterable[StateCode]) -> list[StateCode]:
         else:
             states.add(opt)
     if not states:
-        states.update(allstates)
+        states.update(ALLSTATES)
     states.difference_update(skips)
-    bad = states.difference(allstates)
+    bad = states.difference(ALLSTATES)
     if bad:
         raise ValueError(f'Invalid states: {sorted(bad)}')
     return sorted(states)

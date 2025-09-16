@@ -12,7 +12,7 @@ from importlib import import_module
 from itertools import chain
 from pathlib import Path
 from types import ModuleType
-from typing import Any, ClassVar, Generator, Iterable, Iterator
+from typing import Any, AsyncGenerator, ClassVar, Generator, Iterable, Iterator
 
 import requests
 import requests.models
@@ -35,6 +35,7 @@ class Scraper:
     request_delay: ClassVar[float] = 0.0
     ssl_verify: ClassVar[bool] = True
     retry: ClassVar[dict] = dict(total=10, backoff_factor=0.5, backoff_max=20.0)
+    maxconns: ClassVar[int] = 10
 
     def __init__(self, *, opts: ScraperOpts|dict|None = None) -> None:
         self.opts = ScraperOpts.model_validate(opts or {})
@@ -111,7 +112,7 @@ class Scraper:
                 return rep
             rep.encoding = encoding or rep.encoding or 'utf-8'
             with dest.open('wb') as f:
-                for chunk in rep.iter_content(chunk_size=8192):
+                async for chunk in rep.aiter_content(chunk_size=8192):
                     f.write(chunk)
         await asyncio.sleep(0)
         return rep
@@ -137,7 +138,9 @@ class Scraper:
             self.scraper = scraper
             self.logger = scraper.logger
             self.metrics = scraper.metrics
-            self.mount('https://', HTTPAdapter(max_retries=Retry(**scraper.retry)))
+            self.mount('https://', HTTPAdapter(
+                pool_maxsize=scraper.maxconns,
+                max_retries=Retry(**scraper.retry)))
             self.headers['User-Agent'] = scraper.user_agent
             self.verify = scraper.ssl_verify
 
@@ -167,7 +170,7 @@ class Scraper:
                 raise
             return rep
 
-        async def arequest(self, method: str, url: str, *, check: bool = True, **kw) -> requests.Response:
+        async def arequest(self, method: str, url: str, *, check: bool = True, **kw) -> Scraper.Session.StreamingResponse:
             delay = kw.pop('delay', self.metrics['request_count'] and self.scraper.request_delay)
             if delay:
                 await asyncio.sleep(delay)
@@ -179,10 +182,15 @@ class Scraper:
         class StreamingResponse(requests.Response):
             metrics: dict
 
-            def iter_content(self, chunk_size = 1, decode_unicode = False):
-                for chunk in super().iter_content(chunk_size, decode_unicode):
+            def iter_content(self, chunk_size: int = 8192) -> Generator[bytes]:
+                for chunk in super().iter_content(chunk_size):
                     self.metrics['request_bytes'] += len(chunk)
                     yield chunk
+
+            async def aiter_content(self, chunk_size: int = 8192) -> AsyncGenerator[bytes]:
+                for chunk in self.iter_content(chunk_size):
+                    yield chunk
+                    await asyncio.sleep(0)
 
         # Allow for patching reequests
         def Session(self):

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from ..frontend.build import frontend_build
-from .base import BaseCommand, FuncCommand
+from .base import AppCommand
 
+class BuildCommand(AppCommand):
+    'Build frontend web assets'
 
-class Command(BaseCommand):
-    commands = dict(build=FuncCommand(frontend_build))
+    def run(self):
+        from ..frontend.build import frontend_build
+        frontend_build()
+
+commands = dict(build=BuildCommand)

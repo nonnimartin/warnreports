@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import enum
+import typing
 from collections import ChainMap
-from types import UnionType
+from types import GenericAlias, UnionType
 from typing import Any, ClassVar, Iterable, Sequence
 
 from pydantic import ConfigDict, Field
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefinedType
 
 from .. import settings, utils
@@ -61,11 +63,11 @@ class BaseCommand[O: BaseCommandOpts]:
     def create_parser(cls) -> AP:
         "Create the main (root) argument parser"
         parser = cls.parser_class()
-        cls.init_parser(parser)
+        cls.init_parser(parser, 0)
         return parser
 
     @classmethod
-    def init_parser(cls, parser: AP) -> None:
+    def init_parser(cls, parser: AP, depth: int) -> None:
         "Setup the parser this command/subcommand"
         parser.formatter_class = cls.formatter_class
         parser.description = cls.description
@@ -73,7 +75,7 @@ class BaseCommand[O: BaseCommandOpts]:
         parser.usage = cls.usage or parser.usage
         cls.add_arguments(parser)
         cls.extend_actions(parser)
-        cls.add_commands(parser)
+        cls.add_commands(parser, depth)
         fmtargs = cls.parser_fmtargs(parser)
         if parser.description:
             parser.description = parser.description.format(**fmtargs)
@@ -93,23 +95,39 @@ class BaseCommand[O: BaseCommandOpts]:
             in cls.get_action_hint_classes()))
         fmtargs = cls.parser_fmtargs(parser)
         for action in parser._actions:
-            if action.const is False:
-                # store_false
+            if not (field := fields.get(action.dest)):
                 continue
-            if action.help or not (field := fields.get(action.dest)):
-                continue
-            if (text := field.description or field.title):
-                action.help = text.format(**fmtargs)
-            if action.default is ...:
-                if not isinstance(field.default, PydanticUndefinedType):
-                    action.default = field.default
-            if action.choices == (...,):
-                anno = field.annotation
-                annoargs = anno.__args__ if isinstance(anno, UnionType) else [anno]
-                for cand in annoargs:
-                    if issubclass(cand, enum.Enum):
-                        action.choices = list(cand)
-                        break
+            cls.extend_action(action, field, fmtargs=fmtargs)
+
+    @classmethod
+    def extend_action(cls, action: argparse.Action, field: FieldInfo, fmtargs: dict[str, Any]) -> None:
+        if action.const is False:
+            # store_false
+            return
+        if field.annotation is bool and action.const is None:
+            # store_true
+            action.nargs = 0
+            action.const = True
+            action.default = False
+            action.__class__ = argparse._StoreTrueAction
+        if not action.help and (text := field.description or field.title):
+            action.help = text.format(**fmtargs)
+        if action.default is ...:
+            if not isinstance(field.default, PydanticUndefinedType):
+                action.default = field.default
+        if action.choices == (...,):
+            anno = field.annotation
+            annoargs = anno.__args__ if isinstance(anno, UnionType) else [anno]
+            for cand in annoargs:
+                if isinstance(cand, GenericAlias) and cand.__origin__ is list:
+                    if len(cand.__args__) == 1:
+                        cand, = cand.__args__
+                if isinstance(cand, typing._LiteralGenericAlias):
+                    action.choices = list(cand.__args__)
+                    break
+                if isinstance(cand, type) and issubclass(cand, enum.Enum):
+                    action.choices = list(cand)
+                    break
 
     @classmethod
     def get_action_hint_classes(cls) -> Iterable[type[DataModel]]:
@@ -117,19 +135,20 @@ class BaseCommand[O: BaseCommandOpts]:
         yield cls.options_class
 
     @classmethod
-    def add_commands(cls, parser: AP) -> None:
+    def add_commands(cls, parser: AP, depth: int) -> None:
         "Setup subcommands for a container command defined in the `commands` dict"
         if not cls.commands:
             return
-        subparsers = cls.create_subparsers(parser)
+        depth += 1
+        subparsers = cls.create_subparsers(parser, depth)
         for name, cmd in cls.commands.items():
             subparser = subparsers.add_parser(name)
-            cmd.init_parser(subparser)
+            cmd.init_parser(subparser, depth)
             if not subparser.description:
                 subparser.description = f'{name} command'
 
     @classmethod
-    def create_subparsers(cls, parser: AP) -> SubParsers:
+    def create_subparsers(cls, parser: AP, depth: int) -> SubParsers:
         "Initialize the argument subparsers for a container command"
         return parser.add_subparsers(
             dest=cls.command_opt,
@@ -168,6 +187,10 @@ class BaseCommand[O: BaseCommandOpts]:
             cls.__dict__.get('description') or
             cls.__doc__ or
             cls.description)
+        for name, value in cls.commands.items():
+            if isinstance(value, dict):
+                ns = dict(commands=value, description=value.pop('_description', None))
+                cls.commands[name] = type(f'{name.title()}Command', (BaseCommand,), ns)
 
 class AppCommandOpts(BaseCommandOpts):
     log_level: LogLevelEnum|None = Field(None, exclude=True, description='Log level')
@@ -186,16 +209,3 @@ class AppCommand[O: AppCommandOpts](BaseCommand[O]):
     def add_arguments(cls, parser: AP) -> None:
         parser.add_argument('--log-level', metavar='level')
         super().add_arguments(parser)
-
-
-def FuncCommand(f, *bases: type[AppCommand]) -> type[AppCommand]:
-    class Base(AppCommand[AppCommandOpts]):
-        func = staticmethod(f)
-
-        async def run(self) -> None:
-            await asyn.wait(self.func(**self.opts.model_dump()))
-
-    class Command(*bases, Base):
-        description = f.__doc__
-
-    return Command

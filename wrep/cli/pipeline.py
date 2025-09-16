@@ -10,7 +10,7 @@ from pydantic import Field
 from .. import Stage, settings
 from ..models import *
 from .base import AppCommand, AppCommandOpts
-from .validators import StagesOpt, StatesOpt, StatesOptTa
+from .validators import ALLSTATES, StagesOpt, StatesOpt
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ class PipelineCommandOpts(AppCommandOpts, PipelineBatchOpts, PipelineOpts):
 
 class Command(AppCommand[PipelineCommandOpts]):
     options_class: ClassVar = PipelineCommandOpts
+    usage: ClassVar = '{prog} [OPTIONS] <stages> [state ...]'
     description: ClassVar = dedent("""
     Run pipeline stages.
     
@@ -68,36 +69,34 @@ class Command(AppCommand[PipelineCommandOpts]):
     ----------------
     {allstates}""")
 
-    usage: ClassVar = '{prog} [OPTIONS] <stages> [state ...]'
-
     @classmethod
     def parser_fmtargs(cls, parser):
         return super().parser_fmtargs(parser)|dict(
             allstages=', '.join(Stage),
-            allstates=' '.join(StatesOptTa.validate_python([])))
+            allstates=' '.join(ALLSTATES))
 
     @classmethod
     def add_arguments(cls, parser):
         arg = parser.add_argument
         arg('stages', metavar='<stages>')
         arg('states', nargs='*', metavar='state')
-        arg('--clean', '-c', action='store_true')
-        arg('--incremental', '-i', action='store_true')
-        arg('--concurrent', '-t', action='store_true')
+        arg('--clean', '-c')
+        arg('--incremental', '-i')
+        arg('--concurrent', '-t')
         arg('--nofail', '-n',
             action='store_false',
             dest='fail',
             help=(
                 'Do not fail on error. Instead, log an exception, '
                 'and skip subsequent stages for the state'))
-        arg('--clean-only', '-x', action='store_true')
-        arg('--stat-only', '-s', action='store_true')
+        arg('--clean-only', '-x')
+        arg('--stat-only', '-s')
         arg('--search-dbname', '-d', metavar='<db>')
         arg('--etl-dbname', '-b', metavar='<db>')
         arg('--max-workers', '-w', metavar='<n>', default=...)
         arg('--max-threads', '-T', metavar='<n>', default=...)
         arg('--selenium-max-procs', '-E', metavar='<n>', default=...)
-        arg('--rollback', action='store_true')
+        arg('--rollback')
         arg('--idfile', metavar='<file>')
         super().add_arguments(parser)
 
