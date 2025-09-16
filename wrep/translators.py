@@ -1117,24 +1117,31 @@ class NY(Translator):
             'Date of Notice'],
         location=[
             'City',
-            'Region',
-            'date_posted',
             'Address',
-            'Counties',
             'Addresses',
             'Impacted Site Address',
+            'Region',
+            'region',
+            'Counties',
+            'County',
             'Impacted Site County'],
         employees=[
             'Number Affected',
             'Total Number of Affected Workers',
-            'Number of Affected Workers'],
+            'Number of Affected Workers',
+            'Total Employees'],
         starting=[
             'Closure Start Date',
             'Closing Date',
             'Layoff Date',
             'Layoff Start Date',
             'Date Layoff/Closure Starts'],
-        action=['Dislocation Type', 'Reason For Layoff', 'Layoff or Closure?'],
+        action=[
+            'Dislocation Type',
+            'Reason For Layoff',
+            'Layoff or Closure?',
+            'Reason Stated for Filing',
+            'Classification'],
         url=['notice_url'],
         industry=['Industry Type', 'NAICS Description'],
         report_id=['Event Number', 'Event Numbers', 'Event #', 'row_key'],
@@ -1162,8 +1169,10 @@ class NY(Translator):
             (_r(r'[\d,]+ employees ', re.I), ''),
             (_r(r'.*within 90 days \(from August 11, 2022/*'), '2022-08-11'),
             (_r(r'^.{20}.*'), ''),
-        ]
+        ],
     )
+    values_hash_exclude = ['_href']
+    report_id_extra = ['reported']
 
 class OH(Translator):
     default_url = (

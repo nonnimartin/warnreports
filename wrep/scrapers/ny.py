@@ -133,12 +133,15 @@ class NY(Scraper):
     def statobjs(self) -> Iterator[Any]:
         yield self.cache/self.tableau_filename
         yield from map(self.cache.topath, self.archive_filenames)
+        yield self.cache/'index.json'
 
     @contextmanager
     def extract(self) -> Generator[Iterator[dict[str, str]]]:
         pdfheader_rewrites = [
             ('L ayoff End Date', 'Layoff End Date'),
             ('U nion', 'Union')]
+        pdfvalue_rewrites = [
+            (_r(r'\|.*'), '')]
         csvkey_fields = [
             'Date Posted',
             'Date of WARN Notice',
@@ -198,7 +201,7 @@ class NY(Scraper):
                 tds = tr.find_all('td')
                 values = [' '.join((td.text or '').split()) for td in tds]
                 row = dict(zip(headers, values))
-                href = tds[0].a['href']
+                href = tds[0].a['href'].strip()
                 if href in index:
                     cachekey, url = next(iter(index[href].items()))
                     if self.cache.exists(cachekey):
@@ -207,7 +210,7 @@ class NY(Scraper):
                         todo.discard(href)
                 else:
                     url = self.absurl(href)
-                row.update(notice_url=url)
+                row.update(notice_url=url, _href=href)
                 yield row
 
         def pdfitems(file: Path) -> Iterator[tuple[str, str]]:
@@ -225,8 +228,10 @@ class NY(Scraper):
                 if len(item) == 1:
                     continue
                 header, value = item
-                header = strs.rewrite(header, pdfheader_rewrites)
-                yield header, value
+                header = strs.rewrite(header, pdfheader_rewrites).strip()
+                value = strs.rewrite(value, pdfvalue_rewrites).strip()
+                if header and value:
+                    yield header, value
 
         funcmap = {'.html': readhtml, '.xlsx': readxlsx, '.csv': readcsv}
 
@@ -278,6 +283,7 @@ class NY(Scraper):
                     hrefs: list[str] = [a['href'] for a in links]
                     with cached.open('w') as fp:
                         json.dump(hrefs, fp, indent=2)
+            hrefs = map(str.strip, hrefs)
             items.extend((href, *hrefkey(href)) for href in hrefs)
         index: dict[str, dict[str, str]] = defaultdict(dict)
         for urikey, cachekey, url in sorted(items):
