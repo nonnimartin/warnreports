@@ -45,7 +45,7 @@ class Scraper:
             settings.ARTIFACTS_DIR/self.state.lower(),
             self.cache.dir)
         self.metrics = defaultdict(int)
-        self.logger = logging.getLogger(f'{__name__}.{self.state}')
+        self.logger = logging.getLogger(f'{__package__}.{self.state}')
         self.tz = zoneinfos[self.state]
         self.session = self.Session(self)
         self.runner = Runner(self)
