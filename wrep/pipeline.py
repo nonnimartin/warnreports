@@ -24,7 +24,6 @@ from .backends import etl, mongo
 from .backends.etl import *
 from .models import *
 from .orm import *
-from .ref import normls
 from .tools import asyn
 
 if TYPE_CHECKING:
@@ -39,14 +38,15 @@ class Pipeline:
         'location', 'starting', 'employees', 'action', 'url']
     'Writeable database fields when saving a translation'
 
-    def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None) -> None:
+    def __init__(self, state: StateCode, *, context: dict[str, Any]|None = None, opts: PipelineOpts|Any = None, session: orm.Session|None = None) -> None:
         if context is None:
             context = {}
         self.state = ValidStateCode(state)
         self.context = context
         self.opts = PipelineOpts.model_validate(opts or {})
-        self.session: orm.Session|None = None
+        self.session = session
         self.logger = logging.getLogger(f'{__name__}.{self.state}')
+        self.artifact_cache: set[uuid.UUID] = set()
 
     if TYPE_CHECKING:
         @overload
@@ -60,6 +60,11 @@ class Pipeline:
     def scraper(self) -> scrapers.ScraperType:
         return scrapers.registry[self.state](opts=self.opts)
 
+    @lazy
+    def normls(self):
+        from .ref import normls
+        return normls
+
     async def run(self, stage: Stage, clean: bool = False) -> dict:
         stage = Stage(stage)
         self.logger.info(f'{stage}:start')
@@ -71,15 +76,15 @@ class Pipeline:
         stage = Stage(stage)
         state = self.state
         if stage is stage.Scrape:
-            return await self.scraper.stat()
-        if stage is stage.Extract:
+            res = await self.scraper.stat()
+        elif stage is stage.Extract:
             backend = self.backend(ExtractionBackend)
-            return await backend.stat(dict(state=state))
-        if stage is stage.Translate:
+            res = await backend.stat(dict(state=state))
+        elif stage is stage.Translate:
             backend = self.backend(TranslationBackend)
-            return await backend.stat(dict(state=state))
-        if stage is stage.Load:
-            stat: dict[str, int] = {}
+            res = await backend.stat(dict(state=state))
+        elif stage is stage.Load:
+            res: dict[str, int] = {}
             backend = self.backend(SearchIndexBackend)
             filters = self.orm_select_filters()
             with ensure_session(self.session) as session:
@@ -90,57 +95,66 @@ class Pipeline:
                         session,
                         *filters[defn.orm_model],
                         lazy=bool(self.opts.lazy))
-                    stat[name] = sum(1 for _ in it)
-            return stat
-        if stage is stage.Index:
+                    res[name] = sum(1 for _ in it)
+        elif stage is stage.Index:
             backend = self.backend(SearchIndexBackend)
             coros = {
                 name: backend.stat(name, dict(state=state))
                 for name in ('reports', 'artifacts', 'companies')}
-            return {k: await v for k, v in coros.items()}
-        raise ValueError(stage)
+            res = {k: await v for k, v in coros.items()}
+        else:
+            raise ValueError(stage)
+        self.logger.info(f'{stage}:stat {statlog(res)}')
+        return res
         
-    async def clean(self, stage: Stage) -> None:
+    async def clean(self, stage: Stage) -> dict:
         stage = Stage(stage)
         state = self.state
         self.logger.info(f'{stage}:clean')
         if stage is stage.Scrape:
             await self.scraper.clean()
+            res = dict(clean=True)
         elif stage is stage.Extract:
             backend = self.backend(ExtractionBackend)
-            await backend.clean(dict(state=state))
+            count = await backend.clean(dict(state=state))
             await self.scraper.extract_clean()
+            res = dict(count=count)
         elif stage is stage.Translate:
             backend = self.backend(TranslationBackend)
-            await backend.clean(dict(state=state))
+            count = await backend.clean(dict(state=state))
+            res = dict(count=count)
         elif stage is stage.Load:
             filters = self.orm_clean_filters()
-            stmts = (
-                orm.delete(model).where(*filters)
-                for model, filters in filters.items())
+            stmts = {
+                model.__name__: orm.delete(model).where(*filters)
+                for model, filters in filters.items()}
+            res = {}
             with ensure_session(self.session) as session:
-                for stmt in stmts:
-                    session.execute(stmt)
+                for name, stmt in stmts.items():
+                    res[name] = session.execute(stmt).rowcount
                 if not self.session and not self.opts.rollback:
                     session.commit()
         elif stage is stage.Index:
             backend = self.backend(SearchIndexBackend)
-            coros = [
-                backend.clean('reports', dict(state=state)),
-                backend.clean('artifacts', dict(state=state)),
-                backend.clean('companies', dict(
+            coros = dict(
+                reports=backend.clean('reports', dict(state=state)),
+                artifacts=backend.clean('artifacts', dict(state=state)),
+                companies=backend.clean('companies', dict(
                     state=state,
                     states_count_min=1,
                     states_count_max=1)),
-                backend.clean('states', dict(id=state))]
-            for coro in coros:
-                await coro
-        self.logger.info(f'{stage}:clean:complete')
+                states=backend.clean('states', dict(id=state)))
+            res = {}
+            for name, coro in coros.items():
+                res[name] = await coro
+        else:
+            raise ValueError(stage)
+        self.logger.info(f'{stage}:clean:complete {res}')
+        return res
 
     async def scrape(self, clean: bool = False) -> dict:
         stage = Stage.Scrape
         prev = await self.stat(stage)
-        self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         scraper = self.scraper
@@ -160,7 +174,6 @@ class Pipeline:
         state = self.state
         backend = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         scraper = self.scraper
@@ -180,13 +193,12 @@ class Pipeline:
         backend = self.backend(TranslationBackend)
         source = self.backend(ExtractionBackend)
         prev = await self.stat(stage)
-        self.logger.info(f'{stage}:stat {statlog(prev)}')
         if clean:
             await self.clean(stage)
         from .translators import TranslationFactory
         reader: AsyncIterable[Extraction]
         async with source.reader(dict(state=state)) as reader:
-            with SessionLocal() as session:
+            with ensure_session(self.session) as session:
                 factory = TranslationFactory(session)
                 it = (x.model_dump(mode='json') async for x in reader)
                 it = asyn.amap(factory.translate, it)
@@ -204,29 +216,31 @@ class Pipeline:
     async def load(self, clean: bool = False) -> dict:
         state = self.state
         counts = dict.fromkeys(map(str, SaveType), 0)
-        self.artifact_cache = {}
         count = 0
         source = self.backend(TranslationBackend)
         async with source.reader(dict(state=state)) as reader:
-            with SessionLocal() as session:
-                self.session = session
-                if clean:
-                    await self.clean(Stage.Load)
-                async for translation in reader:
-                    counts[self.save(translation)[1]] += 1
-                    count += 1
-                    if not count % self.opts.load_per_tick:
-                        await asyncio.sleep(0)
-                stat = session.get(StateStat, state)
-                stat = stat or StateStat(id=state)
-                stat.self_update(session)
-                session.add(stat)
-                if self.opts.rollback:
-                    session.rollback()
-                else:
-                    session.commit()
-            self.session = None
-        del self.artifact_cache
+            _session = self.session
+            try:
+                with ensure_session(self.session) as session:
+                    self.session = session
+                    if clean:
+                        await self.clean(Stage.Load)
+                    async for translation in reader:
+                        counts[self.save(translation)[1]] += 1
+                        count += 1
+                        if not count % self.opts.load_per_tick:
+                            await asyncio.sleep(0)
+                    stat = session.get(StateStat, state)
+                    stat = stat or StateStat(id=state)
+                    stat.self_update(session)
+                    session.add(stat)
+                    if self.opts.rollback:
+                        session.rollback()
+                    else:
+                        session.commit()
+            finally:
+                self.session = _session
+        self.artifact_cache = set()
         nochange = count == counts[SaveType.Nochange] + counts[SaveType.Skip]
         return dict(nochange=nochange, count=count, counts=counts)
 
@@ -237,7 +251,7 @@ class Pipeline:
         backend = self.backend(SearchIndexBackend)
         filters = self.orm_select_filters()
         results: dict[str, tuple[int, int, int]] = {}
-        with SessionLocal() as session:
+        with ensure_session(self.session) as session:
             for name, defn in backend.collections.items():
                 it = defn.orm_model.map_reduce_exec(
                     session,
@@ -303,8 +317,8 @@ class Pipeline:
             save = save.Create
         record = dict(
             name=name,
-            name_norm=normls.company_name_norm(name),
-            name_canon=normls.company_name_canon(name))
+            name_norm=self.normls.company_name_norm(name),
+            name_canon=self.normls.company_name_canon(name))
         record['name_norm_id'] = uuid.uuid5(Company.NS, record['name_norm'])
         dirty = save is save.Create
         for field, value in record.items():
@@ -352,12 +366,12 @@ class Pipeline:
                 artifact = Artifact(id=uid, path=path, url=url)
                 artifact.self_update()
                 self.session.add(artifact)
-                self.artifact_cache[uid] = None
+                self.artifact_cache.add(uid)
             else:
                 if path.endswith('.xlsx') and uid not in self.artifact_cache:
                     if artifact.self_update():
                         self.session.add(artifact)
-                    self.artifact_cache[uid] = None
+                    self.artifact_cache.add(uid)
             artifacts.append(artifact)
         for artifact in set(report.artifacts).difference(artifacts):
             report.artifacts.remove(artifact)
@@ -586,18 +600,24 @@ class PipelineRunner:
             self.logger.info(f'{state}:{stage}:skip {reason}')
             self.states_active.pop(state, None)
             return
-        run = PipelineRunDetail(state=state, stage=stage, start=utils.utcnow())
+        run = PipelineRunDetail(
+            state=state,
+            stage=stage,
+            start=utils.utcnow())
         self.runs[state].append(run)
         self.log.runs.append(run)
         try:
-            pipeline = Pipeline(state, context=self.context, opts=self.pipeline_opts)
+            pipeline = Pipeline(
+                state=state,
+                context=self.context,
+                opts=self.pipeline_opts)
             if self.opts.stat_only:
-                stat = await pipeline.stat(stage)
-                self.logger.info(f'{state}:{stage}:stat {stat}')
+                coro = pipeline.stat(stage)
             elif self.opts.clean_only:
-                await pipeline.clean(stage)
+                coro = pipeline.clean(stage)
             else:
-                run.result = await pipeline.run(stage, clean=self.opts.clean)
+                coro = pipeline.run(stage, clean=self.opts.clean)
+            run.result = await coro
         except Exception as err:
             run.error = PipelineRunError.fromexc(err, state=state, stage=stage)
             run.failed = True

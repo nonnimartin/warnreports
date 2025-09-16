@@ -25,7 +25,7 @@ default_client = MongoClient(
 class AbstractMappedCollection(AbstractCollection):
     orm_model: type[orm.MapReduceBase]
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
     name: str
     client: MongoClient
@@ -39,20 +39,20 @@ class MappedCollection(AbstractMongoCollection, AbstractMappedCollection):
     def __post_init__(self) -> None:
         self.indexes = list(map(IndexModel, self.indexes))
 
-    async def build(self, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None, lazy: bool = True) -> None:
+    async def build(self, *, db: str|AsyncIOMotorDatabase|None = None, client: MongoClient|None = None, session: orm.Session|None = None, lazy: bool = True) -> None:
         'Build collection'
         client = client or self.client
         db = await client.get_database(db)
-        await self.clean(db=db)
-        await self.init(db=db)
-        with orm.SessionLocal() as session:
+        await self.clean(db=db, client=client)
+        await self.init(db=db, client=client)
+        with orm.ensure_session(session) as session:
             logger.info(f'Building {self.name}')
             it = self.orm_model.map_reduce_exec(session, lazy=lazy)
             if self.data_model is not self.orm_model.data_model:
                 it = map(self.data_model.model_validate, it)
             it = (x.model_dump(by_alias=True) for x in it)
             await db.get_collection(self.name).insert_many(it)
-        stat = await self.stats(db=db)
+        stat = await self.stats(db=db, client=client)
         logger.info(f'Built {self.name} {stat=}')
 
 mapped_collections: dict[str, MappedCollection] = {

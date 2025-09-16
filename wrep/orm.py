@@ -67,6 +67,11 @@ class Base(DeclarativeBase):
         super().__init_subclass__(**kw)
 
 class MapReduceBase[DM: DataModel, RT](Base):
+    """
+    Base class for an ORM Model to provide map-reduce functionality. A subclass
+    would specify the DataModel [DM] class that it reduces into, as well as the
+    row type [RT] that will be produced by the reduce_select() database query.
+    """
     __abstract__ = True
     data_model: ClassVar[type[DM]]
 
@@ -94,6 +99,7 @@ class MapReduceBase[DM: DataModel, RT](Base):
 
     @classmethod
     def reduce_select(cls, *filters, lazy: bool|int = True) -> Select[RT]:
+        'Build the database select query for the map-reduce operation'
         stmt = select(cls).where(*filters)
         stmt = lazify(stmt, lazy)
         return stmt
@@ -417,6 +423,11 @@ STMT_REPORT_GET: Select[tuple[Report, Artifact, Naics]] = (
         joinedload(Report.naics),
         joinedload(Report.artifacts)))
 
+MRCLASSES: tuple[type[MapReduceBase], ...] = tuple(sorted(
+    (cls for cls in MapReduceBase.__subclasses__() if not cls.__abstract__),
+    key=lambda x: x.__name__))
+'All concrete MapReducing ORM Model classes'
+
 def lazify[RT](stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = None) -> Select[RT]:
     if lazy:
         joinfunc = selectinload
@@ -429,9 +440,9 @@ def lazify[RT](stmt: Select[RT], lazy: bool|int = True, joins: Iterable|None = N
             stmt = stmt.options(joinfunc(column))
     return stmt
 
-def load_naics() -> None:
+def load_naics(session: Session|None = None) -> None:
     'Load NAICS data'
-    with SessionLocal() as session:
+    with ensure_session(session) as session:
         exists = bool(
             session
             .execute(select(Naics.id).limit(1))
@@ -461,7 +472,7 @@ def dump_csv(table: Table|str, f: io.TextIOWrapper, session: Session) -> None:
     writer.writerow(c.name for c in table.columns)
     writer.writerows(session.execute(lazify(stmt)).tuples())
 
-def dump_update(table: Table|str, file: Path|None = None) -> None:
+def dump_update(table: Table|str, file: Path|None = None, session: Session|None = None) -> None:
     'Dump table CSV'
     if isinstance(table, str):
         table = Base.metadata.tables[table.lower()]
@@ -476,7 +487,7 @@ def dump_update(table: Table|str, file: Path|None = None) -> None:
     tmp = Path(f'{file}.tmp')
     logger.info(f'Dumping table {table.name} to {file}')
     try:
-        with SessionLocal() as session:
+        with ensure_session(session) as session:
             with tmp.open('w') as f:
                 dump_csv(table, f, session)
         with tmp.open('rb') as f:

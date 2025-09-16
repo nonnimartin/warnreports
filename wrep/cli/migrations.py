@@ -1,47 +1,73 @@
 from __future__ import annotations
 
+from typing import ClassVar
+
+from pydantic import Field
+
 from .. import settings
-from ..migrations import auto, migrate
-from .base import AppCommand, BaseCommand, FuncCommand
+from .base import AppCommand, AppCommandOpts, BaseCommandOpts
 
 
-class Command(BaseCommand):
-    'Migration commands'
+class MigrateOpts(AppCommandOpts):
+    auto_only: bool = Field(description='Only run if DB_AUTO_MIGRATE=true')
 
-    class Migrate(FuncCommand(migrate, AppCommand)):
+class AutoOpts(AppCommandOpts):
+    message: str = Field('auto', description='Migration message, default auto')
 
-        @classmethod
-        def add_arguments(cls, parser):
-            parser.add_argument('--auto-only', action='store_true', help='Only run if DB_AUTO_MIGRATE=true')
-            super().add_arguments(parser)
+class AlembicOpts(BaseCommandOpts):
+    model_config: ClassVar = dict(extra='allow')
 
-    class Auto(FuncCommand(auto, AppCommand)):
+class Migrate(AppCommand[MigrateOpts]):
+    'Run schema migrations'
+    options_class: ClassVar = MigrateOpts
 
-        @classmethod
-        def add_arguments(cls, parser):
-            parser.add_argument('--message', '-m', default='auto', help='Migration message, default auto')
-            super().add_arguments(parser)
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--auto-only')
+        super().add_arguments(parser)
 
-    class Alembic(BaseCommand):
+    def run(self):
+        from ..migrations import migrate
+        migrate(**self.opts.model_dump())
 
-        @classmethod
-        def init_parser(cls, parser):
-            for action in CommandLine().parser._actions:
-                if action.dest in ('help', 'config'):
-                    continue
-                parser._add_action(action)
+class Auto(AppCommand[AutoOpts]):
+    'Auto-generate schema migration'
+    options_class: ClassVar = AutoOpts
 
-        def setup(self, opts):
-            if not hasattr(opts, 'cmd'):
-                self.parser.error('too few arguments')
-            self.config = Config(settings.ALEMBIC_INI, ini_section=opts.name, cmd_opts=opts)
+    @classmethod
+    def add_arguments(cls, parser):
+        parser.add_argument('--message', '-m', default=...,)
+        super().add_arguments(parser)
 
-        def run(self):
-            CommandLine().run_cmd(self.config, self.opts)
+    def run(self):
+        from ..migrations import auto
+        auto(**self.opts.model_dump())
 
-    commands = dict(migrate=Migrate, auto=Auto, alembic=Alembic)
+class Alembic(AppCommand[AlembicOpts]):
+    options_class: ClassVar = AlembicOpts
+
+    @classmethod
+    def add_arguments(cls, parser):
+        for action in CommandLine().parser._actions:
+            if action.dest in ('help', 'config'):
+                continue
+            parser._add_action(action)
+
+    def setup(self):
+        if not hasattr(self.opts, 'cmd'):
+            self.parser.error('too few arguments')
+        self.config = Config(settings.ALEMBIC_INI, ini_section=self.opts.name, cmd_opts=self.opts)
+
+    def run(self):
+        CommandLine().run_cmd(self.config, self.opts)
+
+commands = dict(
+    _description='Migration commands',
+    migrate=Migrate,
+    auto=Auto,
+    alembic=Alembic)
 
 try:
     from alembic.config import CommandLine, Config
 except ModuleNotFoundError:
-    Command.commands.pop('alembic')
+    commands.pop('alembic')

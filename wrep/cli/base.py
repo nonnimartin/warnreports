@@ -2,95 +2,154 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from argparse import ArgumentParser, _SubParsersAction
-from typing import Any, ClassVar, Iterable
+import enum
+import typing
+from collections import ChainMap
+from types import GenericAlias, UnionType
+from typing import Any, ClassVar, Iterable, Sequence
 
-from pydantic import NonNegativeInt, PositiveInt, TypeAdapter
+from pydantic import ConfigDict, Field
+from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefinedType
 
-from .. import utils
+from .. import settings, utils
+from ..models import DataModel
 from ..tools import asyn
-from ..models import StateCode
+from .formatters import SmartFormatter
 
-type AP = ArgumentParser
-type SubParsers = _SubParsersAction[ArgumentParser]
+type AP = argparse.ArgumentParser
+type SubParsers = argparse._SubParsersAction[AP]
 
+class LogLevelEnum(enum.StrEnum):
+    CRITICAL = 'CRITICAL'
+    FATAL = 'FATAL'
+    ERROR = 'ERROR'
+    WARNING = 'WARNING'
+    INFO = 'INFO'
+    DEBUG = 'DEBUG'
 
-PosIntTa = TypeAdapter(PositiveInt)
-NonNegIntTa = TypeAdapter(NonNegativeInt)
+    @classmethod
+    def _missing_(cls, value):
+        value = str(value).upper()
+        if value == 'WARN':
+            value = 'WARNING'
+        if value in cls:
+            return cls(value)
 
-class HelpFormatter(argparse.HelpFormatter):
-    """
-    From: https://gist.github.com/panzi/b4a51b3968f67b9ff4c99459fb9c5b3d
-    Author: Mathias Panzenböck
-    """
+class BaseCommandOpts(DataModel):
+    pass
 
-    def _split_lines(self, text: str, width: int) -> list[str]:
-        lines: list[str] = []
-        for line_str in text.split('\n'):
-            line: list[str] = []
-            line_len = 0
-            for word in line_str.split():
-                word_len = len(word)
-                line_len += word_len + bool(line)
-                if line_len > width:
-                    lines.append(' '.join(line))
-                    line.clear()
-                    line_len = word_len
-                line.append(word)
-            lines.append(' '.join(line))
-        return lines
-    
-    def _fill_text(self, text: str, width: int, indent: str) -> str:
-        return '\n'.join(indent + line for line in self._split_lines(text, width - len(indent)))
-
-class BaseCommand:
+class BaseCommand[O: BaseCommandOpts]:
     description: ClassVar[str|None] = None
     prog: ClassVar[str|None] = None
     usage: ClassVar[str|None] = None
-    parser_class: ClassVar[type[AP]] = ArgumentParser
-    formatter_class: ClassVar[type[argparse.HelpFormatter]] = HelpFormatter
+    parser_class: ClassVar[type[AP]] = argparse.ArgumentParser
+    formatter_class: ClassVar[type[argparse.HelpFormatter]] = SmartFormatter
+    options_class: ClassVar[type[O]] = BaseCommandOpts
     commands: ClassVar[dict[str, type[BaseCommand]]] = {}
     command_metavar: ClassVar[str] = 'command'
     command_name: str|None = None
     command: BaseCommand|None = None
+    opts: O
+
+    @classmethod
+    def main(cls, args: Sequence[str]|None = None) -> None:
+        "Main CLI entrypoint"
+        parser = cls.create_parser()
+        cmd = cls(parser.parse_args(args), parser)
+        asyncio.run(asyn.wait(cmd.run()))
 
     @classmethod
     def create_parser(cls) -> AP:
+        "Create the main (root) argument parser"
         parser = cls.parser_class()
-        cls.init_parser(parser)
+        cls.init_parser(parser, 0)
         return parser
 
     @classmethod
-    def init_parser(cls, parser: AP) -> None:
+    def init_parser(cls, parser: AP, depth: int) -> None:
+        "Setup the parser this command/subcommand"
         parser.formatter_class = cls.formatter_class
         parser.description = cls.description
         parser.prog = cls.prog or parser.prog
         parser.usage = cls.usage or parser.usage
         cls.add_arguments(parser)
-        cls.add_commands(parser)
-        fmt = cls.parser_fmtargs(parser)
+        cls.extend_actions(parser)
+        cls.add_commands(parser, depth)
+        fmtargs = cls.parser_fmtargs(parser)
         if parser.description:
-            parser.description = parser.description.format(**fmt)
+            parser.description = parser.description.format(**fmtargs)
         if parser.usage:
-            parser.usage = parser.usage.format(**fmt)
+            parser.usage = parser.usage.format(**fmtargs)
 
     @classmethod
     def add_arguments(cls, parser: AP) -> None:
+        "Add the command's specific arguments to the parser"
         pass
 
     @classmethod
-    def add_commands(cls, parser: AP) -> None:
+    def extend_actions(cls, parser: AP) -> None:
+        "Autofill argument descriptions & defaults from the options DataModel fields"
+        fields = ChainMap(*(
+            hintcls.model_fields for hintcls
+            in cls.get_action_hint_classes()))
+        fmtargs = cls.parser_fmtargs(parser)
+        for action in parser._actions:
+            if not (field := fields.get(action.dest)):
+                continue
+            cls.extend_action(action, field, fmtargs=fmtargs)
+
+    @classmethod
+    def extend_action(cls, action: argparse.Action, field: FieldInfo, fmtargs: dict[str, Any]) -> None:
+        if action.const is False:
+            # store_false
+            return
+        if field.annotation is bool and action.const is None:
+            # store_true
+            action.nargs = 0
+            action.const = True
+            action.default = False
+            action.__class__ = argparse._StoreTrueAction
+        if not action.help and (text := field.description or field.title):
+            action.help = text.format(**fmtargs)
+        if action.default is ...:
+            if not isinstance(field.default, PydanticUndefinedType):
+                action.default = field.default
+        if action.choices == (...,):
+            anno = field.annotation
+            annoargs = anno.__args__ if isinstance(anno, UnionType) else [anno]
+            for cand in annoargs:
+                if isinstance(cand, GenericAlias) and cand.__origin__ is list:
+                    if len(cand.__args__) == 1:
+                        cand, = cand.__args__
+                if isinstance(cand, typing._LiteralGenericAlias):
+                    action.choices = list(cand.__args__)
+                    break
+                if isinstance(cand, type) and issubclass(cand, enum.Enum):
+                    action.choices = list(cand)
+                    break
+
+    @classmethod
+    def get_action_hint_classes(cls) -> Iterable[type[DataModel]]:
+        "Allows overriding which DataModel classes to use to autofill arguments"
+        yield cls.options_class
+
+    @classmethod
+    def add_commands(cls, parser: AP, depth: int) -> None:
+        "Setup subcommands for a container command defined in the `commands` dict"
         if not cls.commands:
             return
-        subparsers = cls.create_subparsers(parser)
+        depth += 1
+        subparsers = cls.create_subparsers(parser, depth)
         for name, cmd in cls.commands.items():
             subparser = subparsers.add_parser(name)
-            cmd.init_parser(subparser)
+            cmd.init_parser(subparser, depth)
             if not subparser.description:
                 subparser.description = f'{name} command'
 
     @classmethod
-    def create_subparsers(cls, parser: AP) -> SubParsers:
+    def create_subparsers(cls, parser: AP, depth: int) -> SubParsers:
+        "Initialize the argument subparsers for a container command"
         return parser.add_subparsers(
             dest=cls.command_opt,
             metavar=cls.command_metavar,
@@ -99,29 +158,26 @@ class BaseCommand:
 
     @classmethod
     def parser_fmtargs(cls, parser: AP) -> dict[str, Any]:
-        return dict(prog=parser.prog)
+        "String format() keyword args for command description & usage"
+        return dict(prog=parser.prog, cls=cls)
 
-    @classmethod
-    def main(cls, args=None):
-        parser = cls.create_parser()
-        opts = parser.parse_args(args)
-        cmd = cls(opts, parser)
-        asyncio.run(asyn.wait(cmd.run()))
-
-    def __init__(self, opts, parser: AP) -> None:
-        self.opts = opts
+    def __init__(self, nsargs: argparse.Namespace, parser: AP) -> None:
         self.parser = parser
-        if hasattr(opts, self.command_opt):
-            self.command_name = getattr(opts, self.command_opt)
-            delattr(opts, self.command_opt)
-            self.command = self.commands[self.command_name](opts, parser)
+        self.opts: O = self.options_class.model_validate(vars(nsargs))
+        if hasattr(nsargs, self.command_opt):
+            # This is a container/parent command
+            self.command_name = getattr(nsargs, self.command_opt)
+            delattr(nsargs, self.command_opt)
+            # Initialize the subcommand
+            self.command = self.commands[self.command_name](nsargs, parser)
         else:
-            self.setup(opts)
+            # This is the terminal/leaf command
+            self.setup()
 
-    def setup(self, opts) -> None:
+    def setup(self) -> None:
         pass
 
-    async def run(self):
+    async def run(self) -> None:
         if self.command:
             await asyn.wait(self.command.run())
 
@@ -131,50 +187,25 @@ class BaseCommand:
             cls.__dict__.get('description') or
             cls.__doc__ or
             cls.description)
+        for name, value in cls.commands.items():
+            if isinstance(value, dict):
+                ns = dict(commands=value, description=value.pop('_description', None))
+                cls.commands[name] = type(f'{name.title()}Command', (BaseCommand,), ns)
 
-def FuncCommand(f, *bases: type[BaseCommand]) -> type[BaseCommand]:
-    class Base(BaseCommand):
-        func = staticmethod(f)
+class AppCommandOpts(BaseCommandOpts):
+    log_level: LogLevelEnum|None = Field(None, exclude=True, description='Log level')
+    model_config: ClassVar = ConfigDict(extra='allow')
 
-        async def run(self):
-            await asyn.wait(self.func(**vars(self.opts)))
+class AppCommand[O: AppCommandOpts](BaseCommand[O]):
+    options_class: type[O] = AppCommandOpts
 
-    class Command(*bases, Base):
-        description = f.__doc__
-
-    return Command
-
-class AppCommand(BaseCommand):
-
-    def setup(self, opts):
-        super().setup(opts)
-        if opts.log_level:
-            from .. import settings
-            settings.LOG_LEVEL = opts.log_level
+    def setup(self):
+        super().setup()
+        if self.opts.log_level and settings.LOG_LEVEL != self.opts.log_level:
+            settings.LOG_LEVEL = self.opts.log_level
             utils.init_logging()
-        del opts.log_level
 
     @classmethod
-    def add_arguments(cls, parser: AP):
-        parser.add_argument('--log-level', default=None)
+    def add_arguments(cls, parser: AP) -> None:
+        parser.add_argument('--log-level', metavar='level')
         super().add_arguments(parser)
-
-
-def resolve_statesopt(statesopt: Iterable[StateCode], allstates: Iterable[StateCode]|None = None) -> list[StateCode]:
-    if allstates is None:
-        from ..translators import TranslationFactory
-        allstates = TranslationFactory.translators
-    states: set[StateCode] = set()
-    skips: set[StateCode] = set()
-    for opt in map(str.upper, statesopt):
-        if opt.startswith('^'):
-            skips.add(opt[1:])
-        else:
-            states.add(opt)
-    if not states:
-        states.update(allstates)
-    states.difference_update(skips)
-    bad = states.difference(allstates)
-    if bad:
-        raise ValueError(f'Invalid states: {sorted(bad)}')
-    return sorted(states)

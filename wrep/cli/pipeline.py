@@ -2,160 +2,115 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from textwrap import dedent
+from typing import ClassVar
+
+from pydantic import Field
 
 from .. import Stage, settings
-from .base import AppCommand, resolve_statesopt
+from ..models import *
+from .base import AppCommand, AppCommandOpts
+from .validators import ALLSTATES, StagesOpt, StatesOpt
 
 logger = logging.getLogger(__name__)
 
-class Command(AppCommand):
-    description = """
+class PipelineCommandOpts(AppCommandOpts, PipelineBatchOpts, PipelineOpts):
+    stages: StagesOpt
+    states: StatesOpt
+    etl_dbname: str|None = Field(
+        default=None,
+        description=f'Alternate mongo etl db name')
+    search_dbname: str|None = Field(
+        default=None,
+        description=f'Alternate mongo search db name')
+    idfile: Path|None = Field(
+        default=None,
+        description='Write the pipeline log ID to the given file')
+
+class Command(AppCommand[PipelineCommandOpts]):
+    options_class: ClassVar = PipelineCommandOpts
+    usage: ClassVar = '{prog} [OPTIONS] <stages> [state ...]'
+    description: ClassVar = dedent("""
     Run pipeline stages.
     
     Basic Examples
     --------------
 
     Run single stage for all states:
-    $ {prog} scrape
+      {prog} scrape
 
     Run single stage for some states:
-    $ {prog} extract CA NY
+      {prog} extract CA NY
 
     Run all stages for some states:
-    $ {prog} all FL OH
+      {prog} all FL OH
 
     Run all stages for all states:
-    $ {prog} all
+      {prog} all
 
     Selecting Stages
     -----------------
 
-    Available stages: """ + ', '.join(Stage) + """
+    Available stages: {allstages}
 
     Specify multiple stages with a comma:
-    $ {prog} scrape,extract [state ...]
+      {prog} scrape,extract [state ...]
 
     Using first letter with comma:
-    $ {prog} s,e,t [state ...]
+      {prog} s,e,t [state ...]
 
     With capital first letters, separator is unnecessary:
-    $ {prog} SETL [state ...]
+      {prog} SETL [state ...]
 
     Use keyword "all" for all stages:
-    $ {prog} all [state ...]
+      {prog} all [state ...]
 
     Available States
     ----------------
-    """ + ' '.join(resolve_statesopt([]))
+    {allstates}""")
 
-    usage = '{prog} [OPTIONS] <stages> [state ...]'
+    @classmethod
+    def parser_fmtargs(cls, parser):
+        return super().parser_fmtargs(parser)|dict(
+            allstages=', '.join(Stage),
+            allstates=' '.join(ALLSTATES))
 
     @classmethod
     def add_arguments(cls, parser):
         arg = parser.add_argument
-        arg('stages',
-            metavar='<stages>',
-            type=cls.stages_opt,
-            help='Stage name(s) (various formats) or "all"')
-        arg('states',
-            nargs='*',
-            metavar='state',
-            help=(
-                'Optionally specify states as additional arguments. '
-                'If not specified, include all states. To exclude a '
-                'state, prefix with ^'))
-        arg('--clean', '-c',
-            action='store_true',
-            help='Clean each stage before running')
-        arg('--incremental', '-i',
-            action='store_true',
-            help=(
-                'If a stage indicates no change after running, '
-                'skip subsequent stages for the state'))
-        arg('--concurrent', '-t',
-            action='store_true',
-            help=(
-                'Use multiple async workers when applicable. '
-                'The load stage is always synchronized with one worker'))
+        arg('stages', metavar='<stages>')
+        arg('states', nargs='*', metavar='state')
+        arg('--clean', '-c')
+        arg('--incremental', '-i')
+        arg('--concurrent', '-t')
         arg('--nofail', '-n',
             action='store_false',
             dest='fail',
             help=(
                 'Do not fail on error. Instead, log an exception, '
                 'and skip subsequent stages for the state'))
-        arg('--clean-only', '-x',
-            action='store_true',
-            help='Only clean, do not run')
-        arg('--stat-only', '-s',
-            action='store_true',
-            help='Only show stats, do not run')
-        arg('--search-dbname', '-d',
-            default=None,
-            help=f'Alternate mongo search db name')
-        arg('--etl-dbname', '-b',
-            default=None,
-            help=f'Alternate mongo etl db name')
-        arg('--max-workers', '-w',
-            type=int,
-            metavar='<n>',
-            default=settings.ETL_DEFAULT_WORKERS,
-            help=(
-                'Max workers, applicable only when --concurrent is specified, '
-                f'default ETL_DEFAULT_WORKERS ({settings.ETL_DEFAULT_WORKERS})'))
-        arg('--max-threads', '-T',
-            type=int,
-            metavar='<n>',
-            default=settings.ETL_DEFAULT_THREADS,
-            help=(
-                'Max threads, applicable only when --concurrent is specified, '
-                f'default ETL_DEFAULT_THREADS ({settings.ETL_DEFAULT_THREADS})'))
-        arg('--selenium-max-procs', '-E',
-            type=int,
-            metavar='<n>',
-            default=settings.SELENIUM_MAX_PROCS,
-            help=(
-                'Max number of concurrent web drivers if applicable, '
-                f'default SELENIUM_MAX_PROCS ({settings.SELENIUM_MAX_PROCS})'))
-        arg('--eager', '-e',
-            action='store_false',
-            dest='lazy',
-            help='Use eager loading of SQL result sets. Uses more memory')
-        arg('--rollback',
-            action='store_true',
-            help='Rollback SQL transaction on load stage')
-        arg('--idfile',
-            default=None,
-            type=Path,
-            help='Write the pipeline log ID to the given file')
+        arg('--clean-only', '-x')
+        arg('--stat-only', '-s')
+        arg('--search-dbname', '-d', metavar='<db>')
+        arg('--etl-dbname', '-b', metavar='<db>')
+        arg('--max-workers', '-w', metavar='<n>', default=...)
+        arg('--max-threads', '-T', metavar='<n>', default=...)
+        arg('--selenium-max-procs', '-E', metavar='<n>', default=...)
+        arg('--rollback')
+        arg('--idfile', metavar='<file>')
         super().add_arguments(parser)
 
-    def setup(self, opts):
-        super().setup(opts)
-        from .. import search
-        from ..backends import etl
+    def setup(self):
+        super().setup()
         from ..pipeline import PipelineRunner
-        opts.states = resolve_statesopt(opts.states)
-        if not opts.states:
-            raise ValueError(f'No states selected')
-        runner_opts = dict(vars(opts))
-        self.idfile: Path|None = runner_opts.pop('idfile')
-        runner_opts['context'] = {
-            etl.default_client.dbname_key: runner_opts.pop('etl_dbname'),
-            search.default_client.dbname_key: runner_opts.pop('search_dbname')}
-        self.runner = PipelineRunner(**runner_opts)
+        self.runner = PipelineRunner(
+            **self.opts.model_dump(),
+            context={
+                settings.ETL_MONGODB_DBNAME_KEY: self.opts.etl_dbname,
+                settings.SEARCH_MONGODB_DBNAME_KEY: self.opts.search_dbname})
 
-    async def run(self):
-        if self.idfile:
-            logger.info(f'Writing pipeline log ID to {self.idfile}')
-            self.idfile.write_text(str(self.runner.log.id))
+    async def run(self) -> None:
+        if self.opts.idfile:
+            logger.info(f'Writing pipeline log ID to {self.opts.idfile}')
+            self.opts.idfile.write_text(str(self.runner.log.id))
         await self.runner.run()
-
-    @staticmethod
-    def stages_opt(value: str) -> list[Stage]:
-        if value == 'all':
-            return list(Stage)
-        value = value.replace(',', ' ')
-        for stage in Stage:
-            value = value.replace(stage[0].upper(), f' {stage.value} ')
-        trans = {stage[0]: stage for stage in Stage}
-        return [Stage(trans.get(value, value)) for value in value.split()]

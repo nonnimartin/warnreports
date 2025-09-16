@@ -10,22 +10,28 @@ from typing import Any, ClassVar, Iterator
 from starlette.datastructures import URL
 
 from .. import utils
-from ..tools import dom, files
+from ..tools import asyn, dom, files, strs
 from .base import Scraper
 
 __all__ = ['CA']
 
 class CA(Scraper):
     base_url: ClassVar = 'https://edd.ca.gov'
-    latest_url: ClassVar = '/Jobs_and_Training/Layoff_Services_WARN.htm'
-    hrefpat: ClassVar = _r(r'warn[-_]?report', re.I)
+    latest_url: ClassVar = '/en/Jobs_and_Training/Layoff_Services_WARN'
+    archive_url: ClassVar[str] = 'https://archive.warnreports.org/s/CA'
 
     async def scrape(self) -> None:
         await self.download('latest.html', self.latest_url)
-        index = self.build_index()
-        for key, url in index.items():
-            await self.download(key, url, missing_only=key.endswith('.pdf'))
+
+        async def downloader(arg: tuple[str, str]) -> None:
+            key, url = arg
+            ispdf = key.endswith('.pdf')
+            if ispdf:
+                url = strs.absurl(self.archive_url, key)
+            await self.download(key, url, missing_only=ispdf)
             self.artifacts.add(key)
+
+        await asyn.pooled(self.build_index().items(), downloader, size=10)
 
     def statobjs(self) -> Iterator[Any]:
         yield from sorted(self.cache.glob('*.pdf', '*.xlsx'))
@@ -58,9 +64,10 @@ class CA(Scraper):
         'Build downloads index {cache_key: url}'
         page = dom.bs(self.cache/'latest.html')
         items: deque[tuple[str, str]] = deque()
-        for link in page.find_all('a'):
-            href = str(link.get('href', ''))
-            if self.hrefpat.search(href):
+        hrefsearch = _r(r'warn[-_]?report', re.I).search
+        for link in page.select('a[href]'):
+            href = link['href']
+            if hrefsearch(href):
                 key = Path(URL(href).path).name
                 url = self.absurl(href)
                 items.append((key, url))

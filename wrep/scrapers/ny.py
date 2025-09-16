@@ -61,14 +61,17 @@ class NY(Scraper):
             key = self.tableau_filename
             url = strs.absurl(self.archive_url, key)
             await self.download(key, url)
-        for key in self.archive_filenames:
+
+        async def dltask(key: str) -> None:
             url = strs.absurl(self.archive_url, key)
             await self.download(key, url, missing_only=True)
-        # Download artifacts
-        for subidx in self.build_index().values():
-            for key, url in subidx.items():
-                await self.download(key, url, missing_only=True)
+            if key.startswith('records/'):
                 self.artifacts.add(key)
+
+        index = self.build_index()
+        keys = list(self.archive_filenames)
+        keys.extend(key for subidx in index.values() for key in subidx)
+        await asyn.pooled(keys, target=dltask, size=10)
 
     async def driver_scrape(self, driver: webd.Chrome) -> None:
         from selenium.common.exceptions import WebDriverException
@@ -149,19 +152,8 @@ class NY(Scraper):
             'date_posted',
             'notice_dated']
         index: dict[str, dict[str, str]] = self.cache.read_json('index.json')
+        todo: set[str] = set(index)
         fps: list[TextIOWrapper] = []
-
-        def readfile(file: Path) -> Iterator[dict[str, str]]:
-            self.logger.debug(f'Reading {file}')
-            if file.suffix == '.html':
-                func = readhtml
-            elif file.suffix == '.xlsx':
-                func = readxlsx
-            elif file.suffix == '.csv':
-                func = readcsv
-            else:
-                raise ValueError(f'No method to read {file=}')
-            yield from func(file)
         
         def readcsv(file: Path) -> Iterator[dict[str, str]]:
             "Extract records from a CSV file downloaded from current Tableau site"
@@ -212,6 +204,7 @@ class NY(Scraper):
                     if self.cache.exists(cachekey):
                         row.update(pdfitems(self.cache/cachekey))
                         row.update(artifacts_json=json.dumps({cachekey: url}))
+                        todo.discard(href)
                 else:
                     url = self.absurl(href)
                 row.update(notice_url=url)
@@ -235,6 +228,16 @@ class NY(Scraper):
                 header = strs.rewrite(header, pdfheader_rewrites)
                 yield header, value
 
+        funcmap = {'.html': readhtml, '.xlsx': readxlsx, '.csv': readcsv}
+
+        def readfile(file: Path) -> Iterator[dict[str, str]]:
+            self.logger.debug(f'Reading {file=}')
+            try:
+                func = funcmap[file.suffix]
+            except KeyError:
+                raise ValueError(f'No method to read {file=}')
+            yield from func(file)
+
         it = chain(self.archive_filenames, [self.tableau_filename])
         it = map(self.cache.topath, it)
         try:
@@ -242,6 +245,8 @@ class NY(Scraper):
         finally:
             while fps:
                 fps.pop().close()
+        for href in todo:
+            self.logger.warning(f'Unassociated artifact {href}')
 
     def build_index(self) -> dict[str, dict[str, str]]:
         "Build the legacy artifacts index from the downloaded HTML files {cachekey: url}"
