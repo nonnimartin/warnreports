@@ -381,7 +381,7 @@ class CA(Translator):
     fieldsmap = dict(
         company=['company'],
         reported=['notice_date'],
-        location=['address'],
+        location=['address', 'city'],
         employees=['num_employees'],
         starting=['effective_date'],
         action=['layoff_or_closure'],
