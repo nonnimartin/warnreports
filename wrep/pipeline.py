@@ -133,6 +133,7 @@ class Pipeline:
             with ensure_session(self.session) as session:
                 for name, stmt in stmts.items():
                     res[name] = session.execute(stmt).rowcount
+                    await asyncio.sleep(0)
                 if not self.session and not self.opts.rollback:
                     session.commit()
         elif stage is stage.Index:
